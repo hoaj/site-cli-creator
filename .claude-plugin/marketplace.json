@@ -1,22 +1,15 @@
 {
   "name": "hoaj-skills",
-  "owner": {
-    "name": "Andreas Jørgensen",
-    "email": ""
-  },
+  "owner": { "name": "Andreas Jørgensen" },
   "metadata": {
-    "description": "Personal collection of agent skills by hoaj",
+    "description": "Personal agent skills by hoaj",
     "version": "1.0.0"
   },
   "plugins": [
     {
       "name": "hoaj-skills",
-      "description": "Personal agent skills collection — utilities and integrations",
-      "source": "./",
-      "strict": false,
-      "skills": [
-        "./skills/run-remote"
-      ]
+      "source": "./plugins/hoaj-skills",
+      "description": "Personal agent skills — utilities and integrations"
     }
   ]
 }

@@ -1,0 +1,10 @@
+{
+  "name": "hoaj-skills",
+  "description": "Personal agent skills — utilities and integrations.",
+  "version": "1.0.0",
+  "author": { "name": "Andreas Jørgensen" },
+  "repository": "https://github.com/hoaj/skills",
+  "license": "MIT",
+  "keywords": ["skills", "agent", "claude", "cursor", "copilot"],
+  "skills": ["./skills/run-remote"]
+}

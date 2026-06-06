@@ -1,0 +1,15 @@
+{
+  "name": "hoaj-skills",
+  "owner": { "name": "Andreas Jørgensen" },
+  "metadata": {
+    "description": "Personal agent skills by hoaj",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "hoaj-skills",
+      "source": "./plugins/hoaj-skills",
+      "description": "Personal agent skills — utilities and integrations"
+    }
+  ]
+}
