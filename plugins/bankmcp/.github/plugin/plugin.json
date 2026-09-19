@@ -1,0 +1,10 @@
+{
+  "name": "bankmcp",
+  "description": "Set up your own BankMCP server (read-only bank access for Claude or ChatGPT), locally or on Railway.",
+  "version": "1.0.0",
+  "author": { "name": "Andreas Jørgensen" },
+  "repository": "https://github.com/hoaj/skills",
+  "license": "MIT",
+  "keywords": ["bankmcp", "banking", "mcp", "railway", "enable-banking"],
+  "skills": ["./skills/setup"]
+}

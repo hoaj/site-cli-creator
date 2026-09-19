@@ -10,31 +10,33 @@ Add the marketplace, then install the plugin.
 
 ```
 /plugin marketplace add hoaj/skills
-/plugin install hoaj-skills@hoaj-skills
+/plugin install bankmcp@hoaj-skills
 ```
 
 ### Cursor
 
-Settings → Plugins → Add marketplace → `hoaj/skills`, then install **hoaj-skills**.
+Settings → Plugins → Add marketplace → `hoaj/skills`, then install **bankmcp**.
 
 ### GitHub Copilot CLI
 
 ```
 copilot plugin marketplace add hoaj/skills
-copilot plugin install hoaj-skills
+copilot plugin install bankmcp
 ```
 
-## Skills
+## Plugins
 
-| Skill | Description |
-|-------|-------------|
-| [run-remote](./plugins/hoaj-skills/skills/run-remote) | Hand off the current task to Anthropic's cloud as a one-shot remote job |
+| Plugin | Skill | Description |
+|--------|-------|-------------|
+| [bankmcp](./plugins/bankmcp) | `/bankmcp:setup` | Set up your own BankMCP server (read-only bank access for Claude or ChatGPT), locally or on Railway |
 
-## Adding a skill
+## Adding a plugin
 
-1. Create `plugins/hoaj-skills/skills/<your-skill>/SKILL.md`.
-2. Add `"./skills/<your-skill>"` to the `skills` array in each manifest under `plugins/hoaj-skills/` (`.claude-plugin`, `.cursor-plugin`, `.github/plugin`).
-3. Add a row to the table above.
+Each plugin is its own folder under `plugins/`; `plugins/bankmcp` is the template.
+
+1. Create `plugins/<plugin>/skills/<skill>/SKILL.md`.
+2. Copy the three manifests from `plugins/bankmcp/` (`.claude-plugin`, `.cursor-plugin`, `.github/plugin`), then change `name`, `description` and the `skills` array.
+3. Add the plugin to each marketplace (`.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.github/plugin/marketplace.json`) and a row to the table above.
 
 ## License
 

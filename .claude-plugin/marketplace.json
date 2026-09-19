@@ -3,13 +3,13 @@
   "owner": { "name": "Andreas Jørgensen" },
   "metadata": {
     "description": "Personal agent skills by hoaj",
-    "version": "1.0.0"
+    "version": "1.1.0"
   },
   "plugins": [
     {
-      "name": "hoaj-skills",
-      "source": "./plugins/hoaj-skills",
-      "description": "Personal agent skills — utilities and integrations"
+      "name": "bankmcp",
+      "source": "./plugins/bankmcp",
+      "description": "Set up your own BankMCP server (read-only bank access for Claude or ChatGPT), locally or on Railway."
     }
   ]
 }
