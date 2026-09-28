@@ -24,7 +24,7 @@ bun src/main.ts help
 .claude-plugin/ .cursor-plugin/ .codex-plugin/ .github/plugin/   GENERATED  4 manifests, same fields
 .github/workflows/release.yml                                  FIXED      tag → cross-compile → release
 skills/yousee/SKILL.md                                         GENERATED  frontmatter + command table from `help`
-skills/yousee/install.sh                                       FIXED      gh release download → ~/.local/bin
+skills/yousee/install.sh                                       FIXED      gh release download → skills/yousee/bin/
 captures/                                                      GENERATED  shape-only Captures, ids redacted
 cli/build.ts                                                   FIXED      Bun.build + playwright-core patch
 cli/src/main.ts                                                FIXED      help login check report doctor version
@@ -42,6 +42,7 @@ cli/src/commands/<group>-<verb>.ts                             AGENT      task c
 - Exit codes: 0 ok, 1 bug, 2 input, 3 drift, 4 session, 5 network.
 - `report` is a subcommand of every CLI; SKILL.md tells the agent to run `report --last` on exit 3.
 - Session cached in `~/.yousee/session.json`; plain `fetch`; Chrome only for login/refresh/`check` writes.
+- Binary lives in `skills/yousee/bin/` (gitignored), called by path; version-locked to its SKILL.md.
 - No CLI framework: routing and flag parsing are ~30 lines in `main.ts`.
 
 ## Assumptions to check

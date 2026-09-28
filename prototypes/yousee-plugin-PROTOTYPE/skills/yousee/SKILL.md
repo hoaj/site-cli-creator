@@ -10,8 +10,9 @@ description: >
 
 # yousee
 
-`yousee` is a CLI for the user's own Mit YouSee account. Every command prints
-exactly one JSON document on stdout; progress goes to stderr.
+`bin/yousee` in this skill's directory is a CLI for the user's own Mit YouSee
+account; below, `yousee` means that path. Every command prints exactly one JSON
+document on stdout; progress goes to stderr.
 
 ## Commands
 
@@ -30,7 +31,7 @@ Do what `next` says. In short:
 
 | Exit | kind | Do |
 |---|---|---|
-| — | command not found | Run `bash <this skill dir>/install.sh` once, then retry |
+| — | `bin/yousee` missing | Run `bash <this skill dir>/install.sh` once, then retry |
 | 2 | input | Fix the flags (see `yousee help`) |
 | 3 | drift | YouSee changed. Run `yousee report --last`, give the user the issue link, **stop** |
 | 4 | session | Run `yousee login`; the user signs in in the Chrome window; rerun |
