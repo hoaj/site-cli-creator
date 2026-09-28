@@ -16,6 +16,14 @@ _Avoid_: fixture, spec
 Whether an Operation changes data on the site (write) or not (read), as declared in its Contract rather than inferred from its method.
 _Avoid_: side effect, mutation (a GraphQL mutation can be a read in practice)
 
+**Drift**:
+A failure caused by the site having changed away from a Contract. It is the only failure kind that files an issue automatically, as opposed to a session, network or input failure.
+_Avoid_: breakage, bug, regression
+
+**Fingerprint**:
+The identity of one Drift across all users: plugin, Operation, break type and field path. It is used to deduplicate reports.
+_Avoid_: hash, signature
+
 **Capture**:
 A recording of the calls a site's frontend makes during a browsing session, kept as shapes only, with no values.
 _Avoid_: HAR, recording, trace
