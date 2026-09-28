@@ -1,0 +1,21 @@
+# FIXED TEMPLATE FILE. PROTOTYPE — not run.
+# Tag vX.Y.Z → cross-compile all targets on one runner → attach to the release.
+name: release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: "1.4.2" }
+      - run: bun install --frozen-lockfile
+        working-directory: cli
+      - run: bun run build
+        working-directory: cli
+      - run: gh release create "$GITHUB_REF_NAME" cli/dist/* --generate-notes
+        env: { GH_TOKEN: "${{ github.token }}" }

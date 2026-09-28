@@ -1,0 +1,17 @@
+{
+  "lockfileVersion": 1,
+  "workspaces": {
+    "": {
+      "name": "yousee",
+      "dependencies": {
+        "playwright-core": "1.63.0",
+        "zod": "^3.24.0",
+      },
+    },
+  },
+  "packages": {
+    "playwright-core": ["playwright-core@1.63.0", "", { "bin": { "playwright-core": "cli.js" } }, "sha512-rYCsBF/M5HjUch52bbtVONEFjv6Xu8sm8h72dNlR5bzIE1fvC/bxgspzkjSfU+MweEMmPM8KJebG6nnyxo5mCg=="],
+
+    "zod": ["zod@3.25.76", "", {}, "sha512-gzUt/qt81nXsFGKIFcC3YnfEAx5NkunCfnDlvuBSSFS02bcXu4Lmea0AFIUwbLWxWPx3d9p8S5QoaujKcNQxcQ=="],
+  }
+}

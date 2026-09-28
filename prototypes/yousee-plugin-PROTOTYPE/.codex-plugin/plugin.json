@@ -1,0 +1,11 @@
+{
+  "name": "yousee",
+  "description": "Read your Mit YouSee subscription, bills and products from the terminal.",
+  "version": "0.1.0",
+  "author": { "name": "<generator user>" },
+  "homepage": "https://github.com/<owner>/yousee-plugin",
+  "repository": "https://github.com/<owner>/yousee-plugin",
+  "license": "MIT",
+  "keywords": ["yousee", "cli-skill-creator"],
+  "skills": "./skills/"
+}

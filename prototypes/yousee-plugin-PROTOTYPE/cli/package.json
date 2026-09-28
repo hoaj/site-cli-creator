@@ -1,0 +1,14 @@
+{
+  "name": "yousee",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "yousee": "bun run src/main.ts",
+    "build": "bun run build.ts"
+  },
+  "dependencies": {
+    "playwright-core": "1.63.0",
+    "zod": "^3.24.0"
+  }
+}
