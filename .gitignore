@@ -1,4 +1,5 @@
-docs/
+docs/*
+!docs/agents/
 .claude/
 .agents/
 .DS_Store
