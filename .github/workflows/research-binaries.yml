@@ -1,0 +1,68 @@
+name: research-binaries
+
+# Research for hoaj/skills#15: do bun --compile binaries driving playwright-core run on Linux and Windows?
+on:
+  push:
+    branches: [research/binaries-linux-windows]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: research/binaries-linux-windows
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.2
+      - run: bun --version
+      - run: bun install
+      - run: bun build.ts bun-linux-x64 dist/app-linux-x64
+      - run: bun build.ts bun-linux-arm64 dist/app-linux-arm64
+      - run: bun build.ts bun-windows-x64 dist/app-windows-x64.exe
+      - run: ls -la dist && file dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binaries
+          path: research/binaries-linux-windows/dist/
+
+  run:
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            bin: app-linux-x64
+          - os: windows-latest
+            bin: app-windows-x64.exe
+          - os: ubuntu-24.04-arm
+            bin: app-linux-arm64
+    runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.os == 'ubuntu-24.04-arm' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # No checkout and no node_modules: the binary must be self-contained.
+      - uses: actions/download-artifact@v4
+        with:
+          name: binaries
+          path: bin
+      - run: chmod +x bin/* && ls -la bin
+      - name: Locate Chrome at the path playwright-core checks
+        run: |
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            ls -la "/c/Program Files/Google/Chrome/Application/" || true
+            "/c/Program Files/Google/Chrome/Application/chrome.exe" --version || powershell -c "(Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion" || true
+          else
+            ls -la /opt/google/chrome/chrome || true
+            /opt/google/chrome/chrome --version || true
+          fi
+          test ! -d node_modules
+      - name: help
+        run: ./bin/${{ matrix.bin }} help
+      - name: test
+        run: ./bin/${{ matrix.bin }} test
