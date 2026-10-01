@@ -4,6 +4,10 @@ A generator that turns the network calls a website's frontend makes into a plugi
 
 ## Language
 
+**CLI skill**:
+A skill with its own CLI that wraps exactly one login on one site. A generated plugin holds one or more of them.
+_Avoid_: site plugin, connector
+
 **Task**:
 Something the user wants an agent to be able to do on a site, stated in plain words. Each Task has its own Capture and becomes one command in the generated CLI.
 _Avoid_: use case, feature, command (the command is what a Task becomes)
