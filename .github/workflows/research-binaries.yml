@@ -52,11 +52,19 @@ jobs:
           name: binaries
           path: bin
       - run: chmod +x bin/* && ls -la bin
+      # The arm64 runner image ships no Google Chrome; try Google's arm64 .deb.
+      - name: Install Google Chrome (arm64)
+        if: matrix.os == 'ubuntu-24.04-arm'
+        run: |
+          curl -fsSLo chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_arm64.deb
+          sudo apt-get install -y ./chrome.deb
+          rm chrome.deb
       - name: Locate Chrome at the path playwright-core checks
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
+            # chrome.exe --version does not print on Windows (it starts the browser), so read the file version.
             ls -la "/c/Program Files/Google/Chrome/Application/" || true
-            "/c/Program Files/Google/Chrome/Application/chrome.exe" --version || powershell -c "(Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion" || true
+            powershell -c "(Get-Item 'C:\Program Files\Google\Chrome\Application\chrome.exe').VersionInfo.ProductVersion" || true
           else
             ls -la /opt/google/chrome/chrome || true
             /opt/google/chrome/chrome --version || true
