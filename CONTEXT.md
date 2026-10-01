@@ -1,4 +1,4 @@
-# cli-skill-creator
+# site-cli-creator
 
 A generator that turns the network calls a website's frontend makes into a plugin with a CLI that coding agents can drive, with built-in drift checks and a feedback loop.
 
