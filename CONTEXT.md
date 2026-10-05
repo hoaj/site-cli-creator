@@ -29,7 +29,7 @@ A failure caused by the site having changed away from a Contract. It is the only
 _Avoid_: breakage, bug, regression
 
 **Fingerprint**:
-The identity of one Drift across all users: plugin, Operation, break type and field path. It is used to deduplicate reports.
+The identity of one Drift across all users: plugin, CLI skill, Operation, break type, field path and error code. It is used to deduplicate reports.
 _Avoid_: hash, signature
 
 **Capture**:
