@@ -25,12 +25,16 @@ Whether an Operation changes data on the site (write) or not (read), as declared
 _Avoid_: side effect, mutation (a GraphQL mutation can be a read in practice)
 
 **Drift**:
-A failure caused by the site having changed away from a Contract. It is the only failure kind that files an issue automatically, as opposed to a session, network or input failure.
+A failure caused by the site having changed away from a Contract, as opposed to a session, network or input failure. Like a bug, it can be reported through the plugin's Feedback skill, and only after the user agrees.
 _Avoid_: breakage, bug, regression
 
 **Fingerprint**:
 The identity of one Drift across all users: plugin, CLI skill, Operation, break type, field path and error code. It is used to deduplicate reports.
 _Avoid_: hash, signature
+
+**Feedback skill**:
+A skill that ships inside a plugin and files issues on the repo that plugin lives in: Drift, bugs and feature requests. Every generated plugin has one (`<plugin>-feedback`), and so does site-cli-creator. It drafts the issue and files it only after the user approves.
+_Avoid_: report (the removed CLI subcommand), reporter
 
 **Capture**:
 A recording of the calls a site's frontend makes while the user performs one Task in the browser, kept as shapes only, with no values.
