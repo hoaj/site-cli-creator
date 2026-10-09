@@ -1,8 +1,8 @@
 # site-cli-creator: build spec
 
-site-cli-creator is a skill that turns the calls a website's frontend makes into a **plugin** for coding agents. Each plugin holds one or more **CLI skills**. A CLI skill wraps one login on one site and runs **Tasks** as commands. It detects when the site changes (**Drift**) and reports it to the plugin's repo, where the generator fixes it.
+site-cli-creator is a skill that turns the calls a website's frontend makes into a **plugin** for coding agents. Each plugin holds one or more **CLI skills**. A CLI skill wraps one login on one site and runs **Tasks** as commands. It detects when the site changes (**Drift**). The plugin's **Feedback skill** reports it, once the user agrees, to the plugin's repo, where the generator fixes it.
 
-Glossary terms (**Task**, **CLI skill**, **Capture**, **Operation**, **Contract**, **Effect**, **Drift**, **Fingerprint**) are defined in [`CONTEXT.md`](./CONTEXT.md). Sections link the tickets that decided them, on the map [site-cli-creator](https://github.com/hoaj/skills/issues/1). The test case is Mit YouSee (yousee.dk): reading the logged-in user's subscription.
+Glossary terms (**Task**, **CLI skill**, **Feedback skill**, **Capture**, **Operation**, **Contract**, **Effect**, **Drift**, **Fingerprint**) are defined in [`CONTEXT.md`](./CONTEXT.md). Sections link the tickets that decided them, on the map [site-cli-creator](https://github.com/hoaj/skills/issues/1). The test case is Mit YouSee (yousee.dk): reading the logged-in user's subscription.
 
 ---
 
@@ -10,9 +10,12 @@ Glossary terms (**Task**, **CLI skill**, **Capture**, **Operation**, **Contract*
 
 | Part | Who runs it | What it is |
 |---|---|---|
-| **site-cli-creator** | the maintainer | a skill: SKILL.md, the fixed template, and the Capture tool |
-| **Generated plugin** | many users | its own repo, holding one or more CLI skills, four manifests and a release workflow |
+| **site-cli-creator** | the maintainer | a plugin in `hoaj/skills`: the generator skill (SKILL.md, the fixed template, the Capture tool) and `site-cli-creator-feedback` |
+| **Generated plugin** | many users | its own repo, holding one or more CLI skills, one Feedback skill, four manifests and a release workflow |
 | **CLI skill** | users' agents | `skills/<skill>/`: a SKILL.md and a compiled CLI for one login |
+| **Feedback skill** | users' agents | `skills/<plugin>-feedback/`: files Drift, bugs and feature requests on the plugin's own repo (§10) |
+
+Every Feedback skill lies next to the plugin it reports on and files issues on that plugin's repo, decided in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24). `site-cli-creator-feedback` files problems with the generator itself (the Capture tool, a mode, the template, misleading guidance) on `hoaj/skills` with the label `site-cli-creator`. It does not forward issues from generated plugins.
 
 The generator writes into a repo that the person running it chooses. After generation, a plugin depends on nothing from the generator at run time.
 
@@ -24,11 +27,11 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/
 |---|---|---|
 | `new` | a new site | creates the plugin repo layout, then runs **add-skill** for the first login |
 | `add-skill` | a new login in an existing plugin | creates `skills/<skill>/`, sets up login for the site, then runs **add-task** for each Task |
-| `add-task` | a `report --feature` issue, or the maintainer | runs the Task loop (§3) once, reusing existing Operations, then opens a PR that the maintainer merges |
+| `add-task` | a feature request filed by the Feedback skill, or the maintainer | runs the Task loop (§3) once, reusing existing Operations, then opens a PR that the maintainer merges |
 | `fix` | a Drift or bug issue | **Drift:** re-captures only the affected Task, updates the Contract, runs `check`, opens a PR that auto-merges when green. **Bug in the site's own code** (`operations/`, `commands/`, `site.ts`): fixes it in the plugin and opens a PR. **Bug in template code:** fixes the generator's template, then runs `upgrade` on the plugin |
 | `upgrade` | a template change | replaces only the template files (§5), rewrites `template.json` to the new version, rebuilds, runs `check`, opens a PR |
 
-Only Drift fixes auto-merge. The maintainer merges everything else.
+Only Drift fixes auto-merge. The maintainer merges everything else. Every mode passes `--writes` when it runs `check` (§10).
 
 ## 3. The Task loop
 
@@ -62,6 +65,8 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   .github/plugin/plugin.json
   .github/workflows/release.yml             TEMPLATE   tag vX.Y.Z → build every skill × target → release
   template.json                             GENERATED  {"template": "<generator version>"}
+  skills/<plugin>-feedback/SKILL.md         GENERATED  one per plugin, written once by `new`, then owned
+                                                       by the plugin (§10)
   skills/<skill>/                           one per login
     SKILL.md                                MIXED      see §5 and §8
     install.sh                              TEMPLATE   see §9
@@ -71,7 +76,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
       package.json                          GENERATED  plugin version and dependency pins
       build.ts                              TEMPLATE   carries the playwright-core patch (§9)
       src/main.ts, src/runtime/*            TEMPLATE   routing, envelope, call + classification,
-                                                       session, check, report
+                                                       session, check
       src/site.ts                           GENERATED  origin, URLs, login hosts, token request, repo;
                                                        site-specific post-login step (§7)
       src/registry.ts                       GENERATED  static imports, so `bun build --compile` sees them
@@ -87,6 +92,7 @@ Decided in [How do generated plugins pick up template fixes?](https://github.com
 
 - **Template files**, owned by the generator and overwritten by `upgrade`: `main.ts`, `runtime/*`, `build.ts`, `install.sh` and `release.yml`, exactly as decided in the ticket.
 - **Site files**, never touched by `upgrade`: `site.ts`, `operations/`, `commands/`, `captures/` and `package.json`. `package.json` holds the plugin version, and its dependency pins move only when a template change requires it. `registry.ts` is regenerated.
+- **The Feedback skill is a site file.** `new` writes `skills/<plugin>-feedback/SKILL.md` once, and `upgrade` never touches it. A plugin can tailor it, but a later fix to the feedback flow does not reach existing plugins. That trade-off was chosen in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24).
 - **SKILL.md is mixed** (a spec choice, so the failure guidance can't go stale). `upgrade` rewrites the intro and `## When it fails`, because they describe template behavior. The frontmatter, `## When NOT to use` and the command table belong to the site. The command table is regenerated from `help`.
 - `template.json` records the template version. `upgrade` rewrites it, and `doctor` prints it, so a stale plugin shows up.
 - A template bug is fixed in the generator first, and plugins receive it through `upgrade`. Copies never diverge from the template.
@@ -117,7 +123,8 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 - **State** lives in `~/.<plugin>-<skill>/` with mode 0700. The path and mode are spec choices: the path avoids collisions between two plugins whose CLI skills share a name. It holds:
   - `profile/`: a Chrome user-data dir owned by the tool. Chrome 136+ refuses automation on the default profile.
   - `session.json` (0600): the bearer, the cookie, and the chain-root ids.
-  - `last-error.json`: what `report --last` files.
+
+  There is no `last-error.json`. The Feedback skill works from the error JSON the CLI just printed (§10).
 - **`login`** launches headed Chrome via `launchPersistentContext(profile, {channel: "chrome"})`. It waits up to 10 minutes for the request named by `site.tokenRequest`, sniffs its `authorization` header and the cookies, then runs the site's **post-login step**.
 - **Post-login step** (`site.ts`): site-specific, written by the agent from the Capture. It derives the chain-root ids and keeps nothing else. For YouSee:
   1. Decode `ciam_id` and `individual_id` from the access token.
@@ -140,25 +147,26 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 - **Built-in, the same in every CLI skill:**
   - `help`: commands, flags and exit codes, as JSON;
   - `login`;
-  - `check [--op <name>]`;
-  - `report --last` or `report --feature "<task>"`;
-  - `doctor`: versions, template version, Chrome path, plus the state dir and `gh` status (both spec choices);
+  - `check [--op <name>] [--writes]` (§10);
+  - `doctor`: versions, template version, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;
   - `version`.
 
 **Output:** stdout is always exactly one JSON document, and stderr carries progress. A failure prints:
 
 ```json
-{"error": {"kind": "drift", "message": "…", "fingerprint": "…", "diff": [], "next": "<what the agent must do>"}}
+{"error": {"kind": "drift", "message": "…", "fingerprint": "…", "diff": [], "version": "…", "os": "…", "next": "<what the agent must do>"}}
 ```
+
+The envelope is everything the Feedback skill needs, and the CLI is responsible for keeping values out of it. A `bug` envelope also carries a redacted stack trace. A `check` envelope carries one entry per drifted Operation, each with its own Fingerprint and diff.
 
 **Exit codes:**
 
 | Exit | kind | `next` tells the agent |
 |---|---|---|
 | 0 | ok | |
-| 1 | bug | tell the user, offer to file it with `report --last`, and only file it on a yes. Only Drift is reported without asking |
+| 1 | bug | tell the user and offer to file it through the Feedback skill, passing this envelope. File only on a yes |
 | 2 | input | fix the flags (see `help`). If the error lists accounts, ask the user which one and pass `--account <id>` from then on |
-| 3 | drift | run `report --last`, show the user the link, stop, and don't work around it with raw calls |
+| 3 | drift | stop, offer to file it through the Feedback skill with this envelope (filed only on a yes), and don't work around it with raw calls |
 | 4 | session | run `login` (the user signs in to Chrome), then rerun |
 | 5 | network | tell the user the site isn't responding, and stop |
 
@@ -168,7 +176,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 
 **SKILL.md** (about 45–60 lines):
 1. Frontmatter with only `name` and `description`. The version goes in an HTML comment below it, because a `version:` key breaks Copilot.
-2. A short intro:
+2. A short intro (session, network and input failures never go to the Feedback skill):
    - `bin/<skill>` is in this skill's folder, and output is JSON;
    - write commands: show the user the dry run and get an explicit yes before rerunning with `--confirm`;
    - Tasks spanning logins: chain commands from each CLI skill.
@@ -176,7 +184,8 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 4. `## When it fails`: exit code → kind → action, plus three extra rows:
    - a missing binary: run `install.sh`;
    - several accounts: ask the user, then pass `--account`;
-   - `report` returned `filed: false`: give the user the `openInBrowser` link.
+   - the plugin can't do what the user asked: offer a feature request through the Feedback skill;
+   - the user asks whether the plugin works, or a failure looks odd: run `check`.
 
    It also says, in prose, to stop on Drift and never work around it with raw calls.
 5. `## When NOT to use`.
@@ -199,9 +208,9 @@ Decided in [Does Playwright work inside bun compile binaries?](https://github.co
   3. Chrome present, else how to install it;
   4. `gh release download v<version> --pattern <skill>-<target>` into `skills/<skill>/bin/`. A 404 here means "ask `<owner>` for access to `<repo>`". A plugin update lands in a new cache dir, so the binary always matches its SKILL.md.
 
-## 10. Drift, check and report
+## 10. Drift, check and the Feedback skill
 
-Decided in [Drift classification vs other failures](https://github.com/hoaj/skills/issues/5), [Template command surface and SKILL.md layout](https://github.com/hoaj/skills/issues/6), [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13) and [What do users without gh or repo access get?](https://github.com/hoaj/skills/issues/14).
+Decided in [Drift classification vs other failures](https://github.com/hoaj/skills/issues/5), [Template command surface and SKILL.md layout](https://github.com/hoaj/skills/issues/6), [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13) and [What do users without gh or repo access get?](https://github.com/hoaj/skills/issues/14). `check` was settled in [When does check run?](https://github.com/hoaj/skills/issues/20). The Feedback skill was decided in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24), which replaced the `report` subcommand.
 
 **Classification:** the CLI classifies every failure deterministically, and the agent never guesses.
 - **drift:** any of
@@ -219,40 +228,42 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/skil
 **Fingerprint:** `plugin:skill:operation:breakType:path:code`, with array indices written as `[]`. `code` is the Zod issue code, the HTTP status or the GraphQL error code, and it may be empty. For example, `yousee:yousee:listFtpdProducts:zod:data.listFtpdProducts[].status:invalid_type`.
 
 **`check`:**
-- Calls every **read** Operation live, in chain order, and validates it against its Contract.
-- For **write** Operations, runs `trigger(page)`, intercepts the write request, compares its shape and aborts it. `check` never writes.
+- Calls every **read** Operation live, in chain order, and validates it against its Contract. Plain `check` never launches Chrome.
+- With `--writes` (or `--op <write>`), it also runs `trigger(page)` headless from the profile for each **write** Operation, intercepts the write request, compares its shape and aborts it. `check` never writes.
+- If anything drifted, it exits 3 with one entry per drifted Operation, and each can be filed through the Feedback skill.
+- **Nothing runs `check` automatically.** Users run it on demand, to answer "is the site broken or is it me?". The generator runs it, with `--writes`, in `add-task`, `fix` and `upgrade`. A Task command validates only the Operations it calls. After Drift, nobody sweeps the other Operations: `fix` runs the full `check` anyway. The maintainer schedules no proactive runs in v1, so users surface Drift. CI can't run `check`, because it needs a real logged-in account.
 
-**`report --last`:** files the last failure if it was `drift` or `bug`, using the user's own `gh`. For Drift the agent runs it without asking. For a bug, only after the user agrees (§8).
-1. Searches the plugin repo for the Fingerprint (Drift) or the bug key (see §12).
-2. An open match gets a +1 comment. Adding the version and OS is a spec choice.
-3. A closed match whose fixed version is newer than the user's gets "update the plugin" and nothing is filed. This means `fix` must record the fixed version when it closes an issue.
-4. Otherwise it creates an issue, linking any closed match.
-
-**Titles:** the Fingerprint for Drift, the kind plus the command for a bug or a feature request. The issue body holds the diff or stack trace and never values.
-
-**`report --feature "<task>"`:** files a Task request, which the maintainer handles with `add-task`.
-
-**Without `gh`, or without permission to file:** `report` returns `{"filed": false, "openInBrowser": "<pre-filled /issues/new link>"}`, titled as above. The agent gives the link to the user. Duplicates are caught by `fix` through that Fingerprint.
-
-**What the user sees:** a short message with the issue link. On Drift the agent stops the task.
+**The Feedback skill** (`skills/<plugin>-feedback/`, one per plugin, covering every CLI skill in it):
+- **When:** exit 3 (Drift), exit 1 (bug), a Task the plugin can't do (a feature request for `add-task`), or the user saying "report this". Never for session, network or input failures.
+- **Input:** the error envelope the CLI just printed (§8). The skill never reads the state dir and never sees response values.
+- **Always asks first, Drift included.** It drafts the issue, shows it to the user and files it only on a yes, using the user's own `gh`.
+- **Dedup**, as SKILL.md steps:
+  1. Search the plugin repo for the Fingerprint (Drift) or the bug key (see §12).
+  2. An open match gets a +1 comment with the version and OS.
+  3. A closed match whose fixed version is newer than the user's gets "update the plugin", and nothing is filed. This means `fix` must record the fixed version when it closes an issue (§12).
+  4. Otherwise, create an issue that links any closed match.
+- **Titles:** the Fingerprint for Drift, the kind plus the command for a bug or a feature request. The body holds the diff or stack trace and never values.
+- **Without `gh`, or without permission to file:** the skill gives the user a pre-filled `/issues/new` link, titled as above. Duplicates are caught by `fix` through that Fingerprint.
+- **What the user sees:** a short message with the issue link. On Drift the agent stops the task.
 
 ## 11. Out of scope
 
 - Building the generator. This spec is where the map ends.
 - Real writes during `check`.
+- Running `check` automatically, on users' machines or on a maintainer schedule (v1).
 - Rub-style inspection of the site's JS bundle.
 - Public plugins installed without `gh`, because they would publish a site's internal API shapes.
 - Jira as a test case: it was replaced by Mit YouSee.
 
 ## 12. Open points found while writing this spec
 
-These are not decided. Each one needs a short decision before or during the build. Points 1–5 are tickets on the map: [When does check run?](https://github.com/hoaj/skills/issues/20), [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21), [Do unsigned binaries trigger Gatekeeper or SmartScreen when installed with gh?](https://github.com/hoaj/skills/issues/22) and [Who runs fix mode, and with which site account?](https://github.com/hoaj/skills/issues/23).
+These are not decided. Each one needs a short decision before or during the build. Points 1–5 are tickets on the map: [When does check run?](https://github.com/hoaj/skills/issues/20) (resolved), [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21), [Do unsigned binaries trigger Gatekeeper or SmartScreen when installed with gh?](https://github.com/hoaj/skills/issues/22) and [Who runs fix mode, and with which site account?](https://github.com/hoaj/skills/issues/23).
 
-1. **When `check` runs.** The charting session said "runs locally during normal use", but no ticket fixed the trigger. The candidates are only on demand, on every Drift, or once a day before the first command.
+1. ~~**When `check` runs.**~~ Resolved in [When does check run?](https://github.com/hoaj/skills/issues/20): on demand only (§10).
 2. **Who bumps the plugin version and tags a release.** The plugin version is pinned in six places: four manifests, the SKILL.md comment and `package.json`. `template.json` holds the template version, which is a separate number. `fix`, `add-task` and `upgrade` all open PRs, but nothing says which of them bumps the version and tags. A version-sync test like cogx's is likely needed.
-3. **Recording the fixed version.** `report` relies on `fix` recording the version that fixed an issue (§10, step 3), but nowhere specifies how. A label or a closing comment in a fixed format are two ways.
+3. **Recording the fixed version.** The Feedback skill relies on `fix` recording the version that fixed an issue (§10, step 3), but nowhere specifies how. A label or a closing comment in a fixed format are two ways.
 4. **Unsigned binaries.** Gatekeeper on macOS and SmartScreen on Windows prompts for binaries downloaded with `gh` are untested, and so are windows-arm64 and musl Linux.
 5. **Who runs fix mode for Drift.** fix re-captures with the maintainer's own login, so the maintainer needs an account on the site that reaches the drifted Task. That's the same assumption as `add-task`, but it's never stated.
-6. **A dedup key for bugs.** A Fingerprint is defined only for Drift. Bugs need their own key for `report` to search on, for example kind, command and the top stack frame.
-7. **Bug reports need the user's yes (a spec choice, to confirm).** The ticket on template fixes made bugs reportable, while the glossary says only Drift files an issue automatically. This spec keeps that rule: the agent offers to report a bug and files it only if the user agrees.
-8. **The prototype predates three decisions:** CLI skills under `skills/<skill>/`, dry-run writes, and bug and feature reports. It is a throwaway and shouldn't be used as a template.
+6. **A dedup key for bugs.** A Fingerprint is defined only for Drift. Bugs need their own key for the Feedback skill to search on, for example kind, command and the top stack frame.
+7. ~~**Bug reports need the user's yes.**~~ Resolved in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24): every report needs the user's yes, Drift included.
+8. **The prototype predates four decisions:** CLI skills under `skills/<skill>/`, dry-run writes, bug and feature reports, and the Feedback skill replacing `report`. It is a throwaway and shouldn't be used as a template.
