@@ -36,6 +36,10 @@ _Avoid_: hash, signature
 A skill that ships inside a plugin and files issues on the repo that plugin lives in: Drift, bugs and feature requests. Every generated plugin has one (`<plugin>-feedback`), and so does site-cli-creator. It drafts the issue and files it only after the user approves.
 _Avoid_: report (the removed CLI subcommand), reporter
 
+**Starter code**:
+The tested base code the generator copies into a new plugin once: routing, the error envelope and classification, login and session, `check`, build, install and release. After the copy it belongs to the plugin, which shares no code with the generator.
+_Avoid_: template (nothing is kept in sync), framework, shared runtime
+
 **Capture**:
 A recording of the calls a site's frontend makes while the user performs one Task in the browser, kept as shapes only, with no values.
 _Avoid_: HAR, recording, trace
