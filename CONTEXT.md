@@ -5,7 +5,7 @@ A generator that turns the network calls a website's frontend makes into a plugi
 ## Language
 
 **CLI skill**:
-A skill with its own CLI that wraps exactly one login on one site. A generated plugin holds one or more of them.
+A skill with its own CLI that wraps one site, with exactly one login or none (`auth: login` or `auth: none`). A generated plugin holds one or more of them, and can mix both kinds.
 _Avoid_: site plugin, connector
 
 **Task**:
