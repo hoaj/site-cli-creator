@@ -30,7 +30,7 @@ jobs:
       release: ${{ steps.version.outputs.release }}
       skills: ${{ steps.skills.outputs.skills }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: version
@@ -84,7 +84,7 @@ jobs:
       run:
         working-directory: skills/${{ matrix.skill }}/cli
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -99,7 +99,7 @@ jobs:
           if [ "$TARGET" = windows-x64 ]; then ext=".exe"; fi
           bun build.ts "bun-$TARGET" "dist/$SKILL-$TARGET$ext"
           ls -la dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: bin-${{ matrix.skill }}-${{ matrix.target }}
           path: skills/${{ matrix.skill }}/cli/dist/${{ matrix.skill }}-${{ matrix.target }}*
@@ -115,7 +115,7 @@ jobs:
       group: publish-v${{ needs.plan.outputs.version }}
       cancel-in-progress: false
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           pattern: bin-*
           path: dist
@@ -141,7 +141,7 @@ jobs:
       issues: write
       pull-requests: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - uses: oven-sh/setup-bun@v2
