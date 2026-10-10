@@ -28,7 +28,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -60,7 +60,7 @@ jobs:
       matrix:
         target: [darwin-x64, darwin-arm64, linux-x64, linux-arm64, windows-x64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
@@ -92,7 +92,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dist"
           bun build.ts "bun-${{ matrix.target }}" "$RUNNER_TEMP/dist/fixture-${{ matrix.target }}$ext"
           ls -la "$RUNNER_TEMP/dist"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: smoke-${{ matrix.target }}
           path: ${{ runner.temp }}/dist/
@@ -126,13 +126,13 @@ jobs:
         shell: bash
     steps:
       # Only the fixture site, which has no dependencies; the binary gets no node_modules.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: ${{ env.SKILL_DIR }}/fixtures/site
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: ${{ env.BUN_VERSION }}
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: smoke-${{ matrix.target }}
           path: bin
