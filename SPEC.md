@@ -31,7 +31,7 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/
 | `fix` | a Drift or bug issue | **Drift:** re-captures only the affected Task, updates the Contract, runs `check`, opens a PR that auto-merges when green. **Bug in the site's own code** (`operations/`, `commands/`, `site.ts`): fixes it in the plugin and opens a PR. **Bug in template code:** fixes the generator's template, then runs `upgrade` on the plugin |
 | `upgrade` | a template change | replaces only the template files (§5), rewrites `template.json` to the new version, rebuilds, runs `check`, opens a PR |
 
-Only Drift fixes auto-merge. The maintainer merges everything else. Every mode passes `--writes` when it runs `check` (§10).
+Only Drift fixes auto-merge. The maintainer merges everything else. Every mode passes `--writes` when it runs `check` (§10). Every mode that opens a PR also bumps the plugin version in that PR (§9).
 
 ## 3. The Task loop
 
@@ -90,11 +90,11 @@ There is no CLI framework. Routing and flag parsing are about 30 lines in `main.
 
 Decided in [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13).
 
-- **Template files**, owned by the generator and overwritten by `upgrade`: `main.ts`, `runtime/*`, `build.ts`, `install.sh` and `release.yml`, exactly as decided in the ticket.
+- **Template files**, owned by the generator and overwritten by `upgrade`: `main.ts`, `runtime/*`, `build.ts`, `install.sh` and `release.yml`, exactly as decided in the ticket. [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21) adds the bump script, the version-sync test and the version check workflow (§9).
 - **Site files**, never touched by `upgrade`: `site.ts`, `operations/`, `commands/`, `captures/` and `package.json`. `package.json` holds the plugin version, and its dependency pins move only when a template change requires it. `registry.ts` is regenerated.
 - **The Feedback skill is a site file.** `new` writes `skills/<plugin>-feedback/SKILL.md` once, and `upgrade` never touches it. A plugin can tailor it, but a later fix to the feedback flow does not reach existing plugins. That trade-off was chosen in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24).
 - **SKILL.md is mixed** (a spec choice, so the failure guidance can't go stale). `upgrade` rewrites the intro and `## When it fails`, because they describe template behavior. The frontmatter, `## When NOT to use` and the command table belong to the site. The command table is regenerated from `help`.
-- `template.json` records the template version. `upgrade` rewrites it, and `doctor` prints it, so a stale plugin shows up.
+- `template.json` records the template version, which is the generator plugin's own version in `hoaj/skills`, bumped the same way (§9). `upgrade` rewrites it, and `doctor` prints it, so a stale plugin shows up. `upgrade` opens no PR when no template file changed.
 - A template bug is fixed in the generator first, and plugins receive it through `upgrade`. Copies never diverge from the template.
 
 ## 6. Contracts
@@ -201,12 +201,20 @@ Decided in [Does Playwright work inside bun compile binaries?](https://github.co
 
   darwin-x64 is unverified.
 - **Release:** one tag `vX.Y.Z` per plugin, so all CLI skills ship together. Assets are named `<skill>-<target>[.exe]`.
+- **Versioning**, decided in [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21):
+  - **One bump command.** `bun run bump <patch|minor|major>` rewrites every copy of the plugin version: the four manifests, the version comment in each SKILL.md (every CLI skill and the Feedback skill) and each `cli/package.json`. Nobody edits version numbers by hand. A version-sync test fails CI if any copy differs.
+  - **Each generator PR bumps.** `fix`, `add-task`, `add-skill` and `upgrade` run the bump in their own PR. `new` starts at `0.1.0`. `fix` is a patch. `add-task` and `add-skill` are minor. `upgrade` is a patch, or minor if the template adds something agents can use, such as a flag or a built-in. Major bumps, such as a renamed or removed command, are done by hand.
+  - **Merging releases.** When a PR that changed the version merges to main, `release.yml` tags `vX.Y.Z` and builds and publishes the binaries. An auto-merged Drift fix ships with no human step.
+  - **Collisions.** A CI check requires a PR's version to be higher than main's. A stale PR goes red, and the generator rebases and bumps again. Auto-merge waits for green, so two releases never share a number.
+  - **Recording the fix.** Generator PRs say `Fixes #n`. Once the release is published, `release.yml` adds a `fixed-in:vX.Y.Z` label and a short comment to every issue the released PRs closed. The label is written only after the binaries exist.
 - **Chrome** is a hard prerequisite. It is found at a fixed path per OS, and `executablePath` overrides it. No browser is shipped. `install.sh` and `doctor` check for Chrome and print how to install it.
 - **`install.sh`** runs once, when the agent finds `bin/<skill>` missing. It stops with a clear message at the first step that fails:
   1. `gh` present, else "install GitHub CLI and run `gh auth login`";
   2. `gh` logged in, else "run `gh auth login`";
   3. Chrome present, else how to install it;
-  4. `gh release download v<version> --pattern <skill>-<target>` into `skills/<skill>/bin/`. A 404 here means "ask `<owner>` for access to `<repo>`". A plugin update lands in a new cache dir, so the binary always matches its SKILL.md.
+  4. `gh release download v<version> --pattern <skill>-<target>` into `skills/<skill>/bin/`. A plugin update lands in a new cache dir, so the binary always matches its SKILL.md.
+
+  Users install from main, so a new version reaches them as soon as its PR merges, minutes before its binaries exist. On a 404, `install.sh` checks whether it can see the repo. If it can, the release is still being built: "try again in a few minutes". If it can't: "ask `<owner>` for access to `<repo>`". `doctor` gives the same answer. A failed build shows up as a red workflow on main.
 
 ## 10. Drift, check and the Feedback skill
 
@@ -240,8 +248,9 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/skil
 - **Dedup**, as SKILL.md steps:
   1. Search the plugin repo for the Fingerprint (Drift) or the bug key (see §12).
   2. An open match gets a +1 comment with the version and OS.
-  3. A closed match whose fixed version is newer than the user's gets "update the plugin", and nothing is filed. This means `fix` must record the fixed version when it closes an issue (§12).
-  4. Otherwise, create an issue that links any closed match.
+  3. A closed match with a `fixed-in:vX.Y.Z` label newer than the user's version gets "update the plugin", and nothing is filed (§9).
+  4. A closed match with no `fixed-in` label yet: tell the user a fix is merged and on its way, and add a +1 so a stuck release becomes visible. Nothing new is filed.
+  5. Otherwise, create an issue that links any closed match.
 - **Titles:** the Fingerprint for Drift, the kind plus the command for a bug or a feature request. The body holds the diff or stack trace and never values.
 - **Without `gh`, or without permission to file:** the skill gives the user a pre-filled `/issues/new` link, titled as above. Duplicates are caught by `fix` through that Fingerprint.
 - **What the user sees:** a short message with the issue link. On Drift the agent stops the task.
@@ -260,8 +269,8 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/skil
 These are not decided. Each one needs a short decision before or during the build. Points 1–5 are tickets on the map: [When does check run?](https://github.com/hoaj/skills/issues/20) (resolved), [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21), [Do unsigned binaries trigger Gatekeeper or SmartScreen when installed with gh?](https://github.com/hoaj/skills/issues/22) and [Who runs fix mode, and with which site account?](https://github.com/hoaj/skills/issues/23).
 
 1. ~~**When `check` runs.**~~ Resolved in [When does check run?](https://github.com/hoaj/skills/issues/20): on demand only (§10).
-2. **Who bumps the plugin version and tags a release.** The plugin version is pinned in six places: four manifests, the SKILL.md comment and `package.json`. `template.json` holds the template version, which is a separate number. `fix`, `add-task` and `upgrade` all open PRs, but nothing says which of them bumps the version and tags. A version-sync test like cogx's is likely needed.
-3. **Recording the fixed version.** The Feedback skill relies on `fix` recording the version that fixed an issue (§10, step 3), but nowhere specifies how. A label or a closing comment in a fixed format are two ways.
+2. ~~**Who bumps the plugin version and tags a release.**~~ Resolved in [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21) (§9).
+3. ~~**Recording the fixed version.**~~ Resolved in [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21): a `fixed-in` label added at release (§9, §10).
 4. **Unsigned binaries.** Gatekeeper on macOS and SmartScreen on Windows prompts for binaries downloaded with `gh` are untested, and so are windows-arm64 and musl Linux.
 5. **Who runs fix mode for Drift.** fix re-captures with the maintainer's own login, so the maintainer needs an account on the site that reaches the drifted Task. That's the same assumption as `add-task`, but it's never stated.
 6. **A dedup key for bugs.** A Fingerprint is defined only for Drift. Bugs need their own key for the Feedback skill to search on, for example kind, command and the top stack frame.
