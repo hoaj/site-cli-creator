@@ -1,0 +1,195 @@
+name: site-cli-creator
+
+# The generator's CI (SPEC §5, §9): its own tests, then a platform smoke test of
+# the Starter code's compiled CLI on every release target.
+on:
+  push:
+    paths:
+      - plugins/site-cli-creator/**
+      - .github/workflows/site-cli-creator.yml
+  pull_request:
+    paths:
+      - plugins/site-cli-creator/**
+      - .github/workflows/site-cli-creator.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-cli-creator-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  BUN_VERSION: 1.4.3
+  GENERATOR: plugins/site-cli-creator
+  SKILL_DIR: plugins/site-cli-creator/skills/site-cli-creator
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install Google Chrome if missing
+        run: |
+          if [ ! -x /opt/google/chrome/chrome ]; then
+            curl -fsSLo chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y ./chrome.deb
+            rm chrome.deb
+          fi
+          /opt/google/chrome/chrome --version
+      - run: bun install --frozen-lockfile
+        working-directory: ${{ env.GENERATOR }}
+      - run: bun test
+        working-directory: ${{ env.GENERATOR }}
+
+  # Scaffold a plugin with the generator's own tools, the way `new` and
+  # `add-skill` do, and cross-compile its CLI for one target per matrix entry.
+  smoke:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [darwin-x64, darwin-arm64, linux-x64, linux-arm64, windows-x64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+        working-directory: ${{ env.GENERATOR }}
+      - name: Scaffold the fixture plugin
+        run: |
+          plugin="$RUNNER_TEMP/smoke-plugin"
+          skill="$plugin/skills/fixture"
+          bun "$SKILL_DIR/tools/new.ts" --dir "$plugin" --plugin smoke --repo hoaj/smoke-plugin \
+            --description "Smoke test plugin" --maintainer hoaj --no-labels --skip-checks
+          bun "$SKILL_DIR/tools/add-skill.ts" --dir "$plugin" --skill fixture \
+            --origin http://127.0.0.1:4310 --auth none
+          # The fixture's agent-written files, with the placeholders add-skill fills.
+          SRC="$skill/cli/src" bun -e '
+            const { copyExpected } = await import(process.env.GITHUB_WORKSPACE + "/" + process.env.SKILL_DIR + "/fixtures/expected/copy.ts");
+            copyExpected("none", process.env.SRC, {
+              plugin: "smoke", skill: "fixture", repo: "hoaj/smoke-plugin",
+              generatorVersion: "0.1.0", origin: "http://127.0.0.1:4310",
+            });'
+          (cd "$skill/cli" && bun install)
+          bun "$SKILL_DIR/tools/regen.ts" --skill-dir "$skill"
+          echo "CLI_DIR=$skill/cli" >> "$GITHUB_ENV"
+      - name: Build fixture-${{ matrix.target }}
+        working-directory: ${{ env.CLI_DIR }}
+        run: |
+          ext=""
+          if [ "${{ matrix.target }}" = windows-x64 ]; then ext=".exe"; fi
+          mkdir -p "$RUNNER_TEMP/dist"
+          bun build.ts "bun-${{ matrix.target }}" "$RUNNER_TEMP/dist/fixture-${{ matrix.target }}$ext"
+          ls -la "$RUNNER_TEMP/dist"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: smoke-${{ matrix.target }}
+          path: ${{ runner.temp }}/dist/
+          if-no-files-found: error
+          retention-days: 3
+
+  # Each binary on its own platform, with no node_modules: help, version, the
+  # hidden `selftest` (plain fetch, Chrome launch, route.abort), a Task command
+  # against the fixture site, and `check --writes`, which launches Chrome
+  # headless and intercepts the write with route.abort (SPEC §9).
+  run-smoke:
+    needs: smoke
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macos-13 was GitHub's last generic Intel image and is retired; macos-15-intel replaces it.
+          - os: macos-15-intel
+            target: darwin-x64
+          - os: macos-latest
+            target: darwin-arm64
+          - os: ubuntu-latest
+            target: linux-x64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
+          - os: windows-latest
+            target: windows-x64
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      # Only the fixture site, which has no dependencies; the binary gets no node_modules.
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: ${{ env.SKILL_DIR }}/fixtures/site
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: smoke-${{ matrix.target }}
+          path: bin
+      # The arm64 runner image ships no Google Chrome; macOS and Windows runners have it.
+      - name: Install Google Chrome (linux-arm64)
+        if: matrix.target == 'linux-arm64'
+        run: |
+          curl -fsSLo chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_arm64.deb
+          sudo apt-get install -y ./chrome.deb
+          rm chrome.deb
+      - name: Prepare the binary as install.sh does
+        run: |
+          bin="bin/fixture-${{ matrix.target }}"
+          if [ "$RUNNER_OS" = Windows ]; then
+            bin="$bin.exe"
+            powershell -NoProfile -Command "Unblock-File -Path '$bin'" || true
+          else
+            chmod +x "$bin"
+          fi
+          if [ "$RUNNER_OS" = macOS ]; then
+            xattr -d com.apple.quarantine "$bin" 2>/dev/null || true
+            codesign -v "$bin" 2>/dev/null || codesign --force --sign - "$bin"
+            codesign -v "$bin"
+          fi
+          test ! -e node_modules
+          echo "BIN=$bin" >> "$GITHUB_ENV"
+      - name: help, version, fetch, Chrome launch and route.abort
+        run: |
+          is_json_object() {
+            if command -v jq > /dev/null; then
+              jq -e 'type == "object"' "$1" > /dev/null
+            else
+              python3 -c 'import json, sys; assert isinstance(json.load(open(sys.argv[1])), dict)' "$1"
+            fi
+          }
+          run() {
+            local out="$1"
+            shift
+            echo "::group::$*"
+            "./$BIN" "$@" > "$out"
+            is_json_object "$out"
+            cat "$out"
+            echo "::endgroup::"
+          }
+          run help.json help
+          run version.json version
+          bun "$SKILL_DIR/fixtures/site/server.ts" --auth none --port 4310 > server.log 2>&1 &
+          server=$!
+          trap 'kill "$server" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 50); do
+            curl -fs -o /dev/null http://127.0.0.1:4310/ && break
+            sleep 0.2
+          done
+          # Hidden built-in: plain fetch, Chrome launched headless (temp profile, channel chrome),
+          # one request routed and aborted with net::ERR_FAILED.
+          run selftest.json selftest --url http://127.0.0.1:4310/
+          if command -v jq > /dev/null; then
+            jq -e '.ok == true and (.fetch | type) == "number" and .chrome == true and .abort == true' selftest.json > /dev/null
+          else
+            python3 -c 'import json, sys; r = json.load(open(sys.argv[1])); assert r.get("ok") is True and isinstance(r.get("fetch"), int) and r.get("chrome") is True and r.get("abort") is True, r' selftest.json
+          fi
+          run show.json subscription show
+          run check.json check --writes
+          if command -v jq > /dev/null; then
+            jq -e '.ok == true and ([.operations[] | select(.effect == "write" and .status == "ok")] | length) > 0' check.json > /dev/null
+          fi

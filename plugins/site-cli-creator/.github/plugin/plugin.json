@@ -1,0 +1,10 @@
+{
+  "name": "site-cli-creator",
+  "description": "Turn the calls a website makes into a plugin of CLI skills that coding agents can run, with Drift checks and a feedback loop.",
+  "version": "0.1.0",
+  "author": { "name": "Andreas Jørgensen" },
+  "repository": "https://github.com/hoaj/skills",
+  "license": "MIT",
+  "keywords": ["site-cli-creator", "cli", "generator", "playwright", "bun", "drift"],
+  "skills": ["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]
+}
