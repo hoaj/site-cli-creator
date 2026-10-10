@@ -91,6 +91,11 @@ jobs:
           if [ "${{ matrix.target }}" = windows-x64 ]; then ext=".exe"; fi
           mkdir -p "$RUNNER_TEMP/dist"
           bun build.ts "bun-${{ matrix.target }}" "$RUNNER_TEMP/dist/fixture-${{ matrix.target }}$ext"
+          if [ "${{ matrix.target }}" = windows-x64 ]; then
+            echo 'console.log(JSON.stringify({ main: import.meta.main, path: import.meta.path, bunMain: Bun.main, argv: process.argv }));' > probe.ts
+            bun -e 'const r = await Bun.build({ entrypoints: ["probe.ts"], compile: { target: "bun-windows-x64", outfile: process.env.RUNNER_TEMP + "/dist/probe-cross.exe" }, sourcemap: "linked" }); console.log(r.success)'
+            rm -f "$RUNNER_TEMP"/dist/*.map
+          fi
           ls -la "$RUNNER_TEMP/dist"
       - uses: actions/upload-artifact@v4
         with:
@@ -165,21 +170,17 @@ jobs:
         continue-on-error: true
         run: |
           set +e
-          echo "--- console"; "./$BIN" version; echo "exit=$?"
-          echo "--- file"; "./$BIN" version > d1.txt 2> d1.err; echo "exit=$?"; wc -c d1.txt d1.err; cat d1.txt; cat d1.err
-          echo "--- pipe"; "./$BIN" version | cat > d2.txt; echo "exit=${PIPESTATUS[0]}"; wc -c d2.txt
-          echo "--- help file"; "./$BIN" help > d3.txt 2> d3.err; echo "exit=$?"; wc -c d3.txt d3.err; head -c 300 d3.err
-          echo "--- powershell file"; powershell -NoProfile -Command "& '.\$BIN' version | Out-File -Encoding utf8 d4.txt; Write-Output \"exit=\$LASTEXITCODE\""; wc -c d4.txt
-          echo "--- cmd file"; cmd //c "$(cygpath -w "$BIN") version > d5.txt"; echo "exit=$?"; wc -c d5.txt
-          printf '%s\n' 'await Bun.write(Bun.stdout, JSON.stringify({a:1})+"\n"); process.exit(0);' > w1.ts
-          printf '%s\n' 'import { writeSync } from "node:fs"; writeSync(1, JSON.stringify({a:1})+"\n"); process.exit(0);' > w2.ts
-          printf '%s\n' 'process.stdout.write(JSON.stringify({a:1})+"\n"); process.exitCode = 0;' > w3.ts
-          printf '%s\n' 'await Bun.write(Bun.stdout, JSON.stringify({a:1})+"\n");' > w4.ts
-          for w in w1 w2 w3 w4; do
-            bun "$w.ts" > "$w.out" 2> "$w.err"; echo "bun $w exit=$? bytes=$(wc -c < "$w.out") err=$(head -c 300 "$w.err")"
-            bun build --compile "$w.ts" --outfile "$w.exe" > /dev/null 2>&1
-            "./$w.exe" > "$w.cout" 2> "$w.cerr"; echo "exe $w exit=$? bytes=$(wc -c < "$w.cout") err=$(head -c 300 "$w.cerr")"
-          done
+          echo "--- version console"; "./$BIN" version; echo "exit=$?"
+          echo "--- cross-compiled probe"; ./bin/probe-cross.exe; echo "exit=$?"
+          cat > probe.ts <<'TS'
+          console.log(JSON.stringify({ main: import.meta.main, path: import.meta.path, url: import.meta.url, bunMain: Bun.main, argv: process.argv }));
+          TS
+          bun build --compile probe.ts --outfile probe-cli.exe > /dev/null 2>&1; echo "--- native cli probe"; ./probe-cli.exe; echo "exit=$?"
+          cat > probebuild.ts <<'TS'
+          const r = await Bun.build({ entrypoints: ["probe.ts"], compile: { target: "bun-windows-x64", outfile: "probe-api.exe" }, sourcemap: "linked" });
+          console.log("build ok", r.success);
+          TS
+          bun probebuild.ts; echo "--- native api probe"; ./probe-api.exe; echo "exit=$?"
       - name: help, version, fetch, Chrome launch and route.abort
         run: |
           is_json_object() {
