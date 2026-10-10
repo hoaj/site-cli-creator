@@ -12,20 +12,26 @@ export type GraphqlCall = {
   variables?: Shape;
 };
 
+/** The comment redactQuery puts first when it replaced number literals, so the agent restores real ones. */
+export const NUMBERS_REDACTED = "# number literals were redacted to 0: write the real ones (or variables) back";
+
 /**
  * Queries are code, so their text is kept. Literals inside them can still be
- * data (`customer(id: "1234")`), so string literals, numbers of 5+ digits and
- * comments are replaced.
+ * data (`customer(id: "1234", zip: 2100)`), so string literals, every number
+ * literal and comments are replaced. Numbers inside names (`$id2`) stay.
  */
 export function redactQuery(query: string): string {
-  return query
-    .replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|#[^\n]*|\b\d{5,}\b/g, (m) => {
+  let numbers = false;
+  const out = query
+    .replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|#[^\n]*|(?<![\w$.])-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?(?![\w.])/g, (m) => {
       if (m.startsWith("#")) return "";
       if (m.startsWith('"')) return '""';
+      if (m !== "0") numbers = true;
       return "0";
     })
     .replace(/[ \t]+$/gm, "")
     .trim();
+  return numbers ? `${NUMBERS_REDACTED}\n${out}` : out;
 }
 
 function stripNoise(query: string): string {

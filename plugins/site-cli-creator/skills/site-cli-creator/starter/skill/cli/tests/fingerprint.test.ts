@@ -94,3 +94,33 @@ describe("bug key", () => {
     expect(srcRelative("/a/node_modules/x/src/y.ts")).toBeUndefined();
   });
 });
+
+describe("record keys are the site's data", () => {
+  const { z } = require("zod") as typeof import("zod");
+  const schema = z.object({
+    byNumber: z.record(z.string(), z.object({ status: z.string() })),
+    data: z.object({ people: z.record(z.string(), z.object({ age: z.number() })).optional() }),
+    tags: z.map(z.string(), z.number()),
+  });
+
+  test("a z.record or z.map key is written {}, like an index is []", () => {
+    const body = { byNumber: { "+4522334455": { status: 1 } }, data: { people: { "jane.doe@example.com": { age: "secret-41" } } }, tags: new Map() };
+    const diff = zodDiff(schema.safeParse(body).error!.issues, body, schema);
+    expect(diff.map((d) => d.path)).toEqual(["byNumber.{}.status", "data.people.{}.age"]);
+    const text = JSON.stringify(diff);
+    for (const v of ["4522334455", "jane.doe", "example.com", "secret-41"]) expect(text).not.toContain(v);
+  });
+
+  test("declared keys stay, through optional, nullable, unions and arrays", () => {
+    const s = z.object({ list: z.array(z.union([z.object({ a: z.string() }), z.object({ b: z.number() })])).nullable() });
+    expect(fieldPath(["list", 3, "b"], s)).toBe("list[].b");
+    expect(fieldPath(["list", 0, "zz"], s)).toBe("list[].{}");
+    expect(fieldPath(["$type", "$values", 0], z.object({ $type: z.object({ $values: z.array(z.string()) }) }))).toBe("$type.$values[]");
+  });
+
+  test("without a schema, keys that do not look like field names are written {}", () => {
+    expect(fieldPath(["data", "jens.hansen@example.dk", "x"])).toBe("data.{}.x");
+    expect(fieldPath(["byId", "99812345", "ok"])).toBe("byId.{}.ok");
+    expect(fieldPath(["data", "listFtpdProducts", 0, "status"])).toBe("data.listFtpdProducts[].status");
+  });
+});

@@ -138,7 +138,8 @@ describe("guidance matches the tools' interfaces", () => {
       for (const [, tool, rest] of read(p).matchAll(/bun <gen>\/tools\/([\w-]+)\.ts([^\n]*)/g)) {
         const u = usage(tool!);
         for (const [flag] of rest!.split(/\s#\s/)[0]!.matchAll(/--[a-z][a-z-]*/g)) {
-          expect({ doc: p, tool, flag, ok: u.includes(`${flag} `) || u.includes(`${flag}]`) || u.endsWith(flag) }).toMatchObject({ ok: true });
+          // --help is every tool's (tools/lib/args.ts), not in each USAGE.
+          expect({ doc: p, tool, flag, ok: flag === "--help" || u.includes(`${flag} `) || u.includes(`${flag}]`) || u.endsWith(flag) }).toMatchObject({ ok: true });
         }
         seen++;
       }
@@ -164,6 +165,20 @@ describe("guidance matches the tools' interfaces", () => {
 });
 
 describe("SPEC behaviours in the skills", () => {
+  test("starter feedback passes the key to gh byte for byte: a Fingerprint with $ survives the shell", () => {
+    const md = read(join(GEN, "starter/feedback/SKILL.md"));
+    expect(md).not.toContain('"\\"<key>\\" in:title"');
+    expect(md).not.toContain('--title "<title>"');
+    const block = md.slice(md.indexOf("key=$(cat <<'EOF'"), md.indexOf("```", md.indexOf("key=$(cat <<'EOF'")));
+    const key = "shop:shop:listItems:zod:data.$values[].$type:invalid_type";
+    // Run the documented snippet with gh replaced by printf, as the agent's bash would.
+    const script = block.replace("<key>", key).replace(/^gh issue list .*$/m, `printf '%s' "$key"`);
+    const p = Bun.spawnSync(["bash", "-c", script], { stdout: "pipe", stderr: "pipe" });
+    expect(p.stdout.toString()).toBe(key);
+    expect(md).toContain('--title "$title"');
+    expect(md).toContain("first row that fits");
+  });
+
   test("starter feedback dedups by exact title and covers all five outcomes", () => {
     const md = read(join(GEN, "starter/feedback/SKILL.md"));
     expect(md).toContain("exactly the title");
@@ -180,6 +195,20 @@ describe("SPEC behaviours in the skills", () => {
     for (const s of ["--label unverified", "gh pr checks", "gh pr merge", "Fixes #<n>", "site-cli-creator-feedback"]) expect(fix).toContain(s);
   });
 
+  test("the guidance documents what dogfooding agents had to read source for", () => {
+    const addTask = read(join(GEN, "reference/add-task.md"));
+    for (const s of ["--script <file.ts> --headless", "default export gets the Playwright `page`", "--write-op", "--allow-read", "blockedElsewhere", "bun run typecheck", "One page, several Tasks"]) expect(addTask).toContain(s);
+    expect(addTask).not.toContain("bunx");
+    const contracts = read(join(GEN, "reference/contracts.md"));
+    for (const s of ["## Runtime facts", "about:blank", "inputFailure", "bearerClaims", "setCookies", "**File names.**", "every** load of the start page", "don't say either in `summary`"]) expect(contracts).toContain(s);
+    const fix = read(join(GEN, "reference/fix.md"));
+    for (const s of ["SITE_CLI_NONINTERACTIVE=1", "A field whose type changed", "grep -l", "version-check origin/main"]) expect(fix).toContain(s);
+    expect(read(join(GEN, "reference/new.md"))).toContain("retry");
+    expect(read(join(GEN, "SKILL.md"))).toContain("bun build.ts bun-<os>-<arch> ../bin/<skill>");
+    const pkg = JSON.parse(read(join(GEN, "starter/skill/cli/package.json")));
+    expect(pkg.scripts.typecheck).toBe("tsc --noEmit -p .");
+  });
+
   test("session row says auth none never exits 4", () => {
     expect(read(join(GEN, "starter/skill/SKILL.md"))).toMatch(/\| 4 \| session \|.*only skills with `login`/);
   });
@@ -187,6 +216,14 @@ describe("SPEC behaviours in the skills", () => {
 
 describe.skipIf(!IN_REPO)(`generator CI workflow${REPO_REASON}`, () => {
   const wf = IN_REPO ? read(join(REPO, ".github/workflows/site-cli-creator.yml")) : "";
+  test("the test job type-checks the generator and the Starter CLI before testing", () => {
+    const job = wf.slice(wf.indexOf("  test:"), wf.indexOf("  smoke:"));
+    expect(job.match(/bun x tsc --noEmit -p \./g)?.length).toBe(2);
+    expect(job).toContain("working-directory: ${{ env.SKILL_DIR }}/starter/skill/cli");
+    expect(job.indexOf("tsc")).toBeLessThan(job.indexOf("run: bun test"));
+    expect(existsSync(join(PLUGIN, "tsconfig.json"))).toBe(true);
+  });
+
   test("builds and runs all five targets", () => {
     for (const t of ["darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64", "windows-x64"]) expect(wf).toContain(`target: ${t}`);
     expect(wf).toContain('bun build.ts "bun-${{ matrix.target }}"');

@@ -13,6 +13,11 @@ export class ToolError extends Error {
   }
 }
 
+/** --help: not a failure. runTool prints the value and exits 0. */
+export class ToolHelp {
+  constructor(readonly value: unknown) {}
+}
+
 export function fail(message: string, details?: Record<string, unknown>): never {
   throw new ToolError(message, details);
 }
@@ -31,6 +36,10 @@ export async function runTool(main: () => Promise<unknown>): Promise<never> {
     printJson(await main());
     process.exit(0);
   } catch (error) {
+    if (error instanceof ToolHelp) {
+      printJson(error.value);
+      process.exit(0);
+    }
     const message = error instanceof Error ? error.message : String(error);
     if (!(error instanceof ToolError) && error instanceof Error && error.stack) {
       process.stderr.write(`${error.stack}\n`);

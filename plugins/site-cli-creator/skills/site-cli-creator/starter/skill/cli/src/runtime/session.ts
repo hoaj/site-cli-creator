@@ -9,7 +9,8 @@ import type { Env } from "./site";
 export type Session = {
   headers: Record<string, string>;
   ids: Record<string, string>;
-  accounts?: Account[];
+  /** Account ids only: labels come from the site and are never saved. */
+  accounts?: Pick<Account, "id">[];
   savedAt: string;
 };
 

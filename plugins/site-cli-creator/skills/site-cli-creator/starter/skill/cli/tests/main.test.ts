@@ -319,3 +319,65 @@ test("ctx gives commands the session ids, the account and note", async () => {
   expect(seen).toEqual({ ids: { customerId: "C-5" }, account: "X" });
   expect(notes).toContain("hello");
 });
+
+describe("values never reach an envelope (SPEC §8, §10)", () => {
+  test("a record keyed by phone number or email drifts with {} in the path, message and Fingerprint", async () => {
+    const { defineOperation } = await import("../src/runtime/operation");
+    const subs = defineOperation({
+      name: "GET /api/subs",
+      effect: "read",
+      rest: { method: "GET", path: "/api/subs" },
+      variables: z.object({}),
+      response: z.object({ byNumber: z.record(z.string(), z.object({ status: z.string() })) }),
+    });
+    const show = defineCommand({ name: "subs show", summary: "s", args: z.object({}), uses: [subs], run: async (_a, { call }) => call(subs, {}) });
+    const { fetch } = fakeFetch(() => json({ byNumber: { "+4522334455": { status: 1 }, "jens.hansen@example.dk": { status: 2 } } }));
+    const { output, code } = await run(["subs", "show"], { ...makeApp(makeSite(), makeDeps(fetch, home.dir).deps), operations: [subs], commands: [show] });
+    expect(code).toBe(3);
+    const e = errorOf(output);
+    expect(e.fingerprint).toBe("acme:shop:GET /api/subs:zod:byNumber.{}.status:invalid_type");
+    expect(e.diff).toEqual([{ path: "byNumber.{}.status", code: "invalid_type", expected: "string", received: "number" }]);
+    const text = JSON.stringify(output);
+    for (const v of ["4522334455", "jens.hansen", "example.dk"]) expect(text).not.toContain(v);
+  });
+});
+
+describe("--account cache", () => {
+  test("labels are never saved; only ids are", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer t" }, ids: { customerId: "C-1" } });
+    const site = loginSite({ accounts: async () => [{ id: "A1", label: "Jens Hansen, Vesterbrogade 1" }, { id: "A2" }] });
+    await run(["products", "show", "--account", "A1"], makeApp(site, makeDeps(fakeFetch(happySite).fetch, home.dir).deps));
+    expect(loadSession(home.dir)!.accounts).toEqual([{ id: "A1" }, { id: "A2" }]);
+    expect(JSON.stringify(loadSession(home.dir))).not.toContain("Vesterbrogade");
+  });
+
+  test("an --account the cached list lacks makes the CLI look again before refusing", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer t" }, ids: { customerId: "C-1" }, accounts: [{ id: "A1" }, { id: "A2" }] });
+    let listed = 0;
+    const site = loginSite({ accounts: async () => (listed++, [{ id: "A1" }, { id: "A2" }, { id: "A3" }]) });
+    const { code } = await run(["products", "show", "--account", "A3"], makeApp(site, makeDeps(fakeFetch(happySite).fetch, home.dir).deps));
+    expect(code).toBe(0);
+    expect(listed).toBe(1);
+    expect(loadSession(home.dir)!.accounts!.map((a) => a.id)).toEqual(["A1", "A2", "A3"]);
+  });
+
+  test("several cached accounts and no --account: the list is fetched again, so the user sees labels", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer t" }, ids: { customerId: "C-1" }, accounts: [{ id: "A1" }, { id: "A2" }] });
+    const site = loginSite({ accounts: async () => [{ id: "A1", label: "Mobil" }, { id: "A2", label: "Bredbånd" }] });
+    const { output, code } = await run(["products", "show"], makeApp(site, makeDeps(fakeFetch(happySite).fetch, home.dir).deps));
+    expect(code).toBe(2);
+    expect(errorOf(output).accounts).toEqual([{ id: "A1", label: "Mobil" }, { id: "A2", label: "Bredbånd" }]);
+  });
+
+  test("auth none without bootstrap writes no session.json at all", async () => {
+    const { existsSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    let listed = 0;
+    const site = makeSite({ accounts: async () => (listed++, [{ id: "A1", label: "x" }, { id: "A2" }]) });
+    const app = makeApp(site, makeDeps(fakeFetch(happySite).fetch, home.dir).deps);
+    expect((await run(["products", "show", "--account", "A1"], app)).code).toBe(0);
+    expect(existsSync(join(home.dir, "session.json"))).toBe(false);
+    expect((await run(["products", "show", "--account", "A2"], app)).code).toBe(0);
+    expect(listed).toBe(2);
+  });
+});

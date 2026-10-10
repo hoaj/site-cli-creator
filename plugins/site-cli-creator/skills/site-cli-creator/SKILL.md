@@ -38,7 +38,7 @@ Run these before any mode. Stop at the first failure and tell the user the fix. 
 Every mode that adds or changes a Task runs this loop. Steps are in [reference/add-task.md](reference/add-task.md).
 
 1. **State the Tasks.** The user lists, in plain words, what agents should be able to do.
-2. **Capture each Task** with `capture.ts` while the user performs it in Chrome. Read Tasks abort every write; a write Task passes `--write` and lets the user's one real write through.
+2. **Capture each Task** with `capture.ts` while the user performs it in Chrome. Read Tasks abort every write on every host except sign-in steps; a write Task passes `--write` and lets the user's one real write through (the first after their first click; never one the page fires while loading).
 3. **Filter Operations.** Keep the Operations whose fields reach the Task's output, plus the chain that supplies their variables. Show kept and dropped, one-line reason each.
 4. **Show a card** and wait. Nothing is written before the user accepts or edits it:
    ```
@@ -61,31 +61,33 @@ Every mode that adds or changes a Task runs this loop. Steps are in [reference/a
 - Personal data is never stored or logged: `postLogin` returns chain-root ids only, and nothing writes values into captures, issues, PR text or commit messages. Shapes and type names only.
 - Command names are `<noun> <verb>` in English (`subscription show`, `bill list`), one per Task; the file is `commands/<noun>-<verb>.ts`.
 - `registry.ts` and the `## Commands` table are written only by `regen.ts`. Edit everything else in the plugin freely: it owns its files.
-- Only the release build compiles. Run the CLI from source while developing: `cd <skill>/cli && bun src/main.ts <command>`.
+- Only the release build compiles. Run the CLI from source while developing: `cd <skill>/cli && bun src/main.ts <command>`. Set `SITE_CLI_NONINTERACTIVE=1` on those runs: an expired login then exits 4 at once instead of opening Chrome and waiting up to 10 minutes (run `login`, then rerun).
 
 ## Tools
 
-Run from anywhere; paths are absolute or relative to the shell's directory. Every tool prints JSON. Quote every value that holds a space (`--description "Read your bills"`): an unquoted multi-word value is refused as an unexpected argument.
+Run from anywhere; paths are absolute or relative to the shell's directory. Every tool prints JSON, and `--help` prints its flags with their meaning. A `next` field in the output is a command to run next. Quote every value that holds a space (`--description "Read your bills"`): an unquoted multi-word value is refused as an unexpected argument.
 
 ```sh
 bun <gen>/tools/new.ts --dir <path> --plugin <name> --repo <owner/name> --description "<text>" --maintainer <login> [--no-labels] [--skip-checks]
 bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none
-bun <gen>/tools/capture.ts --skill-dir <skill> --task <slug> --url <start> [--write] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]
+bun <gen>/tools/capture.ts --skill-dir <skill> --task <slug> --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]
 bun <gen>/tools/draft-contract.ts <skill>/captures/<task>/<operation>.shape.json [--name <op>] [--out <file.ts>]
 bun <gen>/tools/regen.ts --skill-dir <skill>
 ```
 
 - `new.ts --skip-checks` skips the maintainer requirement checks; only tests and CI use it.
-- `capture.ts` records calls to the origin in `site.ts`; `--origin <url>` names another API origin and `--login-host <host>` (repeatable) a login host not yet in `site.ts`. When nothing was recorded it fails and leaves an earlier Capture of that Task untouched.
+- `capture.ts` records calls to the origin in `site.ts`; `--origin <url>` names another API origin and `--login-host <host>` (repeatable; a host name, no port) a login host not yet in `site.ts`. When nothing was recorded it fails and leaves an earlier Capture of that Task untouched. Its flags for writes, reads sent as POST and unattended Captures (`--script`: a module whose default export gets the Playwright page) are in [reference/add-task.md](reference/add-task.md) step 2.
 - Operations the Capture marks `loginFlow: true` are sign-in steps (token request, post-login). They go into `site.ts` (`login.tokenRequest`, `postLogin`, `readOnlyRequests`), never into `operations/`.
-- `draft-contract.ts --out <file.ts>` writes the draft and refuses to overwrite an existing file; use `--out`, not shell redirection.
+- `draft-contract.ts --out <file.ts>` writes the draft and refuses to overwrite an existing file; use `--out`, not shell redirection. `--name` is for GraphQL only.
 
 In the plugin:
 
 ```sh
 cd <skill>/cli && bun install                       # once per skill, before regen or any CLI run
 cd <skill>/cli && bun src/main.ts login              # auth: login, the user signs in
+cd <skill>/cli && bun run typecheck                  # after writing Contracts and commands
 cd <skill>/cli && bun src/main.ts check --writes     # every mode, before the PR
+cd <skill>/cli && bun build.ts bun-<os>-<arch> ../bin/<skill>   # optional smoke test of the binary (bin/ is gitignored)
 cd <plugin> && bun run bump <patch|minor|major>      # rewrites every version pin
 cd <plugin> && bun test                              # version-sync and runtime tests
 ```
@@ -96,7 +98,7 @@ Every mode that opens a PR bumps in that PR with `bun run bump`: `fix` patch, `a
 
 ## Fix mode
 
-- Drift: re-capture only the affected Task with the maintainer's account, correct the Contract, `check --writes`, patch bump, PR, merge when checks are green.
+- Drift: sign in (`login`) first, re-capture only the affected Task with the maintainer's account, correct the Contract, `check --writes`, patch bump, PR, merge when checks are green and the PR's version is still above `main`'s.
 - The maintainer's account can't reach the Task: correct the Contract from the issue's diff (field path and type), label the PR `unverified`, leave it for the maintainer to merge, and after the release ask the reporter on the issue to run `check --op <name>`.
 - Bug: fix it in the plugin's own code and add a test that fails without the fix. If the code came from the Starter code, offer the user an issue through `site-cli-creator-feedback` so new plugins get the fix.
 - `add-task` for a Task the maintainer's account can't perform: close the issue with an explanation and the label `needs-account`.
@@ -104,7 +106,7 @@ Every mode that opens a PR bumps in that PR with `bun run bump`: `fix` patch, `a
 ## Pull requests
 
 - Branch `<mode>/<short-slug>`; title `<mode>: <what changed>`; body lists Tasks, Operations and Contracts touched, the `check` result, and `Fixes #<n>` for every issue it resolves (the release labels those issues `fixed-in:vX.Y.Z`).
-- Merge automatically only a Drift `fix` without `unverified`, and only after `gh pr checks <n> --watch --fail-fast` exits 0: then `gh pr merge <n> --squash --delete-branch`. Everything else waits for the maintainer.
+- Merge automatically only a Drift `fix` without `unverified`, and only after `gh pr checks <n> --watch --fail-fast` and a fresh `bun run version-check origin/main` both pass: then `gh pr merge <n> --squash --delete-branch` (details in [reference/fix.md](reference/fix.md)). Everything else waits for the maintainer.
 - A generator problem (a tool fails, this guidance misleads, Starter code is wrong): offer `site-cli-creator-feedback`.
 
 ## Maintainer handover

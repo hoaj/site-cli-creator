@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { run } from "../src/main";
-import { chainOrder, capturedVariables, check, compareWrite, isDeclaredRead, isReadOnlyRequest, matchesOperation, triggerVerdict, withChain, type WriteChecker } from "../src/runtime/check";
+import { chainOrder, capturedVariables, check, compareWrite, isDeclaredRead, isReadOnlyRequest, matchesOperation, triggerStep, triggerVerdict, withChain, type WriteChecker } from "../src/runtime/check";
 import { Failure } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
 import { saveSession } from "../src/runtime/session";
@@ -98,6 +98,26 @@ describe("check over reads", () => {
       { operation: "getStatus", fingerprint: "acme:shop:getStatus:graphql:Status.up:", diff: [{ path: "Status.up", code: "validation" }] },
     ]);
     expect(calls.map((c) => c.body.operationName)).toEqual(["getCustomer", "getStatus"]);
+  });
+
+  test("a Drift found before a network failure is still reported, exit 3, with the other Operation marked", async () => {
+    const getStatus = defineOperation({ ...getOrder, name: "GET /api/status", rest: { method: "GET", path: "/api/status" }, variables: z.object({}), needs: {} });
+    const { fetch, calls } = fakeFetch((r) => (r.body?.operationName === "getCustomer" ? json({ data: { getCustomer: { id: 1, name: "x" } } }) : json({}, 503)));
+    const e = await check(client(makeSite(), makeDeps(fetch, home.dir).deps), [getCustomer, getStatus], {}).catch((x) => x);
+    expect(e.kind).toBe("drift");
+    expect(e.drifts.map((d: { operation: string }) => d.operation)).toEqual(["getCustomer"]);
+    expect(e.message).toContain("1 other Operation(s) could not be checked (network)");
+    expect(calls.filter((c) => c.url.endsWith("/api/status")).length).toBe(3); // retried, then marked
+  });
+
+  test("a session failure stops reaching the site, but an earlier Drift still wins", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer t" }, ids: { customerId: "C-1" } });
+    const getStatus = defineOperation({ ...getOrder, name: "GET /api/status", rest: { method: "GET", path: "/api/status" }, variables: z.object({}), needs: {} });
+    const { fetch, calls } = fakeFetch((r) => (r.body?.operationName === "getCustomer" ? json({ data: { getCustomer: { id: 1, name: "x" } } }) : json({}, 401)));
+    const e = await check(client(loginSite(), makeDeps(fetch, home.dir).deps), [getCustomer, getStatus, getOrder], {}).catch((x) => x);
+    expect(e.kind).toBe("drift");
+    expect(e.drifts.map((d: { operation: string }) => d.operation)).toEqual(["getCustomer"]);
+    expect(calls.filter((c) => c.url.includes("/api/orders")).length).toBe(0);
   });
 
   test("a non-drift failure stops check with that kind", async () => {
@@ -256,6 +276,15 @@ describe("check over writes", () => {
     const timeout = Object.assign(new Error("locator not found"), { name: "TimeoutError" });
     expect(compareWrite(site, renameOrder, undefined, timeout)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger::TimeoutError");
     expect(compareWrite(site, renameOrder, undefined)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger::no_request");
+  });
+
+  test("a trigger timeout names the locator it waited for, safe for a Fingerprint", () => {
+    const err = (message: string) => Object.assign(new Error(message), { name: "TimeoutError" });
+    const playwright = err("locator.click: Timeout 15000ms exceeded.\nCall log:\n\x1b[2m  - waiting for getByRole('button', { name: 'Gem' })\x1b[22m\n");
+    expect(triggerStep(playwright)).toBe("getByRole('button', { name= 'Gem' })");
+    expect(compareWrite(site, renameOrder, undefined, playwright)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:getByRole('button', { name= 'Gem' }):TimeoutError");
+    expect(triggerStep(err("page.goto: net::ERR_CONNECTION_REFUSED"))).toBe("");
+    expect(triggerStep(err(`x\n  - waiting for locator('${"#a".repeat(100)}')`)).length).toBe(80);
   });
 });
 

@@ -55,7 +55,11 @@ function runHelp(cli: string, main: string): unknown {
 }
 
 await runTool(async () => {
-  const { values } = parseFlags(process.argv.slice(2), { "skill-dir": { type: "string", required: true } }, USAGE);
+  const { values } = parseFlags(
+    process.argv.slice(2),
+    { "skill-dir": { type: "string", required: true, help: "the CLI skill's folder (<plugin>/skills/<skill>)" } },
+    USAGE,
+  );
   const skillDir = resolve(values["skill-dir"]);
   const paths = cliPaths(skillDir);
   for (const required of [paths.site, paths.main, paths.skillMd]) {

@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "bun build.ts",
-    "test": "bun test"
+    "test": "bun test",
+    "typecheck": "tsc --noEmit -p ."
   },
   "dependencies": {
     "playwright-core": "1.63.0",

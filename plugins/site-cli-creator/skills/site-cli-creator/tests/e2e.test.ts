@@ -365,6 +365,16 @@ for (const auth of ["none", "login"] as const) {
 
     // 4. input -------------------------------------------------------------------------------
 
+    test("an invoice id that does not exist is input (exit 2), not Drift, and GET /api/invoices/:id is never sent", async () => {
+      const before = site.requests().length;
+      const r = await cli(["invoice", "show", "--id", "NOPE"]);
+      expect(r.code, r.stderr).toBe(2);
+      expect(r.out.error.kind).toBe("input");
+      expect(r.out.error.message).toContain("invoice list");
+      expect(r.out.error.fingerprint).toBeUndefined();
+      expect(site.requests().slice(before).some((q) => /^\/api\/invoices\/[^/]+$/.test(q.path))).toBe(false);
+    }, 120_000);
+
     test("an unknown command, an unknown flag or a missing flag is input, and nothing is sent", async () => {
       for (const argv of [["invoice", "pay"], ["subscription", "show", "--nope"], ["invoice", "show"], ["note", "add", "--text", ""]]) {
         const before = site.requests().length;
@@ -598,7 +608,9 @@ export default defineCommand({
         expect(readOps.find((o) => o.operation === name), name).toMatchObject({ effect: "read", aborted: 0 });
       }
       if (auth === "login") {
-        expect(readOps.filter((o) => o.loginFlow).map((o) => o.operation)).toEqual(["POST /oauth/token", "POST /api/session/post-login"]);
+        expect(readOps.filter((o) => o.loginFlow && o.effect === "write").map((o) => o.operation)).toEqual(["POST /oauth/token", "POST /api/session/post-login"]);
+        // The login host's own pages are sign-in steps too, not Operations.
+        expect(readOps.filter((o) => o.loginFlow && o.effect === "read").length).toBeGreaterThan(0);
       }
       const readFiles = [...readOps.map((o) => o.file), "index.json"];
       for (const f of readFiles) expect(existsSync(join(filesOf("subscription-show").dir, f)), f).toBe(true);
@@ -618,6 +630,7 @@ export default defineCommand({
       expect(write.code, JSON.stringify(write.out) + write.stderr).toBe(0);
       const writeOps = write.out.operations as { operation: string; effect: string; file: string; aborted: number }[];
       expect(writeOps.find((o) => o.operation === "addNote")).toMatchObject({ effect: "write", file: "addNote.shape.json", aborted: 0 });
+      expect(write.out.wrote).toBe("addNote");
       expect(fresh.notes().length).toBe(notesBefore + 1);
       expect(fresh.notes().at(-1)!.text).toBe(NOTE_TEXT);
       const add = JSON.parse(filesOf("note-add").text("addNote.shape.json"));
@@ -634,7 +647,8 @@ export default defineCommand({
         const shape = join(filesOf("subscription-show").dir, "listSubscriptions.shape.json");
         const drafted = await tool("draft-contract.ts", [shape, "--out", out]);
         expect(drafted.code, drafted.stderr).toBe(0);
-        expect(drafted.out).toEqual({ operation: "listSubscriptions", file: "src/operations/listSubscriptions.ts", written: out });
+        // The same Operation in the note-add Capture (one page loads everything) is merged in.
+        expect(drafted.out).toEqual({ operation: "listSubscriptions", file: out, written: out, mergedFrom: ["captures/note-add/listSubscriptions.shape.json"] });
         const again = await tool("draft-contract.ts", [shape, "--out", out]);
         expect(again.code).toBe(1);
         expect(again.out.error.message).toContain("refusing to overwrite");

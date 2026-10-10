@@ -141,6 +141,25 @@ describe("fixture site, auth none", () => {
     expect(notJson.status).toBe(400);
   });
 
+  test("POST /__drift switches Drift at run time, only when control is on, and sessions survive it", async () => {
+    expect((await fetch(`${site.url}/__drift?name=auth`, { method: "POST" })).status).toBe(404); // no control in tests' site
+    const live = startFixtureSite({ auth: "login", control: true });
+    try {
+      const h = await loginHeaders(live);
+      const invoices = () => fetch(`${live.url}/api/invoices?accountId=${ACCOUNT.id}`, { headers: h, redirect: "manual" });
+      expect((await invoices()).status).toBe(200);
+      const on = await fetch(`${live.url}/__drift?name=remove-rest`, { method: "POST" });
+      expect(await on.json()).toEqual({ drift: "remove-rest" });
+      expect((await fetch(`${live.url}/api/invoices/${INVOICES[0]!.id}`, { headers: h, redirect: "manual" })).status).toBe(404);
+      expect((await fetch(`${live.url}/__drift?name=none`, { method: "POST" })).status).toBe(200);
+      expect((await fetch(`${live.url}/api/invoices/${INVOICES[0]!.id}`, { headers: h, redirect: "manual" })).status).toBe(200);
+      expect((await invoices()).status).toBe(200); // still signed in
+      expect((await fetch(`${live.url}/__drift?name=bogus`, { method: "POST" })).status).toBe(400);
+    } finally {
+      live.stop();
+    }
+  });
+
   test("REST lists invoices and returns one with nullable fields and lines", async () => {
     const h = await csrfHeaders(site);
     const list = (await (await fetch(`${site.url}/api/invoices?accountId=${ACCOUNT.id}`, { headers: h })).json()) as any;
@@ -489,6 +508,11 @@ async function loadExpected(auth: "login" | "none", origin: string) {
     const fn = `define${name[0]!.toUpperCase()}${name.slice(1)}`;
     writeFileSync(join(src, "runtime", `${name}.ts`), `export const ${fn} = <T>(x: T): T => x;\n`);
   }
+  // Commands end with an input error through the runtime's helper.
+  writeFileSync(
+    join(src, "runtime", "command.ts"),
+    "export const defineCommand = <T>(x: T): T => x;\nexport const inputFailure = (message: string): never => { throw Object.assign(new Error(message), { kind: \"input\" }); };\n",
+  );
   const files = copyExpected(auth, src, TOKENS(auth, origin));
   return { dir, src, files, ...(await importExpected(src)) };
 }
@@ -817,7 +841,8 @@ describe.skipIf(!HAS_CHROME)("expected code on the Starter runtime against the f
           ["remove-rest", x.commands.invoiceShow, { id: INVOICES[0]!.id }, `${prefix}GET /api/invoices/{id}:http::404`],
           // The first call with variables is rejected: getAccount (login) or listSubscriptions (none, getAccount takes none).
           ["input-rejected", x.commands.subscriptionShow, {}, `${prefix}${auth === "login" ? "getAccount" : "listSubscriptions"}:input-rejected::BAD_USER_INPUT`],
-          ["input-rejected", x.commands.invoiceShow, { id: INVOICES[0]!.id }, `${prefix}GET /api/invoices/{id}:input-rejected::400`],
+          // invoice show checks the id against the list first, so the list call is the one rejected.
+          ["input-rejected", x.commands.invoiceShow, { id: INVOICES[0]!.id }, `${prefix}${auth === "login" ? "getAccount:input-rejected::BAD_USER_INPUT" : "GET /api/invoices:input-rejected::400"}`],
           ["write-shape", x.commands.noteAdd, { text: "x" }, `${prefix}addNote:graphql:Mutation.addNote(text):GRAPHQL_VALIDATION_FAILED`, { confirm: true }],
           ["auth", x.commands.subscriptionShow, {}, `${prefix}getAccount:auth::401`],
         ];
@@ -901,7 +926,7 @@ describe.skipIf(!HAS_CHROME)("expected code on the Starter runtime against the f
         expect(shape.drifts!.map((d) => d.fingerprint)).toEqual([`${prefix}addNote:request:text:invalid_type`]);
         const ui = await withDrift("ui-change", () => failure(rt.check(client(), ops, { op: "addNote" })));
         expect(ui.kind).toBe("drift");
-        expect(ui.drifts!.map((d) => d.fingerprint)).toEqual([`${prefix}addNote:trigger::TimeoutError`]);
+        expect(ui.drifts!.map((d) => d.fingerprint)).toEqual([`${prefix}addNote:trigger:getByLabel('Ny note'):TimeoutError`]);
         expect(site.notes().length).toBe(before);
         valueFree(shape);
       }, 90_000);

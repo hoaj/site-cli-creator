@@ -5,6 +5,10 @@
 // that simulate Drift and outages.
 //
 //   bun fixtures/site/server.ts --auth login|none [--port N] [--drift <name>]
+//
+// Run this way, the site also takes `POST /__drift?name=<drift|none>` on its own origin, so a
+// Drift can be switched on and off while every session stays signed in (as a real site's
+// change keeps its users' sessions): curl -X POST "http://127.0.0.1:<port>/__drift?name=type-change"
 
 import { checkVariables, execute, GraphQLFailure, parse, validate, type GraphQLError } from "./graphql";
 import { ACCOUNT, buildSchema, INVOICES, newStore, SUBSCRIPTIONS, USER, type Note } from "./data";
@@ -89,7 +93,8 @@ function noteForm(drift: Drift | null): NoteForm {
   return NOTE_FORM;
 }
 
-export function startFixtureSite(opts: { port?: number; auth: Auth }): FixtureSite {
+/** `control`: serve POST /__drift?name=<drift|none> (the command-line server turns it on). */
+export function startFixtureSite(opts: { port?: number; auth: Auth; control?: boolean }): FixtureSite {
   const { auth } = opts;
   let drift: Drift | null = null;
   const store = newStore();
@@ -274,6 +279,12 @@ export function startFixtureSite(opts: { port?: number; auth: Auth }): FixtureSi
   const handle = async (req: Request): Promise<Response> => {
     const url = new URL(req.url);
     const route = `${req.method} ${url.pathname}`;
+    if (opts.control && route === "POST /__drift" && url.origin === siteUrl) {
+      const name = url.searchParams.get("name") ?? "";
+      if (name !== "none" && !DRIFTS.includes(name as Drift)) return json(400, { error: `name must be none or one of ${DRIFTS.join(", ")}` });
+      drift = name === "none" ? null : (name as Drift);
+      return json(200, { drift });
+    }
     const entry: RequestLogEntry = { method: req.method, host: url.host, path: url.pathname };
     log.push(entry);
     if (url.origin === loginUrl) return auth === "login" ? handleLoginHost(req, route, url) : failure(404, "NOT_FOUND", "No such route.");
@@ -324,7 +335,10 @@ if (import.meta.main) {
     return i >= 0 ? args[i + 1] : undefined;
   };
   const usage = (problem: string): never => {
-    console.error(`${problem}\nusage: bun fixtures/site/server.ts --auth login|none [--port N] [--drift ${DRIFTS.join("|")}]`);
+    console.error(
+      `${problem}\nusage: bun fixtures/site/server.ts --auth login|none [--port N] [--drift ${DRIFTS.join("|")}]\n` +
+        "while it runs: curl -X POST '<url>/__drift?name=<drift|none>' switches Drift without signing anyone out",
+    );
     process.exit(2);
   };
   const auth = flag("auth");
@@ -333,7 +347,7 @@ if (import.meta.main) {
   if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) usage("--port must be a port number");
   const drift = flag("drift");
   if (drift !== undefined && !DRIFTS.includes(drift as Drift)) usage(`unknown drift "${drift}"`);
-  const site = startFixtureSite({ auth: auth as Auth, port });
+  const site = startFixtureSite({ auth: auth as Auth, port, control: true });
   if (drift) site.setDrift(drift as Drift);
-  console.log(JSON.stringify({ url: site.url, loginUrl: site.loginUrl, auth, drift: drift ?? null }));
+  console.log(JSON.stringify({ url: site.url, loginUrl: site.loginUrl, auth, drift: drift ?? null, control: `POST ${site.url}/__drift?name=<drift|none>` }));
 }
