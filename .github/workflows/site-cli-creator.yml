@@ -159,6 +159,27 @@ jobs:
           fi
           test ! -e node_modules
           echo "BIN=$bin" >> "$GITHUB_ENV"
+      # TEMPORARY diagnostics for the Windows stdout failure; removed once fixed.
+      - name: "DIAG: stdout of the binary under Git Bash"
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        run: |
+          set +e
+          echo "--- console"; "./$BIN" version; echo "exit=$?"
+          echo "--- file"; "./$BIN" version > d1.txt 2> d1.err; echo "exit=$?"; wc -c d1.txt d1.err; cat d1.txt; cat d1.err
+          echo "--- pipe"; "./$BIN" version | cat > d2.txt; echo "exit=${PIPESTATUS[0]}"; wc -c d2.txt
+          echo "--- help file"; "./$BIN" help > d3.txt 2> d3.err; echo "exit=$?"; wc -c d3.txt d3.err; head -c 300 d3.err
+          echo "--- powershell file"; powershell -NoProfile -Command "& '.\$BIN' version | Out-File -Encoding utf8 d4.txt; Write-Output \"exit=\$LASTEXITCODE\""; wc -c d4.txt
+          echo "--- cmd file"; cmd //c "$(cygpath -w "$BIN") version > d5.txt"; echo "exit=$?"; wc -c d5.txt
+          printf '%s\n' 'await Bun.write(Bun.stdout, JSON.stringify({a:1})+"\n"); process.exit(0);' > w1.ts
+          printf '%s\n' 'import { writeSync } from "node:fs"; writeSync(1, JSON.stringify({a:1})+"\n"); process.exit(0);' > w2.ts
+          printf '%s\n' 'process.stdout.write(JSON.stringify({a:1})+"\n"); process.exitCode = 0;' > w3.ts
+          printf '%s\n' 'await Bun.write(Bun.stdout, JSON.stringify({a:1})+"\n");' > w4.ts
+          for w in w1 w2 w3 w4; do
+            bun "$w.ts" > "$w.out" 2> "$w.err"; echo "bun $w exit=$? bytes=$(wc -c < "$w.out") err=$(head -c 300 "$w.err")"
+            bun build --compile "$w.ts" --outfile "$w.exe" > /dev/null 2>&1
+            "./$w.exe" > "$w.cout" 2> "$w.cerr"; echo "exe $w exit=$? bytes=$(wc -c < "$w.cout") err=$(head -c 300 "$w.cerr")"
+          done
       - name: help, version, fetch, Chrome launch and route.abort
         run: |
           is_json_object() {
