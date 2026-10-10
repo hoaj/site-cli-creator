@@ -1,7 +1,8 @@
 // Routing, flag parsing, envelopes, dry runs and --account, through main's run().
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { parseFlags, run, splitGlobals } from "../src/main";
+import { join } from "node:path";
+import { isEntry, parseFlags, run, splitGlobals } from "../src/main";
 import { defineCommand } from "../src/runtime/command";
 import { Failure } from "../src/runtime/envelope";
 import { flagSpecs } from "../src/runtime/help";
@@ -379,5 +380,18 @@ describe("--account cache", () => {
     expect(existsSync(join(home.dir, "session.json"))).toBe(false);
     expect((await run(["products", "show", "--account", "A2"], app)).code).toBe(0);
     expect(listed).toBe(2);
+  });
+});
+
+describe("isEntry", () => {
+  test("matches the entry module whatever its path separators", () => {
+    // What a Windows binary built with Bun.build's compile option reports (Bun 1.4.3).
+    expect(isEntry("B:\\~BUN\\root\\fixture", "B:/~BUN/root/fixture")).toBe(true);
+    expect(isEntry("/$bunfs/root/fixture", "/$bunfs/root/fixture")).toBe(true);
+    expect(isEntry("B:\\~BUN\\root\\main", "B:/~BUN/root/other")).toBe(false);
+  });
+
+  test("is false for main.ts when a test file is the entry", () => {
+    expect(isEntry(join(import.meta.dir, "..", "src", "main.ts"))).toBe(false);
   });
 });

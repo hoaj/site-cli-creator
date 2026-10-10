@@ -177,7 +177,18 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
 
 const ok = (output: unknown): RunResult => ({ output, code: EXIT.ok });
 
-if (import.meta.main) {
+/**
+ * True when `path` is the module Bun started with. Not plain `import.meta.main`: in a Windows
+ * binary built through Bun.build's `compile` option it is false, because import.meta.path
+ * ("B:\\~BUN\\root\\main") and Bun.main ("B:/~BUN/root/main") differ in their separators, so the
+ * binary ran nothing and exited 0 with empty stdout.
+ */
+export function isEntry(path: string, main: string = Bun.main): boolean {
+  const norm = (p: string) => p.replaceAll("\\", "/");
+  return norm(path) === norm(main);
+}
+
+if (import.meta.main || isEntry(import.meta.path)) {
   const { output, code } = await run(process.argv.slice(2), { site, operations, commands });
   await emit(output, code);
 }
