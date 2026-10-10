@@ -10,26 +10,25 @@ Glossary terms (**Task**, **CLI skill**, **Feedback skill**, **Capture**, **Oper
 
 | Part | Who runs it | What it is |
 |---|---|---|
-| **site-cli-creator** | the maintainer | a plugin in `hoaj/skills`: the generator skill (SKILL.md, the fixed template, the Capture tool) and `site-cli-creator-feedback` |
+| **site-cli-creator** | the maintainer | a plugin in `hoaj/skills`: the generator skill (SKILL.md, the Starter code, the Capture tool) and `site-cli-creator-feedback` |
 | **Generated plugin** | many users | its own repo, holding one or more CLI skills, one Feedback skill, four manifests and a release workflow |
 | **CLI skill** | users' agents | `skills/<skill>/`: a SKILL.md and a compiled CLI for one login |
 | **Feedback skill** | users' agents | `skills/<plugin>-feedback/`: files Drift, bugs and feature requests on the plugin's own repo (§10) |
 
-Every Feedback skill lies next to the plugin it reports on and files issues on that plugin's repo, decided in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24). `site-cli-creator-feedback` files problems with the generator itself (the Capture tool, a mode, the template, misleading guidance) on `hoaj/skills` with the label `site-cli-creator`. It does not forward issues from generated plugins.
+Every Feedback skill lies next to the plugin it reports on and files issues on that plugin's repo, decided in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24). `site-cli-creator-feedback` files problems with the generator itself (the Capture tool, a mode, the Starter code, misleading guidance) on `hoaj/skills` with the label `site-cli-creator`. It does not forward users' issues from generated plugins, but `fix` offers it when a plugin bug turns out to come from the Starter code (§5).
 
-The generator writes into a repo that the person running it chooses. After generation, a plugin depends on nothing from the generator at run time.
+The generator writes into a repo that the person running it chooses. **After generation, a plugin shares no code with the generator and depends on nothing from it.** It owns every file it has, decided in [No shared code in generated plugins](https://github.com/hoaj/skills/issues/26).
 
 ## 2. Generator modes
 
-Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/issues/11), [One site per plugin, or several?](https://github.com/hoaj/skills/issues/12) and [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13).
+Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/issues/11), [One site per plugin, or several?](https://github.com/hoaj/skills/issues/12) and [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13), changed by [No shared code in generated plugins](https://github.com/hoaj/skills/issues/26), which removed `upgrade`.
 
 | Mode | Trigger | Does |
 |---|---|---|
-| `new` | a new site | creates the plugin repo layout, then runs **add-skill** for the first login |
+| `new` | a new site | copies the Starter code (§5) into a new plugin, writes `generated.json`, then runs **add-skill** for the first login |
 | `add-skill` | a new login in an existing plugin | creates `skills/<skill>/`, sets up login for the site, then runs **add-task** for each Task |
 | `add-task` | a feature request filed by the Feedback skill, or the maintainer | runs the Task loop (§3) once, reusing existing Operations, then opens a PR that the maintainer merges |
-| `fix` | a Drift or bug issue | **Drift:** re-captures only the affected Task, updates the Contract, runs `check`, opens a PR that auto-merges when green. **Bug in the site's own code** (`operations/`, `commands/`, `site.ts`): fixes it in the plugin and opens a PR. **Bug in template code:** fixes the generator's template, then runs `upgrade` on the plugin |
-| `upgrade` | a template change | replaces only the template files (§5), rewrites `template.json` to the new version, rebuilds, runs `check`, opens a PR |
+| `fix` | a Drift or bug issue | **Drift:** re-captures only the affected Task, updates the Contract, runs `check`, opens a PR that auto-merges when green. **Bug:** fixes it in the plugin's own code, wherever it sits, and opens a PR. If the bug came from the Starter code, it also offers an issue through `site-cli-creator-feedback`, so new plugins get the fix (§5) |
 
 Only Drift fixes auto-merge. The maintainer merges everything else. Every mode passes `--writes` when it runs `check` (§10). Every mode that opens a PR also bumps the plugin version in that PR (§9).
 
@@ -51,7 +50,7 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/
      effect:  read
    ```
    Command names are `<noun> <verb>` in English.
-5. **Generate.** The agent writes one Contract per Operation (§6) and the command file. The generator regenerates `registry.ts` and the SKILL.md command table (from `help`), then runs `check`. Only the generator writes the command table, in add-task, fix and upgrade. The release build never rewrites committed files.
+5. **Generate.** The agent writes one Contract per Operation (§6) and the command file. The generator regenerates `registry.ts` and the SKILL.md command table (from `help`), then runs `check`. Only the generator writes the command table, in add-task and fix. The release build never rewrites committed files.
 
 ## 4. Generated plugin layout
 
@@ -63,19 +62,19 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   .cursor-plugin/plugin.json                           Codex uses "skills": "./skills/",
   .codex-plugin/plugin.json                            Copilot has no homepage
   .github/plugin/plugin.json
-  .github/workflows/release.yml             TEMPLATE   tag vX.Y.Z → build every skill × target → release
-  template.json                             GENERATED  {"template": "<generator version>"}
+  .github/workflows/release.yml             STARTER    tag vX.Y.Z → build every skill × target → release
+  generated.json                            GENERATED  {"generatedWith": "<generator version>"}, info only
   skills/<plugin>-feedback/SKILL.md         GENERATED  one per plugin, written once by `new`, then owned
                                                        by the plugin (§10)
   skills/<skill>/                           one per login
-    SKILL.md                                MIXED      see §5 and §8
-    install.sh                              TEMPLATE   see §9
+    SKILL.md                                GENERATED  see §8
+    install.sh                              STARTER    see §9
     .gitignore                              GENERATED  bin/
     captures/<task>/*.shape.json            GENERATED  shape-only Captures (file naming is a spec choice)
     cli/
       package.json                          GENERATED  plugin version and dependency pins
-      build.ts                              TEMPLATE   carries the playwright-core patch (§9)
-      src/main.ts, src/runtime/*            TEMPLATE   routing, envelope, call + classification,
+      build.ts                              STARTER    carries the playwright-core patch (§9)
+      src/main.ts, src/runtime/*            STARTER    routing, envelope, call + classification,
                                                        session, check
       src/site.ts                           GENERATED  origin, URLs, login hosts, token request, repo;
                                                        site-specific post-login step (§7)
@@ -86,16 +85,16 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 
 There is no CLI framework. Routing and flag parsing are about 30 lines in `main.ts`. Maintainer-only tooling never ships inside `skills/`, because agents load every skill folder they find.
 
-## 5. Template files and upgrade
+## 5. Starter code
 
-Decided in [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13).
+Decided in [No shared code in generated plugins](https://github.com/hoaj/skills/issues/26), which replaced the template files and `upgrade` from [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13).
 
-- **Template files**, owned by the generator and overwritten by `upgrade`: `main.ts`, `runtime/*`, `build.ts`, `install.sh` and `release.yml`, exactly as decided in the ticket. [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21) adds the bump script, the version-sync test and the version check workflow (§9).
-- **Site files**, never touched by `upgrade`: `site.ts`, `operations/`, `commands/`, `captures/` and `package.json`. `package.json` holds the plugin version, and its dependency pins move only when a template change requires it. `registry.ts` is regenerated.
-- **The Feedback skill is a site file.** `new` writes `skills/<plugin>-feedback/SKILL.md` once, and `upgrade` never touches it. A plugin can tailor it, but a later fix to the feedback flow does not reach existing plugins. That trade-off was chosen in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24).
-- **SKILL.md is mixed** (a spec choice, so the failure guidance can't go stale). `upgrade` rewrites the intro and `## When it fails`, because they describe template behavior. The frontmatter, `## When NOT to use` and the command table belong to the site. The command table is regenerated from `help`.
-- `template.json` records the template version, which is the generator plugin's own version in `hoaj/skills`, bumped the same way (§9). `upgrade` rewrites it, and `doctor` prints it, so a stale plugin shows up. `upgrade` opens no PR when no template file changed.
-- A template bug is fixed in the generator first, and plugins receive it through `upgrade`. Copies never diverge from the template.
+- **The generator holds tested Starter code:** `main.ts`, `runtime/*`, `build.ts` (with the playwright-core patch), `install.sh`, `release.yml`, the bump script, the version-sync test and the version check workflow (§9).
+- **`new` copies it once.** From then on it belongs to the plugin, like every other file, and can be changed freely. Nothing ever overwrites a plugin's files from outside. There is no `upgrade` mode.
+- **Labels in §4** say where a file came from, not who owns it: STARTER (copied from the Starter code), GENERATED (written by the generator), AGENT (written by the agent in the Task loop). The plugin owns all of them, including the Feedback skill and every SKILL.md.
+- **A bug in code that came from the Starter code** is fixed by `fix` in the plugin. `fix` also offers an issue through `site-cli-creator-feedback`, so the Starter code is fixed for future plugins. Existing plugins are not touched. They get the fix only if they hit the bug themselves.
+- **`generated.json`** records the generator version the plugin was created with, as information only, and `doctor` prints it. When a Starter code bug is fixed, the maintainer can see which plugins were created before the fix and may be affected. Nothing acts on it automatically.
+- Improvements to the generator reach only plugins created after them.
 
 ## 6. Contracts
 
@@ -148,7 +147,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   - `help`: commands, flags and exit codes, as JSON;
   - `login`;
   - `check [--op <name>] [--writes]` (§10);
-  - `doctor`: versions, template version, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;
+  - `doctor`: versions, `generatedWith`, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;
   - `version`.
 
 **Output:** stdout is always exactly one JSON document, and stderr carries progress. A failure prints:
@@ -202,8 +201,8 @@ Decided in [Does Playwright work inside bun compile binaries?](https://github.co
   darwin-x64 is unverified.
 - **Release:** one tag `vX.Y.Z` per plugin, so all CLI skills ship together. Assets are named `<skill>-<target>[.exe]`.
 - **Versioning**, decided in [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21):
-  - **One bump command.** `bun run bump <patch|minor|major>` rewrites every copy of the plugin version: the four manifests, the version comment in each SKILL.md (every CLI skill and the Feedback skill) and each `cli/package.json`. Nobody edits version numbers by hand. A version-sync test fails CI if any copy differs.
-  - **Each generator PR bumps.** `fix`, `add-task`, `add-skill` and `upgrade` run the bump in their own PR. `new` starts at `0.1.0`. `fix` is a patch. `add-task` and `add-skill` are minor. `upgrade` is a patch, or minor if the template adds something agents can use, such as a flag or a built-in. Major bumps, such as a renamed or removed command, are done by hand.
+  - **One bump command** (part of the Starter code). `bun run bump <patch|minor|major>` rewrites every copy of the plugin version: the four manifests, the version comment in each SKILL.md (every CLI skill and the Feedback skill) and each `cli/package.json`. Nobody edits version numbers by hand. A version-sync test fails CI if any copy differs.
+  - **Each generator PR bumps.** `fix`, `add-task` and `add-skill` run the bump in their own PR. `new` starts at `0.1.0`. `fix` is a patch. `add-task` and `add-skill` are minor. Major bumps, such as a renamed or removed command, are done by hand.
   - **Merging releases.** When a PR that changed the version merges to main, `release.yml` tags `vX.Y.Z` and builds and publishes the binaries. An auto-merged Drift fix ships with no human step.
   - **Collisions.** A CI check requires a PR's version to be higher than main's. A stale PR goes red, and the generator rebases and bumps again. Auto-merge waits for green, so two releases never share a number.
   - **Recording the fix.** Generator PRs say `Fixes #n`. Once the release is published, `release.yml` adds a `fixed-in:vX.Y.Z` label and a short comment to every issue the released PRs closed. The label is written only after the binaries exist.
@@ -218,7 +217,7 @@ Decided in [Does Playwright work inside bun compile binaries?](https://github.co
 
 ## 10. Drift, check and the Feedback skill
 
-Decided in [Drift classification vs other failures](https://github.com/hoaj/skills/issues/5), [Template command surface and SKILL.md layout](https://github.com/hoaj/skills/issues/6), [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13) and [What do users without gh or repo access get?](https://github.com/hoaj/skills/issues/14). `check` was settled in [When does check run?](https://github.com/hoaj/skills/issues/20). The Feedback skill was decided in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24), which replaced the `report` subcommand.
+Decided in [Drift classification vs other failures](https://github.com/hoaj/skills/issues/5), [Template command surface and SKILL.md layout](https://github.com/hoaj/skills/issues/6) and [What do users without gh or repo access get?](https://github.com/hoaj/skills/issues/14). `check` was settled in [When does check run?](https://github.com/hoaj/skills/issues/20). The Feedback skill was decided in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24), which replaced the `report` subcommand.
 
 **Classification:** the CLI classifies every failure deterministically, and the agent never guesses.
 - **drift:** any of
@@ -239,7 +238,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/skil
 - Calls every **read** Operation live, in chain order, and validates it against its Contract. Plain `check` never launches Chrome.
 - With `--writes` (or `--op <write>`), it also runs `trigger(page)` headless from the profile for each **write** Operation, intercepts the write request, compares its shape and aborts it. `check` never writes.
 - If anything drifted, it exits 3 with one entry per drifted Operation, and each can be filed through the Feedback skill.
-- **Nothing runs `check` automatically.** Users run it on demand, to answer "is the site broken or is it me?". The generator runs it, with `--writes`, in `add-task`, `fix` and `upgrade`. A Task command validates only the Operations it calls. After Drift, nobody sweeps the other Operations: `fix` runs the full `check` anyway. The maintainer schedules no proactive runs in v1, so users surface Drift. CI can't run `check`, because it needs a real logged-in account.
+- **Nothing runs `check` automatically.** Users run it on demand, to answer "is the site broken or is it me?". The generator runs it, with `--writes`, in `add-task` and `fix`. A Task command validates only the Operations it calls. After Drift, nobody sweeps the other Operations: `fix` runs the full `check` anyway. The maintainer schedules no proactive runs in v1, so users surface Drift. CI can't run `check`, because it needs a real logged-in account.
 
 **The Feedback skill** (`skills/<plugin>-feedback/`, one per plugin, covering every CLI skill in it):
 - **When:** exit 3 (Drift), exit 1 (bug), a Task the plugin can't do (a feature request for `add-task`), or the user saying "report this". Never for session, network or input failures.
@@ -275,4 +274,4 @@ These are not decided. Each one needs a short decision before or during the buil
 5. **Who runs fix mode for Drift.** fix re-captures with the maintainer's own login, so the maintainer needs an account on the site that reaches the drifted Task. That's the same assumption as `add-task`, but it's never stated.
 6. **A dedup key for bugs.** A Fingerprint is defined only for Drift. Bugs need their own key for the Feedback skill to search on, for example kind, command and the top stack frame.
 7. ~~**Bug reports need the user's yes.**~~ Resolved in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24): every report needs the user's yes, Drift included.
-8. **The prototype predates four decisions:** CLI skills under `skills/<skill>/`, dry-run writes, bug and feature reports, and the Feedback skill replacing `report`. It is a throwaway and shouldn't be used as a template.
+8. **The prototype predates five decisions:** CLI skills under `skills/<skill>/`, dry-run writes, bug and feature reports, the Feedback skill replacing `report`, and Starter code without `upgrade`. It is a throwaway and shouldn't be used as the Starter code.
