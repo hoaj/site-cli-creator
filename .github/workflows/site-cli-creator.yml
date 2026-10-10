@@ -91,11 +91,6 @@ jobs:
           if [ "${{ matrix.target }}" = windows-x64 ]; then ext=".exe"; fi
           mkdir -p "$RUNNER_TEMP/dist"
           bun build.ts "bun-${{ matrix.target }}" "$RUNNER_TEMP/dist/fixture-${{ matrix.target }}$ext"
-          if [ "${{ matrix.target }}" = windows-x64 ]; then
-            echo 'console.log(JSON.stringify({ main: import.meta.main, path: import.meta.path, bunMain: Bun.main, argv: process.argv }));' > probe.ts
-            bun -e 'const r = await Bun.build({ entrypoints: ["probe.ts"], compile: { target: "bun-windows-x64", outfile: process.env.RUNNER_TEMP + "/dist/probe-cross.exe" }, sourcemap: "linked" }); console.log(r.success)'
-            rm -f "$RUNNER_TEMP"/dist/*.map
-          fi
           ls -la "$RUNNER_TEMP/dist"
       - uses: actions/upload-artifact@v4
         with:
@@ -164,23 +159,6 @@ jobs:
           fi
           test ! -e node_modules
           echo "BIN=$bin" >> "$GITHUB_ENV"
-      # TEMPORARY diagnostics for the Windows stdout failure; removed once fixed.
-      - name: "DIAG: stdout of the binary under Git Bash"
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        run: |
-          set +e
-          echo "--- version console"; "./$BIN" version; echo "exit=$?"
-          echo "--- cross-compiled probe"; ./bin/probe-cross.exe; echo "exit=$?"
-          cat > probe.ts <<'TS'
-          console.log(JSON.stringify({ main: import.meta.main, path: import.meta.path, url: import.meta.url, bunMain: Bun.main, argv: process.argv }));
-          TS
-          bun build --compile probe.ts --outfile probe-cli.exe > /dev/null 2>&1; echo "--- native cli probe"; ./probe-cli.exe; echo "exit=$?"
-          cat > probebuild.ts <<'TS'
-          const r = await Bun.build({ entrypoints: ["probe.ts"], compile: { target: "bun-windows-x64", outfile: "probe-api.exe" }, sourcemap: "linked" });
-          console.log("build ok", r.success);
-          TS
-          bun probebuild.ts; echo "--- native api probe"; ./probe-api.exe; echo "exit=$?"
       - name: help, version, fetch, Chrome launch and route.abort
         run: |
           is_json_object() {
