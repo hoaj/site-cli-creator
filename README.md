@@ -29,6 +29,7 @@ copilot plugin install bankmcp
 | Plugin | Skill | Description |
 |--------|-------|-------------|
 | [bankmcp](./plugins/bankmcp) | `/bankmcp:setup` | Set up your own BankMCP server (read-only bank access for Claude or ChatGPT), locally or on Railway |
+| [site-cli-creator](./plugins/site-cli-creator) | `/site-cli-creator:site-cli-creator`, `/site-cli-creator:site-cli-creator-feedback` | Turn the calls a website makes into a plugin of CLI skills that coding agents can run, with Drift checks and a feedback loop |
 
 ## Adding a plugin
 
