@@ -127,7 +127,10 @@ describe.skipIf(skip)("Chrome", () => {
     const drift = (await checker([changed], [])).get(ok.name)!;
     expect(drift.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:request:name:invalid_type");
     expect(JSON.stringify(drift)).not.toContain("New");
-    expect((await checker([missing], [])).get(ok.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger::TimeoutError");
+    // The trigger Drift names the step that failed: the locator it waited for (Contract code, no user data).
+    const gone = (await checker([missing], [])).get(ok.name)!;
+    expect(gone.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#gone'):TimeoutError");
+    expect(gone.diff).toEqual([{ path: "locator('#gone')", code: "TimeoutError" }]);
 
     expect(received).toContain("POST /graphql");
     expect(received.filter((r) => r.startsWith("PATCH") || r === "POST /api/track")).toEqual([]);
@@ -151,7 +154,7 @@ describe.skipIf(skip)("Chrome", () => {
     expect((await checker([op], [orderList])).get(op.name)).toBeNull();
     expect(received).toContain("POST /graphql");
     // Without the read declared, the persisted query might write, so it is aborted and the page never renders.
-    expect((await checker([op], [])).get(op.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger::TimeoutError");
+    expect((await checker([op], [])).get(op.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#save'):TimeoutError");
     expect(received.filter((r) => r.startsWith("PATCH"))).toEqual([]);
   }, 90_000);
 
@@ -172,7 +175,7 @@ describe.skipIf(skip)("Chrome", () => {
     // Without readOnlyRequests the post-login POST is aborted, the page never shows the button: trigger drift.
     received.length = 0;
     const undeclared = makeSite({ origin: server.url.origin, auth: "login", needsChrome: true, login });
-    expect((await chromeWriteChecker(undeclared, env)([op], [])).get(op.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger::TimeoutError");
+    expect((await chromeWriteChecker(undeclared, env)([op], [])).get(op.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#save'):TimeoutError");
     expect(received).not.toContain("POST /api/session/post-login");
     expect(received.filter((r) => r.startsWith("PATCH") || r === "POST /api/track")).toEqual([]);
   }, 90_000);

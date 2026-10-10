@@ -38,6 +38,8 @@ Before writing anything it checks the maintainer requirements (SPEC §13): Bun 1
 
 It copies the Starter code (manifests, release and CI workflows, bump script, version-sync test, Feedback skill), writes the marketplace files that make the repo its own marketplace (`.claude-plugin/`, `.cursor-plugin/`, `.github/plugin/` and `.agents/plugins/marketplace.json`, named after the plugin), `generated.json` and `README.md`, and creates the labels `feature`, `unverified` and `needs-account`. Read its JSON output; on an error, stop and report it (`site-cli-creator-feedback` if it is the tool's fault).
 
+One error is not a stop: when the files were written but a label could not be created, the error says "files were written" and lists the `gh label create` commands in `retry`. The Feedback skill files feature requests with `feature`, `fix` needs `unverified` and `add-task` needs `needs-account`, so run each `retry` command until it succeeds (fix what `gh` says first: login, network, admin rights), then go on with step 4. Do not run `new.ts` again: the folder is no longer empty.
+
 ## 4. First CLI skill
 
 Run [add-skill.md](add-skill.md) without its version bump and PR steps: everything ships as `0.1.0`.

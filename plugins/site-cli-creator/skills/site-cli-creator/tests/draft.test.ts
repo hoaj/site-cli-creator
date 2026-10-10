@@ -109,8 +109,10 @@ describe("draftOperation", () => {
     expect(op.graphql).toBe("query getAccount($customerId: ID!) {\n  getAccount(customerId: $customerId) { id name `tick` ${x} }\n}");
     expect(op.response.safeParse(accountBody).success).toBe(true);
     expect(op.variables.safeParse({ customerId: "C", filter: { since: null } }).success).toBe(true);
-    // endsAt was only seen as null; lines[].roaming only sometimes
-    expect(source).toContain("endsAt: z.null()");
+    // endsAt was only seen as null: its type is unknown, not null; lines[].roaming only sometimes
+    expect(source).toContain("endsAt: z.unknown().nullable() /* TODO: only null was seen; decide the type */");
+    expect(source).not.toContain("z.null()");
+    expect(source).toContain("msisdn: z.string() /* numeric string */");
     expect(source).toContain("roaming: z.boolean().optional()");
     expect(source).toContain('"kebab-key": z.number()');
     const drifted = structuredClone(accountBody) as any;
@@ -159,9 +161,31 @@ describe("draftOperation", () => {
     expect(tsc.exitCode).toBe(0);
   });
 
-  test("names", () => {
+  test("a persisted query (hash only) says its effect is unknown", async () => {
+    const [apq] = capture([{ req: { url: `${ORIGIN}/graphql`, method: "POST", postData: json({ operationName: "getPlan", extensions: { persistedQuery: { sha256Hash: "ab" } } }) }, aborted: true }]);
+    expect(apq!.effectUnknown).toBe(true);
+    const { source } = draftOperation(apq!);
+    expect(source).toContain("nothing in the Capture says whether it writes");
+    expect(source).toContain("write the query text here");
+    expect(source).not.toContain("trigger(page)");
+  });
+
+  test("names: GraphQL passes through, REST files are verb + noun", () => {
     expect(operationFileName("getAccount")).toBe("getAccount");
-    expect(operationFileName("GET /api/invoices/:id")).toBe("getApiInvoicesId");
+    for (const [name, file] of [
+      ["GET /api/invoices/:id", "getInvoice"],
+      ["GET /api/invoices", "listInvoices"],
+      ["GET /api/v2/me", "getMe"],
+      ["GET /api/account", "getAccount"],
+      ["POST /api/notes", "createNote"],
+      ["PATCH /api/customers/:id/invoices/:id", "updateInvoice"],
+      ["PUT /api/user/settings", "updateSetting"],
+      ["DELETE /api/subscriptions/:id", "deleteSubscription"],
+      ["GET /api/categories", "listCategories"],
+      ["GET /", "getRoot"],
+    ]) {
+      expect(operationFileName(name!), name).toBe(file!);
+    }
     expect(namePathParams("/a/:id/b/:id/c")).toEqual({ path: "/a/:id/b/:id2/c", params: ["id", "id2"] });
   });
 });
@@ -184,11 +208,49 @@ describe("draft-contract.ts", () => {
     expect(printed.out.source).toStartWith("// From captures/account-show/getAccount.shape.json");
 
     const out = join(work, "written.ts");
-    expect(run(shapeFile, "--out", out).out.written).toBe(out);
+    const written = run(shapeFile, "--out", out).out;
+    expect(written.written).toBe(out);
+    expect(written.file).toBe(out);
     expect(readFileSync(out, "utf8")).toBe(printed.out.source);
     const again = run(shapeFile, "--out", out);
     expect(again.code).toBe(1);
     expect(again.out.error.message).toContain("refusing to overwrite");
+  });
+
+  test("REST: --name is refused (the name is METHOD /path), and the suggested file is verb + noun", () => {
+    const dir = join(work, "captures", "invoice-show");
+    mkdirSync(dir, { recursive: true });
+    const [invoice] = capture([{ req: { url: `${ORIGIN}/api/invoices/INV-2024-0287` }, body: { id: "x", dueDate: "2024-01-01" } }]);
+    const shapeFile = join(dir, "GET-api-invoices-id.shape.json");
+    writeFileSync(shapeFile, JSON.stringify(invoice));
+    const named = run(shapeFile, "--name", "getInvoice");
+    expect(named.code).toBe(1);
+    expect(named.out.error.message).toContain('a REST Operation\'s name is "GET /api/invoices/:id"');
+    expect(named.out.error.message).toContain("operations/getInvoice.ts");
+    const printed = run(shapeFile);
+    expect(printed.out).toMatchObject({ operation: "GET /api/invoices/:id", file: "src/operations/getInvoice.ts" });
+  });
+
+  test("the same Operation in the skill's other Captures is merged in, so nullability shows", () => {
+    const [seenNull] = capture([{ req: { url: `${ORIGIN}/api/invoices/1001` }, body: { id: "x", dueDate: null, pdfUrl: null } }]);
+    const [seenString] = capture([{ req: { url: `${ORIGIN}/api/invoices/1002` }, body: { id: "y", dueDate: "2024-01-01", pdfUrl: null } }]);
+    for (const [task, op] of [["merge-a", seenNull], ["merge-b", seenString]] as const) {
+      mkdirSync(join(work, "merge", "captures", task), { recursive: true });
+      writeFileSync(join(work, "merge", "captures", task, "GET-api-invoices-id.shape.json"), JSON.stringify(op));
+    }
+    const r = run(join(work, "merge", "captures", "merge-a", "GET-api-invoices-id.shape.json"));
+    expect(r.code).toBe(0);
+    expect(r.out.mergedFrom).toEqual(["captures/merge-b/GET-api-invoices-id.shape.json"]);
+    expect(r.out.source).toContain('dueDate: z.string() /* ISO date string */.nullable()');
+    expect(r.out.source).toContain("pdfUrl: z.unknown().nullable() /* TODO");
+    expect(r.out.source).toStartWith("// From captures/merge-a/GET-api-invoices-id.shape.json + captures/merge-b/");
+  });
+
+  test("--help prints the usage and every flag's meaning, exit 0", () => {
+    const r = run("--help");
+    expect(r.code).toBe(0);
+    expect(r.out.usage).toContain("draft-contract.ts <shape.json>");
+    expect(Object.keys(r.out.flags)).toEqual(["--name", "--out"]);
   });
 
   test("errors are JSON with a non-zero exit", () => {

@@ -66,6 +66,13 @@ export type Env = Record<string, string | undefined>;
 
 export const isTest = (env: Env = process.env) => env.SITE_CLI_TEST === "1";
 
+/**
+ * SITE_CLI_NONINTERACTIVE=1: no person can sign in in a Chrome window (a maintainer's agent,
+ * a script). When the silent refresh fails, the CLI exits 4 at once instead of opening a
+ * headed sign-in and waiting up to 10 minutes. `login` itself still opens Chrome.
+ */
+export const nonInteractive = (env: Env = process.env) => env.SITE_CLI_NONINTERACTIVE === "1";
+
 /** The origin calls go to. Only tests may point it elsewhere (the fixture site on localhost). */
 export function effectiveOrigin(site: Site, env: Env = process.env): string {
   const o = isTest(env) && env.SITE_CLI_ORIGIN ? env.SITE_CLI_ORIGIN : site.origin;

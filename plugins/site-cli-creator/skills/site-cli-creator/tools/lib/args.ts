@@ -1,8 +1,9 @@
 import { parseArgs } from "node:util";
-import { fail } from "./output";
+import { fail, ToolHelp } from "./output";
 
 type OptionSpec = { type: "string" | "boolean"; multiple?: boolean };
-type Spec = Record<string, OptionSpec & { required?: boolean }>;
+/** `help` is the flag's one-line meaning, printed by --help. */
+type Spec = Record<string, OptionSpec & { required?: boolean; help?: string }>;
 
 type Values<S extends Spec> = {
   [K in keyof S]: S[K]["type"] extends "boolean"
@@ -18,13 +19,23 @@ type Values<S extends Spec> = {
  * Strict flag parsing: unknown flags, missing values, missing required flags
  * and stray arguments (an unquoted multi-word value) all become a ToolError
  * naming the problem. `positionals` is how many bare arguments the tool takes.
+ * `--help` or `-h` anywhere prints {usage, flags, notes?} and exits 0.
  */
 export function parseFlags<S extends Spec>(
   argv: string[],
   spec: S,
   usage: string,
   positionals = 0,
+  notes?: string[],
 ): { values: Values<S>; positionals: string[] } {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    const flags: Record<string, string> = {};
+    for (const [name, opt] of Object.entries(spec)) {
+      const meaning = opt.help ?? "";
+      flags[`--${name}`] = `${opt.required ? "required. " : ""}${opt.multiple ? "repeatable. " : ""}${meaning}`.trim();
+    }
+    throw new ToolHelp({ usage, flags, ...(notes?.length ? { notes } : {}) });
+  }
   const options: Record<string, OptionSpec> = {};
   for (const [name, { type, multiple }] of Object.entries(spec)) options[name] = { type, multiple };
   let parsed: ReturnType<typeof parseArgs>;

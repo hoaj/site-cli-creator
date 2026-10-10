@@ -2,6 +2,8 @@
 // with plain objects. Input is one request (and maybe its response); output
 // is shapes only. Values never leave this module: bodies are reduced to
 // shapes, paths are redacted, header values survive only on the allowlist.
+// Values are held in memory only, to recognise them when they reappear in a
+// URL path (a username, a search term), and are never written anywhere.
 
 import { graphqlFromBody, graphqlFromSearch, type GraphqlCall } from "./graphql";
 import {
@@ -45,12 +47,28 @@ export type ResponseInfo = {
   body: Buffer | null;
 };
 
+export type ResponseShape = {
+  status: number;
+  contentType?: string;
+  /** Response header names; values only for the allowlist. Set-Cookie is listed in `setCookies` instead. */
+  headers?: Record<string, string | null>;
+  /** Names of the cookies the response sets, never their values: where a bootstrap's cookie comes from. */
+  setCookies?: string[];
+  body: BodyShape;
+};
+
 export type OperationShape = {
   operation: string;
   kind: "graphql" | "rest";
   effect: Effect;
-  /** A write let through because it is part of signing in; the agent decides whether it belongs in site.ts. */
+  /** A persisted GraphQL query sent by POST with only a hash: nothing shows whether it writes, so the Capture treated it as a write. Decide its effect yourself. */
+  effectUnknown?: true;
+  /** Part of signing in (a login host, a token or post-login step), let through: it belongs in site.ts, not operations/. */
   loginFlow?: true;
+  /** A page load (a document request), not an API call. */
+  navigation?: true;
+  /** Let through because --allow-read named it. */
+  allowedRead?: true;
   resourceType: string;
   host: string;
   method: string;
@@ -61,8 +79,10 @@ export type OperationShape = {
     query?: Shape;
     variables?: Shape;
     body?: BodyShape;
+    /** Claim names and types of a bearer JWT in the `authorization` header (what postLogin can decode), never their values. */
+    bearerClaims?: Shape;
   };
-  responses: { status: number; contentType?: string; body: BodyShape }[];
+  responses: ResponseShape[];
   seen: number;
   aborted: number;
 };
@@ -75,41 +95,97 @@ export type Planned = {
   effect: Effect;
   /** Part of signing in (a login host, a token or post-login step): never aborted. */
   loginFlow: boolean;
+  /** Named by --allow-read: never aborted. */
+  allowedRead: boolean;
+  method: string;
+  /** `host/path` as sent and with the path redacted, for --allow-read and --write-op matching. In memory only. */
+  where: string[];
 };
 
 function baseDomain(host: string): string {
   return host.replace(/^www\./, "");
 }
 
-// Words that mark a sign-in step. Writes carrying them are never aborted: the
-// maintainer must be able to sign in, and the frontend's token and post-login
-// calls (POSTs that read) must succeed before the Task's data appears.
-const LOGIN_WORDS = new Set([
-  "login", "logon", "signin", "signon", "sso", "saml", "saml2", "oauth", "oauth2", "openid", "oidc",
-  "auth", "authorize", "authorise", "authenticate", "authentication", "token", "tokens", "session", "sessions",
-]);
-const LOGIN_HOST_LABELS = new Set(["id", "idp"]);
+// ---- sign-in steps ----
+//
+// A read Task aborts every write, except the sign-in steps the maintainer needs before the
+// Task's data appears. The exemption is narrow on purpose: a word such as "token" or
+// "session" alone does not make a write a sign-in step (`DELETE /api/sessions/all`,
+// `POST /api/payment-tokens` and `revokeApiToken` are real writes and are aborted).
 
-/** Whether a path, GraphQL operation name or host names a sign-in step (`/oauth/token`, `post-login`, `signIn`). */
-export function isLoginFlow(text: string): boolean {
-  const words = text
+/** Words that name signing in wherever they appear in a path or operation name. */
+const SIGN_IN_WORDS = new Set([
+  "login", "logon", "signin", "signon", "sso", "saml", "saml2", "oauth", "oauth2", "openid", "oidc",
+  "authorize", "authorise", "authenticate", "authentication", "postlogin",
+]);
+/** Words of a token or session endpoint (`/api/token`, `/auth/refresh`, `refreshToken`, `createSession`). */
+const STEP_WORDS = new Set(["token", "session", "sessions", "auth", "refresh", "jwt"]);
+const STEP_VERBS = new Set(["create", "get", "obtain", "issue", "new", "verify", "access", "id", "start", "exchange", "renew"]);
+/** Words that make a write a change to the account even inside a sign-in path. */
+const NOT_SIGN_IN_WORDS = new Set([
+  "logout", "logoff", "signout", "signoff", "revoke", "revocation", "delete", "remove", "cancel", "change",
+  "reset", "update", "unlink", "deactivate", "disable", "preferences", "settings",
+]);
+/** First host labels that usually mean a sign-in host (a guess; site.ts and --login-host name them for sure). */
+const LOGIN_HOST_LABELS = new Set(["id", "idp", "login", "signin", "sso", "auth", "oauth"]);
+
+function words(text: string): string[] {
+  return text
     .replace(/([a-z0-9])([A-Z])/g, "$1-$2")
     .toLowerCase()
     .split(/[^a-z0-9]+/)
     .filter(Boolean);
-  return words.some((w, i) => LOGIN_WORDS.has(w) || LOGIN_WORDS.has(w + (words[i + 1] ?? "")));
+}
+
+const namesChange = (text: string) => words(text).some((w) => NOT_SIGN_IN_WORDS.has(w));
+
+function hasSignInWord(ws: string[]): boolean {
+  return ws.some((w, i) => SIGN_IN_WORDS.has(w) || SIGN_IN_WORDS.has(w + (ws[i + 1] ?? "")));
+}
+
+/** Every word is a token/session word or verb, and at least one is a token/session word. */
+function isTokenStep(ws: string[]): boolean {
+  return ws.length > 0 && ws.some((w) => STEP_WORDS.has(w)) && ws.every((w) => STEP_WORDS.has(w) || STEP_VERBS.has(w));
+}
+
+/**
+ * Whether a write is a sign-in step, from its method and its path or GraphQL operation name:
+ * `/oauth/token`, `/api/session/post-login`, `/u/login`, `signIn`, `refreshToken`, `POST /api/session`.
+ * DELETE never is, and neither is anything that names a change (`logout`, `revoke`, `reset`, `…-preferences`).
+ */
+export function isSignInStep(method: string, pathOrName: string): boolean {
+  if (method.toUpperCase() === "DELETE") return false;
+  const ws = words(pathOrName);
+  if (ws.some((w) => NOT_SIGN_IN_WORDS.has(w))) return false;
+  if (hasSignInWord(ws)) return true;
+  if (!pathOrName.includes("/")) return isTokenStep(ws); // a GraphQL operation name
+  const segments = pathOrName.split("/").filter((s) => s && !s.startsWith(":"));
+  if (isTokenStep(words(segments.at(-1) ?? ""))) return true;
+  // `/token/refresh`, `/auth/new`: a verb under a token or session segment.
+  return words(segments.at(-1) ?? "").every((w) => STEP_VERBS.has(w)) && isTokenStep(words(segments.slice(-2).join("-")));
+}
+
+/** A sign-in step sent by POST, from a path or an operation name alone. */
+export function isLoginFlow(text: string): boolean {
+  return isSignInStep("POST", text);
 }
 
 function isLoginHostName(host: string): boolean {
-  const first = host.split(".", 1)[0] ?? "";
-  return LOGIN_HOST_LABELS.has(first) || isLoginFlow(first);
+  return LOGIN_HOST_LABELS.has(host.split(".", 1)[0] ?? "");
 }
 
-function headerShape(headers: Record<string, string>): Record<string, string | null> {
+/** A sign-in form on a login host: anything but a DELETE or a path that names a change. */
+function isSignInForm(method: string, path: string): boolean {
+  return method !== "DELETE" && !namesChange(path);
+}
+
+// ---- headers ----
+
+function headerShape(headers: Record<string, string>, skip: (name: string) => boolean = () => false): Record<string, string | null> {
   const lower = new Map(Object.entries(headers).map(([k, v]) => [k.toLowerCase(), v]));
   const out: Record<string, string | null> = {};
   for (const name of [...lower.keys()].sort()) {
-    if (name.startsWith(":")) continue;
+    if (name.startsWith(":") || skip(name)) continue;
     const value = lower.get(name) as string;
     if (!HEADER_VALUE_ALLOWLIST.has(name)) out[name] = null;
     else out[name] = name === "content-type" ? (mediaType(value) ?? null) : value;
@@ -128,20 +204,87 @@ function header(headers: Record<string, string>, name: string): string | undefin
   return key ? headers[key] : undefined;
 }
 
+/** Cookie names from a Set-Cookie header value (Playwright joins several with newlines). Never the values. */
+export function setCookieNames(value: string | undefined): string[] {
+  if (!value) return [];
+  const names = value
+    .split("\n")
+    .map((line) => line.split(";", 1)[0]!.split("=", 1)[0]!.trim())
+    .filter((n) => /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(n));
+  return [...new Set(names)].sort();
+}
+
+/** The claim names and types of a bearer JWT, or undefined when the header holds none. Never the values. */
+export function bearerClaims(authorization: string | undefined): Shape | undefined {
+  const token = authorization?.match(/^Bearer\s+([\w-]+)\.([\w-]+)\.([\w-]*)$/i);
+  if (!token) return undefined;
+  try {
+    const json = Buffer.from(token[2]!.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    const payload = JSON.parse(json);
+    if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
+    return shapeOf(payload);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Every string value inside a JSON value (not its keys: those name fields), for recognising values in URL paths later. */
+function collectStrings(value: unknown, into: (s: string) => void, depth = 0): void {
+  if (depth > 32 || value === null || value === undefined) return;
+  if (typeof value === "string") into(value);
+  else if (Array.isArray(value)) for (const v of value) collectStrings(v, into, depth + 1);
+  else if (typeof value === "object") for (const v of Object.values(value as Record<string, unknown>)) collectStrings(v, into, depth + 1);
+}
+
+function httpHost(url: string): string | null {
+  try {
+    const u = new URL(url);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return null;
+    return u.hostname.toLowerCase();
+  } catch {
+    return null;
+  }
+}
+
+export type RecorderOptions = {
+  origin: string;
+  /** Login hosts named in site.ts or with --login-host: their requests are sign-in steps. */
+  loginHosts?: string[];
+  /** --write: the Task's one write goes through for real. */
+  allowWrite?: boolean;
+  /** --write-op: the write that may go through (a GraphQL operationName, a REST `METHOD /path` as the Capture names it, or a part of `host/path`). */
+  writeOp?: string;
+  /** --allow-read: requests the maintainer declares as reads (a GraphQL operationName, or a part of `host/path`). */
+  allowRead?: string[];
+};
+
 export class CaptureRecorder {
   private readonly originHost: string;
   private readonly domain: string;
   private readonly loginHosts: Set<string>;
   private readonly allowWrite: boolean;
+  private readonly writeOp?: string;
+  private readonly allowRead: string[];
   private writeUsed = false;
+  /** The user clicked, typed or submitted in the current page since it loaded. */
+  private gesture = false;
   private seq = 0;
   private readonly ops = new Map<string, { first: number; shape: OperationShape }>();
+  /** Values seen in bodies, variables and query strings, as sent. Memory only. */
+  private readonly values = new Set<string>();
+  private readonly valueWords = new Set<string>();
+  /** The write that went through with --write. */
+  wrote?: string;
+  /** Writes aborted on hosts outside the recorded scope (`METHOD host/path`, path redacted). */
+  readonly blockedElsewhere = new Set<string>();
 
-  constructor(opts: { origin: string; loginHosts?: string[]; allowWrite?: boolean }) {
+  constructor(opts: RecorderOptions) {
     this.originHost = new URL(opts.origin).hostname;
     this.domain = baseDomain(this.originHost);
     this.loginHosts = new Set((opts.loginHosts ?? []).map((h) => h.toLowerCase()));
     this.allowWrite = opts.allowWrite ?? false;
+    this.writeOp = opts.writeOp?.trim() || undefined;
+    this.allowRead = (opts.allowRead ?? []).map((p) => p.trim()).filter(Boolean);
   }
 
   isLoginHost(host: string): boolean {
@@ -150,15 +293,26 @@ export class CaptureRecorder {
 
   /** The site origin's host, its parent domain and its subdomains, plus the login hosts. */
   inScope(url: string): boolean {
-    let host: string;
-    try {
-      const u = new URL(url);
-      if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-      host = u.hostname.toLowerCase();
-    } catch {
-      return false;
-    }
+    const host = httpHost(url);
+    if (!host) return false;
     return host === this.domain || host.endsWith(`.${this.domain}`) || this.isLoginHost(host);
+  }
+
+  /** A trusted click, key press or form submit in a page (capture.ts reports them). */
+  noteGesture(): void {
+    this.gesture = true;
+  }
+
+  /** A main-frame page load: writes the new page fires on its own come before any gesture again. */
+  noteNavigation(): void {
+    this.gesture = false;
+  }
+
+  private remember(text: string): void {
+    const s = text.trim();
+    if (s.length < 3 || s.length > 200) return;
+    this.values.add(s);
+    for (const w of s.split(/[\s,;|/()]+/)) if (w.length >= 3) this.valueWords.add(w);
   }
 
   /** Splits a request into the Operations it carries, or null when it is out of scope. */
@@ -171,90 +325,148 @@ export class CaptureRecorder {
     const path = redactPath(url.pathname);
     const contentType = header(req.headers, "content-type");
     const headers = headerShape(req.headers);
+    const claims = bearerClaims(header(req.headers, "authorization"));
+    for (const v of url.searchParams.values()) this.remember(v);
+    const where = [`${host}${path}`, `${host}${url.pathname}`];
 
     let gql: GraphqlCall[] | null = null;
     if (req.postData && req.postData.length > 0) {
-      const parsed = parseJson(req.postData.toString("utf8"));
-      if (parsed.ok) gql = graphqlFromBody(parsed.value);
+      const text = req.postData.toString("utf8");
+      const parsed = parseJson(text);
+      if (parsed.ok) {
+        gql = graphqlFromBody(parsed.value);
+        collectStrings(parsed.value, (s) => this.remember(s));
+      } else if (mediaType(contentType) === "application/x-www-form-urlencoded") {
+        for (const v of new URLSearchParams(text).values()) this.remember(v);
+      }
     } else if (method === "GET") {
       gql = graphqlFromSearch(url.searchParams);
     }
 
     const base = { resourceType: req.resourceType, host, method, path };
     const outcome = () => ({ responses: [], seen: 0, aborted: 0 });
-    const loginHost = this.isLoginHost(host) || isLoginHostName(host);
+    const declaredLoginHost = this.isLoginHost(host);
+    const guessedLoginHost = !declaredLoginHost && isLoginHostName(host);
+    const request = (extra: Partial<OperationShape["request"]>) => ({ headers, ...extra, ...(claims ? { bearerClaims: claims } : {}) });
 
     if (gql) {
       const calls = gql.map((call, index): PlannedCall => {
         const { variables, ...graphql } = call;
         const name = call.operationName ?? "anonymous";
+        // A hash-only persisted query sent by POST may be a mutation: fail safe and treat it as a write.
+        const unknown = call.persisted && !call.query && method !== "GET";
         return {
           key: `graphql ${host} ${name} ${call.operationName ? "" : (call.query ?? "")}`,
           responseIndex: gql && gql.length > 1 ? index : undefined,
           shape: {
             operation: name,
             kind: "graphql",
-            effect: call.operationType === "mutation" ? "write" : "read",
+            effect: call.operationType === "mutation" || unknown ? "write" : "read",
+            ...(unknown ? { effectUnknown: true as const } : {}),
             ...base,
             graphql,
-            request: { headers, ...(variables ? { variables } : {}) },
+            request: request(variables ? { variables } : {}),
             ...outcome(),
           },
         };
       });
       const writes = calls.filter((c) => c.shape.effect === "write");
       const effect: Effect = writes.length > 0 ? "write" : "read";
-      const loginFlow = loginHost || (writes.length > 0 && writes.every((c) => isLoginFlow(c.shape.operation)));
+      const allowedRead = writes.length > 0 && writes.every((c) => this.allowRead.includes(c.shape.operation));
+      const loginFlow =
+        !allowedRead &&
+        writes.length > 0 &&
+        writes.every((c) =>
+          declaredLoginHost ? !namesChange(c.shape.operation) : c.shape.operation !== "anonymous" && isSignInStep(method, c.shape.operation),
+        );
       if (loginFlow) for (const c of writes) c.shape.loginFlow = true;
-      return { seq: this.seq++, calls, effect, loginFlow };
+      if (allowedRead) for (const c of writes) c.shape.allowedRead = true;
+      return { seq: this.seq++, calls, effect, loginFlow, allowedRead, method, where };
     }
 
     const effect: Effect = READ_METHODS.has(method) ? "read" : "write";
     const query = queryShape(url.searchParams);
     const body = req.postData && req.postData.length > 0 ? bodyShape(req.postData, contentType) : undefined;
-    const loginFlow = effect === "write" && (loginHost || isLoginFlow(path));
+    const allowedRead = effect === "write" && this.allowRead.some((p) => where.some((w) => w.includes(p)));
+    const loginFlow =
+      !allowedRead &&
+      (declaredLoginHost
+        ? isSignInForm(method, path)
+        : effect === "write" &&
+          (isSignInStep(method, path) || (guessedLoginHost && req.resourceType === "document" && isSignInForm(method, path))));
+    const navigation = req.resourceType === "document" && effect === "read";
     const shape: OperationShape = {
       operation: `${method} ${path}`,
       kind: "rest",
       effect,
       ...(loginFlow ? { loginFlow: true as const } : {}),
+      ...(navigation ? { navigation: true as const } : {}),
+      ...(allowedRead ? { allowedRead: true as const } : {}),
       ...base,
-      request: { headers, ...(query ? { query } : {}), ...(body ? { body } : {}) },
+      request: request({ ...(query ? { query } : {}), ...(body ? { body } : {}) }),
       ...outcome(),
     };
-    return {
-      seq: this.seq++,
-      calls: [{ key: `rest ${host} ${method} ${path}`, shape }],
-      effect,
-      loginFlow,
-    };
+    return { seq: this.seq++, calls: [{ key: `rest ${host} ${method} ${path}`, shape }], effect, loginFlow, allowedRead, method, where };
   }
 
   /**
-   * Read Tasks abort every write. With --write the first write goes through
-   * for real and later ones are aborted. Login hosts are never blocked, or the
-   * maintainer could not sign in.
+   * For a request plan() leaves out (another host, or a static asset): whether it may go
+   * through. Reads always may. A write passes only when it is a sign-in step (a token request,
+   * a sign-in form on a login host) or --allow-read names it; every other write is aborted, so a
+   * Capture writes nowhere it does not record.
+   */
+  allowElsewhere(req: Pick<RequestInfo, "method" | "url" | "resourceType">): boolean {
+    const method = req.method.toUpperCase();
+    const host = httpHost(req.url);
+    if (!host || READ_METHODS.has(method)) return true;
+    const raw = new URL(req.url).pathname;
+    const path = redactPath(raw);
+    if (this.allowRead.some((p) => `${host}${path}`.includes(p) || `${host}${raw}`.includes(p))) return true;
+    if (isSignInStep(method, path)) return true;
+    if (isLoginHostName(host) && req.resourceType === "document" && isSignInForm(method, path)) return true;
+    this.blockedElsewhere.add(`${method} ${host}${path}`);
+    return false;
+  }
+
+  /**
+   * Read Tasks abort every write that is not a sign-in step or named by --allow-read. With
+   * --write, one write goes through for real: the one --write-op names, or else the first that
+   * comes after the user clicked, typed or submitted in the page, so writes a page fires on its
+   * own while loading (YouSee's createQuote) are aborted. Every later write is aborted.
    */
   shouldAbort(planned: Planned): boolean {
-    if (planned.effect !== "write" || planned.loginFlow) return false;
-    if (this.allowWrite && !this.writeUsed) {
+    if (planned.effect !== "write" || planned.loginFlow || planned.allowedRead) return false;
+    if (this.allowWrite && !this.writeUsed && (this.writeOp ? this.matchesWriteOp(planned) : this.gesture)) {
       this.writeUsed = true;
+      this.wrote = planned.calls.filter((c) => c.shape.effect === "write").map((c) => c.shape.operation).join(", ");
       return false;
     }
     return true;
   }
 
+  private matchesWriteOp(planned: Planned): boolean {
+    const op = this.writeOp!;
+    return planned.calls.some((c) => c.shape.effect === "write" && c.shape.operation === op) || planned.where.some((w) => w.includes(op));
+  }
+
   record(planned: Planned, outcome: { response?: ResponseInfo; aborted?: boolean; headers?: Record<string, string> }) {
     const { response, aborted = false } = outcome;
-    let splitBodies: unknown[] | null = null;
     const contentType = response ? mediaType(header(response.headers, "content-type")) : undefined;
-    if (response?.body && planned.calls.some((c) => c.responseIndex !== undefined)) {
+    let splitBodies: unknown[] | null = null;
+    if (response?.body && response.body.length > 0) {
       const parsed = parseJson(response.body.toString("utf8"));
-      if (parsed.ok && Array.isArray(parsed.value)) splitBodies = parsed.value;
+      if (parsed.ok) {
+        collectStrings(parsed.value, (s) => this.remember(s));
+        if (Array.isArray(parsed.value) && planned.calls.some((c) => c.responseIndex !== undefined)) splitBodies = parsed.value;
+      }
     }
+    const claims = outcome.headers ? bearerClaims(header(outcome.headers, "authorization")) : undefined;
     for (const call of planned.calls) {
       const shape: OperationShape = structuredClone(call.shape);
-      if (outcome.headers) shape.request.headers = headerShape(outcome.headers);
+      if (outcome.headers) {
+        shape.request.headers = headerShape(outcome.headers);
+        if (claims) shape.request.bearerClaims = claims;
+      }
       shape.seen = 1;
       shape.aborted = aborted ? 1 : 0;
       if (response) {
@@ -262,7 +474,17 @@ export class CaptureRecorder {
           splitBodies && call.responseIndex !== undefined
             ? { kind: "json", shape: shapeOf(splitBodies[call.responseIndex]) }
             : bodyShape(response.body, contentType);
-        shape.responses = [{ status: response.status, ...(contentType ? { contentType } : {}), body }];
+        const cookies = setCookieNames(header(response.headers, "set-cookie"));
+        const headers = headerShape(response.headers, (n) => n === "set-cookie");
+        shape.responses = [
+          {
+            status: response.status,
+            ...(contentType ? { contentType } : {}),
+            ...(Object.keys(headers).length ? { headers } : {}),
+            ...(cookies.length ? { setCookies: cookies } : {}),
+            body,
+          },
+        ];
       }
       this.add(call.key, planned.seq, shape);
     }
@@ -278,9 +500,46 @@ export class CaptureRecorder {
     existing.shape = mergeOperation(existing.shape, shape);
   }
 
-  /** Operations in the order the frontend first called them. */
+  /**
+   * A redacted path with every segment that matches a value seen in this Capture replaced by
+   * `:id`: a username or a search term the page also sent or received (`/users/jens.hansen`).
+   */
+  redactValues(path: string): string {
+    return path
+      .split("/")
+      .map((seg) => {
+        if (!seg || seg.startsWith(":")) return seg;
+        let decoded = seg;
+        try {
+          decoded = decodeURIComponent(seg);
+        } catch {}
+        if (decoded.length < 3) return seg;
+        // A whole value (`jens.hansen`), or a capitalised word inside one (`Vesterbrogade` from "Vesterbrogade 1").
+        if (this.values.has(decoded)) return ":id";
+        if (/[A-Z]/.test(decoded) && this.valueWords.has(decoded)) return ":id";
+        return seg;
+      })
+      .join("/");
+  }
+
+  /** Operations in the order the frontend first called them, with value-like path segments redacted. */
   operations(): OperationShape[] {
-    return [...this.ops.values()].sort((a, b) => a.first - b.first).map((o) => o.shape);
+    const merged = new Map<string, { first: number; shape: OperationShape }>();
+    for (const [key, { first, shape }] of this.ops) {
+      let k = key;
+      let s = shape;
+      if (shape.kind === "rest") {
+        const path = this.redactValues(shape.path);
+        if (path !== shape.path) {
+          s = { ...shape, path, operation: `${shape.method} ${path}` };
+          k = `rest ${shape.host} ${shape.method} ${path}`;
+        }
+      }
+      const existing = merged.get(k);
+      if (!existing) merged.set(k, { first, shape: s });
+      else merged.set(k, { first: Math.min(existing.first, first), shape: mergeOperation(existing.shape, s) });
+    }
+    return [...merged.values()].sort((a, b) => a.first - b.first).map((o) => o.shape);
   }
 
   get originHostname(): string {
@@ -292,26 +551,47 @@ function mergeMaybe(a?: Shape, b?: Shape): Shape | undefined {
   return a && b ? mergeShapes(a, b) : (a ?? b);
 }
 
-function mergeOperation(a: OperationShape, b: OperationShape): OperationShape {
+function mergeResponse(a: ResponseShape, b: ResponseShape): ResponseShape {
+  const headers = a.headers && b.headers ? mergeHeaders(a.headers, b.headers) : (a.headers ?? b.headers);
+  const cookies = [...new Set([...(a.setCookies ?? []), ...(b.setCookies ?? [])])].sort();
+  const contentType = a.contentType ?? b.contentType;
+  return {
+    status: a.status,
+    ...(contentType ? { contentType } : {}),
+    ...(headers ? { headers } : {}),
+    ...(cookies.length ? { setCookies: cookies } : {}),
+    body: mergeBodies(a.body, b.body),
+  };
+}
+
+/** Joins two observations of one Operation: two calls in one Capture, or the same Operation in two Captures. */
+export function mergeOperation(a: OperationShape, b: OperationShape): OperationShape {
   const responses = [...a.responses];
   for (const r of b.responses) {
     const i = responses.findIndex((x) => x.status === r.status);
     if (i === -1) responses.push(r);
-    else responses[i] = { ...responses[i]!, body: mergeBodies(responses[i]!.body, r.body) };
+    else responses[i] = mergeResponse(responses[i]!, r);
   }
   responses.sort((x, y) => x.status - y.status);
   const query = mergeMaybe(a.request.query, b.request.query);
   const variables = mergeMaybe(a.request.variables, b.request.variables);
+  const bearer = mergeMaybe(a.request.bearerClaims, b.request.bearerClaims);
   const body = a.request.body && b.request.body ? mergeBodies(a.request.body, b.request.body) : (a.request.body ?? b.request.body);
+  const flag = (k: "loginFlow" | "navigation" | "allowedRead" | "effectUnknown") => (a[k] || b[k] ? { [k]: true as const } : {});
   return {
     ...a,
     effect: a.effect === "write" || b.effect === "write" ? "write" : "read",
+    ...flag("effectUnknown"),
+    ...flag("loginFlow"),
+    ...flag("navigation"),
+    ...flag("allowedRead"),
     graphql: a.graphql && !a.graphql.query && b.graphql?.query ? b.graphql : a.graphql,
     request: {
       headers: mergeHeaders(a.request.headers, b.request.headers),
       ...(query ? { query } : {}),
       ...(variables ? { variables } : {}),
       ...(body ? { body } : {}),
+      ...(bearer ? { bearerClaims: bearer } : {}),
     },
     responses,
     seen: a.seen + b.seen,

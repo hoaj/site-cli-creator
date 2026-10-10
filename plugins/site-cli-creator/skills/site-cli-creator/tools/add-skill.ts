@@ -8,7 +8,7 @@ import { join, resolve } from "node:path";
 import { parseFlags, requireKebab } from "./lib/args";
 import { addSkillToManifests, MANIFESTS, readJson } from "./lib/manifests";
 import { fail, runTool } from "./lib/output";
-import { generatorVersion, starterDir } from "./lib/paths";
+import { generatorVersion, starterDir, toolCommand } from "./lib/paths";
 import {
   parseOrigin,
   repoFromManifest,
@@ -27,10 +27,10 @@ await runTool(async () => {
   const { values } = parseFlags(
     process.argv.slice(2),
     {
-      dir: { type: "string", required: true },
-      skill: { type: "string", required: true },
-      origin: { type: "string", required: true },
-      auth: { type: "string", required: true },
+      dir: { type: "string", required: true, help: "the plugin's root folder" },
+      skill: { type: "string", required: true, help: "CLI skill name, kebab-case" },
+      origin: { type: "string", required: true, help: "scheme + host the frontend calls, no path (https://www.example.com)" },
+      auth: { type: "string", required: true, help: "login (the Tasks need the user signed in) or none" },
     },
     USAGE,
   );
@@ -48,7 +48,7 @@ await runTool(async () => {
   if (skill === `${plugin}-feedback`) fail(`"${skill}" is the plugin's Feedback skill`);
   const repo = repoFromManifest(manifest.repository);
   const generated = existsSync(join(pluginDir, "generated.json"))
-    ? readJson<{ maintainer?: unknown }>(join(pluginDir, "generated.json"))
+    ? readJson<{ maintainer?: unknown; generatedWith?: unknown }>(join(pluginDir, "generated.json"))
     : {};
 
   const skillDir = join(pluginDir, "skills", skill);
@@ -62,7 +62,8 @@ await runTool(async () => {
     OWNER: repo.split("/")[0] as string,
     DESCRIPTION: typeof manifest.description === "string" ? manifest.description : "",
     MAINTAINER: typeof generated.maintainer === "string" ? generated.maintainer : (repo.split("/")[0] as string),
-    GENERATOR_VERSION: generatorVersion(),
+    // The version the plugin was created with (SPEC §5), not this generator's, when they differ.
+    GENERATOR_VERSION: typeof generated.generatedWith === "string" ? generated.generatedWith : generatorVersion(),
     ORIGIN: origin,
     AUTH: values.auth,
   };
@@ -94,6 +95,6 @@ await runTool(async () => {
     version,
     files: files.sort(),
     manifests,
-    next: `bun tools/capture.ts --skill-dir ${skillDir} --task <slug> --url <start>`,
+    next: `${toolCommand("capture")} --skill-dir ${skillDir} --task <slug> --url <start>`,
   };
 });

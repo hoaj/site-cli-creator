@@ -2,8 +2,12 @@
 // value: strings become {type:"string"}, and object keys that look like data
 // (ids, emails, numbers) collapse into a "record" so they can't leak either.
 
+/** What every observed string looked like, never the string: digits only, an ISO date, an ISO date-time. */
+export type StringFormat = "numeric" | "date" | "datetime";
+
 export type Shape =
-  | { type: "string" | "number" | "boolean" | "null" }
+  | { type: "string"; format?: StringFormat }
+  | { type: "number" | "boolean" | "null" }
   | { type: "array"; items?: Shape }
   | { type: "object"; fields: Record<string, Shape>; optional?: string[] }
   | { type: "record"; values?: Shape }
@@ -18,9 +22,18 @@ function digitCount(s: string): number {
   return s.replace(/\D/g, "").length;
 }
 
+// `jens.hansen`, `mette.larsen`: a dot between letters, unless it ends in a file extension.
+const DOTTED_NAME = /[A-Za-z]\.[A-Za-z]/;
+const FILE_EXTENSION = /\.(?:m?js|css|html?|json|xml|txt|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|map|php|aspx?|jsp|cgi|pdf|csv|ics)$/i;
+
+export function isDottedName(text: string): boolean {
+  return DOTTED_NAME.test(text) && !FILE_EXTENSION.test(text);
+}
+
 /** A URL path segment that carries data rather than naming a resource. */
 export function isIdLike(segment: string): boolean {
   if (segment === "") return false;
+  if (isDottedName(segment)) return true;
   if (/^\d+$/.test(segment) || UUID.test(segment) || segment.includes("@")) return true;
   if (/^[0-9a-f]{12,}$/i.test(segment)) return true;
   if (digitCount(segment) >= 4) return true;
@@ -32,7 +45,15 @@ export function isIdLike(segment: string): boolean {
 /** An object key that carries data (a map keyed by id, email, date…). */
 export function isValueLikeKey(key: string): boolean {
   if (!IDENTIFIER.test(key)) return true;
-  return key.length > 48 || digitCount(key) >= 4 || UUID.test(key);
+  return key.length > 48 || digitCount(key) >= 4 || UUID.test(key) || isDottedName(key);
+}
+
+/** The format class of a string (never the string): numeric (`"399.00"`), ISO date, ISO date-time. */
+export function stringFormat(value: string): StringFormat | undefined {
+  if (/^-?\d+(?:[.,]\d+)?$/.test(value)) return "numeric";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return "date";
+  if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)) return "datetime";
+  return undefined;
 }
 
 function safeDecode(segment: string): string {
@@ -56,8 +77,10 @@ export function shapeOf(value: unknown, depth = 0): Shape {
   if (value === null || value === undefined) return { type: "null" };
   if (depth > MAX_DEPTH) return { type: "object", fields: {} };
   switch (typeof value) {
-    case "string":
-      return { type: "string" };
+    case "string": {
+      const format = stringFormat(value as string);
+      return format ? { type: "string", format } : { type: "string" };
+    }
     case "number":
     case "bigint":
       return { type: "number" };
@@ -137,8 +160,31 @@ export function mergeShapes(a: Shape, b: Shape): Shape {
         ? { type: "object", fields, optional: [...optional].sort() }
         : { type: "object", fields };
     }
+    case "string": {
+      // A format holds only while every observation has it.
+      const format = a.format !== undefined && a.format === (b as typeof a).format ? a.format : undefined;
+      return format ? { type: "string", format } : { type: "string" };
+    }
     default:
       return a;
+  }
+}
+
+/** The same shape with every string format class dropped. */
+export function withoutFormats(shape: Shape): Shape {
+  switch (shape.type) {
+    case "string":
+      return { type: "string" };
+    case "array":
+      return shape.items ? { type: "array", items: withoutFormats(shape.items) } : shape;
+    case "record":
+      return shape.values ? { type: "record", values: withoutFormats(shape.values) } : shape;
+    case "object":
+      return { ...shape, fields: Object.fromEntries(Object.entries(shape.fields).map(([k, v]) => [k, withoutFormats(v)])) };
+    case "union":
+      return { type: "union", anyOf: shape.anyOf.map(withoutFormats) };
+    default:
+      return shape;
   }
 }
 
@@ -174,7 +220,8 @@ export function bodyShape(body: Buffer | string | null | undefined, contentType?
   if (type.startsWith("multipart/")) return { kind: "multipart" };
   const text = typeof body === "string" ? body : body.toString("utf8");
   if (type === "application/x-www-form-urlencoded") {
-    return { kind: "form", shape: shapeOf(Object.fromEntries(new URLSearchParams(text))) };
+    // Form bodies are sign-in forms as often as not: no format class (a numeric PIN stays a plain string).
+    return { kind: "form", shape: withoutFormats(shapeOf(Object.fromEntries(new URLSearchParams(text)))) };
   }
   const looksJson = type.includes("json") || /^\s*[[{]/.test(text);
   if (looksJson) {

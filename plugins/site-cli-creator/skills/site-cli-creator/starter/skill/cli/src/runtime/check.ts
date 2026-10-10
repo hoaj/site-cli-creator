@@ -13,7 +13,7 @@ import type { Operation } from "./operation";
 import { ensureStateDir, profileDir, stateDir } from "./session";
 import { effectiveOrigin, isLoginHost, tokenMatches, type Site } from "./site";
 
-export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped"; reason?: string };
+export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
 export type CheckResult = { ok: true; operations: CheckRow[] };
 export type CheckOptions = { op?: string; writes?: boolean; account?: string };
 /**
@@ -73,8 +73,15 @@ export async function check(client: Client, operations: Operation[], options: Ch
   const unavailable = new Set<string>();
   const writes: Operation[] = [];
   let account: Promise<string | undefined> | undefined;
+  /** The first network, session or input failure: reported only when nothing drifted. */
+  let stopped: Failure | undefined;
 
   for (const op of selected) {
+    if (stopped?.kind === "session") {
+      // Signed out and the sign-in did not complete: no other Operation can be reached.
+      rows.push({ operation: op.name, effect: op.effect, status: "skipped", reason: "session" });
+      continue;
+    }
     if (op.effect === "write") {
       if (options.writes || (options.op !== undefined && (options.op === op.name || options.op === operationSegment(op.name)))) writes.push(op);
       else rows.push({ operation: op.name, effect: "write", status: "skipped", reason: "run check --writes" });
@@ -84,57 +91,72 @@ export async function check(client: Client, operations: Operation[], options: Ch
       unavailable.add(op.name);
       rows.push({ operation: op.name, effect: "read", status: "skipped", reason });
     };
-    const vars: Record<string, unknown> = {};
-    let missing: string | undefined;
-    for (const [key, need] of Object.entries(op.needs ?? {})) {
-      if (isSessionNeed(need)) {
-        if (need.key === "account") vars[key] = await (account ??= client.resolveAccount(options.account));
-        else vars[key] = (await client.ensureSession()).ids[need.key];
-      } else if (unavailable.has(need.from)) {
-        missing = `needs ${need.from}`;
-        break;
-      } else {
-        vars[key] = need.pick(results.get(need.from));
-      }
-      if (vars[key] === undefined || vars[key] === null) {
-        missing = `no value for ${key}`;
-        break;
-      }
-    }
-    if (missing) {
-      skip(missing);
-      continue;
-    }
-    if (!op.variables.safeParse(vars).success) {
-      skip("needs input the chain does not supply");
-      continue;
-    }
     try {
+      const vars: Record<string, unknown> = {};
+      let missing: string | undefined;
+      for (const [key, need] of Object.entries(op.needs ?? {})) {
+        if (isSessionNeed(need)) {
+          if (need.key === "account") vars[key] = await (account ??= client.resolveAccount(options.account));
+          else vars[key] = (await client.ensureSession()).ids[need.key];
+        } else if (unavailable.has(need.from)) {
+          missing = `needs ${need.from}`;
+          break;
+        } else {
+          vars[key] = need.pick(results.get(need.from));
+        }
+        if (vars[key] === undefined || vars[key] === null) {
+          missing = `no value for ${key}`;
+          break;
+        }
+      }
+      if (missing) {
+        skip(missing);
+        continue;
+      }
+      if (!op.variables.safeParse(vars).success) {
+        skip("needs input the chain does not supply");
+        continue;
+      }
       results.set(op.name, await client.call(op, vars));
       rows.push({ operation: op.name, effect: "read", status: "ok" });
     } catch (e) {
-      if (!(e instanceof Failure) || e.kind !== "drift") throw e;
+      if (!(e instanceof Failure)) throw e;
       unavailable.add(op.name);
-      drifts.push({ operation: op.name, fingerprint: e.fingerprint ?? "", diff: e.diff ?? [] });
+      if (e.kind === "drift") drifts.push({ operation: op.name, fingerprint: e.fingerprint ?? "", diff: e.diff ?? [] });
+      else {
+        // A Drift found earlier must still be reported (SPEC §10), so a network, session or input
+        // failure marks this Operation and check goes on; it decides the exit only if nothing drifted.
+        stopped ??= e;
+        rows.push({ operation: op.name, effect: "read", status: "failed", reason: e.kind });
+      }
     }
   }
 
   const withTrigger = writes.filter((op) => op.trigger);
   for (const op of writes) if (!op.trigger) rows.push({ operation: op.name, effect: "write", status: "skipped", reason: "no trigger" });
-  if (withTrigger.length > 0) {
+  if (withTrigger.length > 0 && stopped?.kind !== "session") {
     const reads = operations.filter((op) => op.effect === "read");
     const declaredWrites = operations.filter((op) => op.effect === "write");
-    const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env))(withTrigger, reads, declaredWrites);
-    for (const op of withTrigger) {
-      const d = outcome.get(op.name);
-      if (d) drifts.push(d);
-      else rows.push({ operation: op.name, effect: "write", status: "ok" });
+    try {
+      const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env))(withTrigger, reads, declaredWrites);
+      for (const op of withTrigger) {
+        const d = outcome.get(op.name);
+        if (d) drifts.push(d);
+        else rows.push({ operation: op.name, effect: "write", status: "ok" });
+      }
+    } catch (e) {
+      if (!(e instanceof Failure) || (drifts.length === 0 && !stopped)) throw e;
+      stopped ??= e;
+      for (const op of withTrigger) rows.push({ operation: op.name, effect: "write", status: "failed", reason: e.kind });
     }
   }
 
   if (drifts.length > 0) {
-    throw new Failure("drift", `check: ${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation).join(", ")}.`, { drifts });
+    const others = rows.filter((r) => r.status === "failed");
+    const also = others.length ? ` ${others.length} other Operation(s) could not be checked (${[...new Set(others.map((r) => r.reason))].join(", ")}).` : "";
+    throw new Failure("drift", `check: ${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation).join(", ")}.${also}`, { drifts });
   }
+  if (stopped) throw stopped;
   return { ok: true, operations: rows };
 }
 
@@ -260,17 +282,34 @@ export function capturedVariables(op: Operation, req: Captured): unknown {
   return vars;
 }
 
+/**
+ * The locator a failed trigger step waited for, from Playwright's error ("waiting for
+ * getByLabel('Ny note')"): code from the Contract, not user data. Made safe for a Fingerprint
+ * segment (no colons, one line, at most 80 characters); "" when the error names none.
+ */
+export function triggerStep(error: unknown): string {
+  const message = (error instanceof Error ? error.message : "").replace(/\x1b\[[0-9;]*m/g, "");
+  const waited = /waiting for (.+?)\s*$/m.exec(message)?.[1] ?? "";
+  return waited
+    .replace(/\s+to be (?:visible|enabled|attached|stable|editable|hidden)\b.*$/, "")
+    .replace(/:/g, "=")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 80);
+}
+
 export function compareWrite(site: Site, op: Operation, req: Captured | undefined, triggerError?: unknown): DriftEntry | null {
   const fp = (breakType: "trigger" | "request", path: string, code: string) => driftFingerprint(site, op.name, breakType, path, code);
   if (triggerError !== undefined && !req) {
     const code = errorName(triggerError);
-    return { operation: op.name, fingerprint: fp("trigger", "", code), diff: [{ path: "", code }] };
+    const path = triggerStep(triggerError);
+    return { operation: op.name, fingerprint: fp("trigger", path, code), diff: [{ path, code }] };
   }
   if (!req) return { operation: op.name, fingerprint: fp("trigger", "", "no_request"), diff: [{ path: "", code: "no_request" }] };
   const vars = capturedVariables(op, req);
   const parsed = op.variables.safeParse(vars);
   if (parsed.success) return null;
-  const diff = zodDiff(parsed.error.issues, vars);
+  const diff = zodDiff(parsed.error.issues, vars, op.variables);
   return { operation: op.name, fingerprint: fp("request", diff[0]?.path ?? "", diff[0]?.code ?? ""), diff };
 }
 

@@ -63,6 +63,24 @@ async function load() {
 load();
 </script></body></html>`;
 
+// A page that fires writes on its own while loading (YouSee's createQuote), a persisted
+// (hash-only) GraphQL mutation and a write to another host, before the user's own write.
+const SIDE_EFFECT_PAGE = `<!doctype html><html><body>
+<button id="save">save</button>
+<script>
+async function load() {
+  const h = { "content-type": "application/json" };
+  await fetch("/graphql", { method: "POST", headers: h, body: JSON.stringify({ operationName: "createQuote", query: "mutation createQuote { createQuote { id } }" }) }).catch(() => {});
+  await fetch("/graphql", { method: "POST", headers: h, body: JSON.stringify({ operationName: "cancelSubscription", extensions: { persistedQuery: { version: 1, sha256Hash: "abc" } } }) }).catch(() => {});
+  await fetch("http://localhost:" + location.port + "/api/cart", { method: "POST", headers: h, body: "{}" }).catch(() => {});
+  window.loaded = true;
+}
+document.getElementById("save").onclick = () =>
+  fetch("/api/settings", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ theme: "dark" }) })
+    .then(() => (window.saved = "sent"), () => (window.saved = "blocked"));
+load();
+</script></body></html>`;
+
 function json(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -85,6 +103,8 @@ beforeAll(() => {
   writeFileSync(join(work, "broken.ts"), "export default async () => { throw new Error('nope'); };\n");
   writeFileSync(join(work, "signed-in.ts"), "export default async (page) => {\n  await page.waitForFunction(() => !!window.loaded);\n  const state = await page.evaluate(() => window.loaded);\n  if (state !== 'yes') throw new Error('page did not load: ' + state);\n};\n");
   writeFileSync(join(work, "noop.ts"), "export default async () => {};\n");
+  writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
+  writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
   server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -92,6 +112,15 @@ beforeAll(() => {
       const url = new URL(req.url);
       if (url.pathname === "/") return new Response(PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/signed-in") return new Response(SIGNED_IN_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/side-effect") return new Response(SIDE_EFFECT_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/api/settings" && req.method === "POST") {
+        writesReceived.push("POST /api/settings");
+        return json({ theme: "dark" });
+      }
+      if (url.pathname === "/api/cart" && req.method === "POST") {
+        writesReceived.push(`POST ${url.host}/api/cart`);
+        return json({ ok: true });
+      }
       if (url.pathname === "/oauth/token" && req.method === "POST") return json({ access_token: "s3cr3t-bearer-token", token_type: "Bearer" });
       if (url.pathname === "/api/session/post-login" && req.method === "POST") {
         return json({ personalInfo: { customerId: CUSTOMER_ID, cpr: "010190-1234", email: "jens.hansen@example.dk" } });
@@ -110,6 +139,10 @@ beforeAll(() => {
       if (url.pathname === "/graphql") {
         const body = (await req.json()) as { operationName: string };
         if (body.operationName === "signInUser") return json({ data: { signInUser: { ok: true } } });
+        if (body.operationName === "createQuote" || body.operationName === "cancelSubscription") {
+          writesReceived.push(body.operationName);
+          return json({ data: { [body.operationName]: { id: "q" } } });
+        }
         if (body.operationName === "addNote") {
           writesReceived.push("addNote");
           return json({ data: { addNote: { id: "n-2" } } });
@@ -153,7 +186,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(writesReceived).toEqual([]);
     expect(r.out.stoppedBy).toBe("script finished");
     expect(r.out.operations).toEqual([
-      { operation: "GET /", effect: "read", file: "GET-root.shape.json", aborted: 0 },
+      { operation: "GET /", effect: "read", navigation: true, file: "GET-root.shape.json", aborted: 0 },
       { operation: "GET /api/customers/:id/profile", effect: "read", file: "GET-api-customers-id-profile.shape.json", aborted: 0 },
       { operation: "getCustomer", effect: "read", file: "getCustomer.shape.json", aborted: 0 },
       { operation: "POST /api/notes", effect: "write", file: "POST-api-notes.shape.json", aborted: 1 },
@@ -189,7 +222,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(gql.kind).toBe("graphql");
     expect(gql.graphql.query).toBe('query getCustomer($id: ID!) { getCustomer(id: $id, hint: "") { id email cpr balance } }');
     expect(gql.request.headers["x-apollo-operation-name"]).toBe("getCustomer");
-    expect(gql.request.variables).toEqual({ type: "object", fields: { id: { type: "string" }, token: { type: "string" } } });
+    expect(gql.request.variables).toEqual({ type: "object", fields: { id: { type: "string", format: "numeric" }, token: { type: "string" } } });
 
     const note = JSON.parse(readFileSync(join(r.dir, "POST-api-notes.shape.json"), "utf8"));
     expect(note.responses).toEqual([]);
@@ -212,9 +245,12 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
       {
         status: 201,
         contentType: "application/json",
+        headers: expect.objectContaining({ "access-control-allow-origin": null, "content-type": "application/json" }),
+        setCookies: ["sid"],
         body: { kind: "json", shape: { type: "object", fields: { note: { type: "object", fields: { id: { type: "string" }, text: { type: "string" } } } } } },
       },
     ]);
+    expect(r.out.wrote).toBe("POST /api/notes");
     const add = JSON.parse(readFileSync(join(r.dir, "addNote.shape.json"), "utf8"));
     expect(add.aborted).toBe(1);
   }, 120_000);
@@ -226,7 +262,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     assertNoValues(r.everything);
     expect(writesReceived).toEqual([]);
     expect(r.out.operations).toEqual([
-      { operation: "GET /signed-in", effect: "read", file: "GET-signed-in.shape.json", aborted: 0 },
+      { operation: "GET /signed-in", effect: "read", navigation: true, file: "GET-signed-in.shape.json", aborted: 0 },
       { operation: "POST /oauth/token", effect: "write", loginFlow: true, file: "POST-oauth-token.shape.json", aborted: 0 },
       { operation: "POST /api/session/post-login", effect: "write", loginFlow: true, file: "POST-api-session-post-login.shape.json", aborted: 0 },
       { operation: "signInUser", effect: "write", loginFlow: true, file: "signInUser.shape.json", aborted: 0 },
@@ -235,12 +271,38 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     ]);
     const postLogin = JSON.parse(readFileSync(join(r.dir, "POST-api-session-post-login.shape.json"), "utf8"));
     expect(postLogin.responses[0].body.shape.fields.personalInfo.fields).toEqual({
-      customerId: { type: "string" },
+      customerId: { type: "string", format: "numeric" },
       cpr: { type: "string" },
       email: { type: "string" },
     });
     const index = JSON.parse(readFileSync(join(r.dir, "index.json"), "utf8"));
     expect(index.operations.filter((o: { loginFlow?: boolean }) => o.loginFlow).length).toBe(3);
+    // postLogin needs the bearer's claim names; the Capture has them, never their values.
+    const profile = JSON.parse(readFileSync(join(r.dir, "GET-api-customers-id-profile.shape.json"), "utf8"));
+    expect(profile.request.headers.authorization).toBeNull();
+  }, 120_000);
+
+  test("--write: writes the page fires while loading, a persisted mutation and a write to another host are aborted; the user's click goes through", async () => {
+    writesReceived = [];
+    const r = await capture(join(work, "side-effect-skill"), ["--script", join(work, "side-effect.ts"), "--write"], "/side-effect");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(writesReceived).toEqual(["POST /api/settings"]);
+    expect(r.out.wrote).toBe("POST /api/settings");
+    const byName = Object.fromEntries((r.out.operations as { operation: string }[]).map((o) => [o.operation, o]));
+    expect(byName.createQuote).toMatchObject({ effect: "write", aborted: 1 });
+    expect(byName.cancelSubscription).toMatchObject({ effect: "write", effectUnknown: true, aborted: 1 });
+    expect(byName["POST /api/settings"]).toMatchObject({ effect: "write", aborted: 0 });
+    expect(r.out.blockedElsewhere).toEqual([expect.stringMatching(/^POST localhost\/api\/cart$/)]);
+    expect(r.out.hints.join(" ")).toContain("--allow-read");
+  }, 120_000);
+
+  test("read Task: a persisted query named with --allow-read goes through; other writes do not", async () => {
+    writesReceived = [];
+    const r = await capture(join(work, "allow-read-skill"), ["--script", join(work, "loaded.ts"), "--allow-read", "cancelSubscription"], "/side-effect");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(writesReceived).toEqual(["cancelSubscription"]);
+    const op = (r.out.operations as { operation: string }[]).find((o) => o.operation === "cancelSubscription");
+    expect(op).toMatchObject({ allowedRead: true, aborted: 0 });
   }, 120_000);
 
   test("nothing recorded: an error, and the previous Capture is left alone", async () => {
@@ -277,5 +339,14 @@ describe("capture.ts flags", () => {
     const unparsable = run(["--skill-dir", work, "--task", "x", "--url", "https://a.example", "--script", join(work, "unparsable.ts")]);
     expect(unparsable.code).toBe(1);
     expect(unparsable.out.error.message).toMatch(/could not load --script .*unparsable\.ts: .*errors building.*; Expected "\)" but found "b"/);
+    expect(run(["--skill-dir", work, "--task", "x", "--url", "https://a.example", "--write-op", "addNote"]).out.error.message).toContain("--write-op needs --write");
+  });
+
+  test("--help documents every flag and the --script contract, exit 0", () => {
+    const p = Bun.spawnSync([process.execPath, CAPTURE, "--help"], { stdout: "pipe", stderr: "pipe" });
+    expect(p.exitCode).toBe(0);
+    const out = JSON.parse(p.stdout.toString());
+    expect(Object.keys(out.flags)).toEqual(["--skill-dir", "--task", "--url", "--write", "--write-op", "--allow-read", "--script", "--profile", "--headless", "--origin", "--login-host"]);
+    expect(out.notes.join(" ")).toContain("export default async (page)");
   });
 });

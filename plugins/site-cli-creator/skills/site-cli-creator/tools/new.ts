@@ -10,7 +10,7 @@ import { join, resolve } from "node:path";
 import { parseFlags, requireKebab } from "./lib/args";
 import { buildManifests, buildMarketplaces, INITIAL_VERSION, MANIFESTS, MARKETPLACES, writeJson } from "./lib/manifests";
 import { fail, progress, runTool } from "./lib/output";
-import { generatorVersion, starterDir } from "./lib/paths";
+import { generatorVersion, starterDir, toolCommand } from "./lib/paths";
 import { assertWritableDir, requireDir, setSkillMdVersion } from "./lib/scaffold";
 import { systemProbe, unmetRequirements } from "./lib/requirements";
 import { assertNoTokens, copyTemplate, type Tokens } from "./lib/template";
@@ -35,10 +35,17 @@ Problems and feature requests go to [${t.REPO}](https://github.com/${t.REPO}/iss
 `;
 }
 
+/** The gh command that creates one label; also printed for the maintainer to rerun. */
+function labelArgs(repo: string, label: (typeof LABELS)[number]): string[] {
+  return ["gh", "label", "create", label.name, "--repo", repo, "--force", "--color", label.color, "--description", label.description];
+}
+
+const shellWord = (w: string) => (/^[\w@%+=:,./-]+$/.test(w) ? w : `'${w.replace(/'/g, `'\\''`)}'`);
+
 function createLabels(repo: string): { created: string[]; failed?: string } {
   const created: string[] = [];
   for (const label of LABELS) {
-    const args = ["gh", "label", "create", label.name, "--repo", repo, "--force", "--color", label.color, "--description", label.description];
+    const args = labelArgs(repo, label);
     let proc: { success: boolean; exitCode: number | null; stderr: Buffer };
     try {
       proc = Bun.spawnSync(args, { stdout: "ignore", stderr: "pipe" });
@@ -58,13 +65,13 @@ await runTool(async () => {
   const { values } = parseFlags(
     process.argv.slice(2),
     {
-      dir: { type: "string", required: true },
-      plugin: { type: "string", required: true },
-      repo: { type: "string", required: true },
-      description: { type: "string", required: true },
-      maintainer: { type: "string", required: true },
-      "no-labels": { type: "boolean" },
-      "skip-checks": { type: "boolean" },
+      dir: { type: "string", required: true, help: "local folder of the plugin repo (empty, or only .git)" },
+      plugin: { type: "string", required: true, help: "plugin name, kebab-case" },
+      repo: { type: "string", required: true, help: "GitHub owner/name of the plugin repo" },
+      description: { type: "string", required: true, help: "one line: what agents can do with the plugin (quote it)" },
+      maintainer: { type: "string", required: true, help: "GitHub login of the maintainer (gh api user -q .login)" },
+      "no-labels": { type: "boolean", help: "do not create the repo labels (tests only)" },
+      "skip-checks": { type: "boolean", help: "skip the maintainer requirement checks (tests and CI only)" },
     },
     USAGE,
   );
@@ -125,6 +132,17 @@ await runTool(async () => {
   if (!values["no-labels"]) {
     progress(`creating labels on ${values.repo}`);
     labels = createLabels(values.repo);
+    if (labels.failed) {
+      // The loop needs these labels (the Feedback skill files with `feature`, fix uses `unverified`,
+      // add-task `needs-account`), so this is a failure; the files are written and safe to keep.
+      const created = labels.created;
+      const retry = LABELS.filter((l) => !created.includes(l.name)).map((l) => labelArgs(values.repo, l).map(shellWord).join(" "));
+      fail(
+        `the plugin's files were written to ${dir}, but creating the repo labels failed (${labels.failed}). ` +
+          "Run the commands in `retry` until they succeed, then go on with add-skill; do not run new.ts again.",
+        { dir, labels, retry, next: `${toolCommand("add-skill")} --dir ${dir} --skill <name> --origin <url> --auth login|none` },
+      );
+    }
   }
   return {
     dir,
@@ -134,6 +152,6 @@ await runTool(async () => {
     generatedWith,
     labels,
     files: [...new Set(files)].sort(),
-    next: `bun tools/add-skill.ts --dir ${dir} --skill <name> --origin <url> --auth login|none`,
+    next: `${toolCommand("add-skill")} --dir ${dir} --skill <name> --origin <url> --auth login|none`,
   };
 });

@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
-// bun tools/capture.ts --skill-dir <dir> --task <slug> --url <start> [--write]
-//   [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]...
+// bun tools/capture.ts --skill-dir <dir> --task <slug> --url <start> [--write] [--write-op <op>]
+//   [--allow-read <op>]... [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]...
 // The Capture tool (SPEC §3 step 2): drives Chrome while the user performs one
 // Task and writes shapes only to <skill>/captures/<task>/. Raw traffic stays in
-// memory and is never written anywhere.
+// memory and is never written anywhere. A read Task aborts every write on every
+// host except sign-in steps; --write lets the Task's one write through.
 
 import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -17,7 +18,14 @@ import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
 import { redactPath } from "./lib/shape";
 
 const USAGE =
-  "bun tools/capture.ts --skill-dir <dir> --task <slug> --url <start> [--write] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]";
+  "bun tools/capture.ts --skill-dir <dir> --task <slug> --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]";
+
+const NOTES = [
+  "--script <file.ts> must `export default async (page) => { ... }` (page is a Playwright Page). The tool has already opened --url (and followed its redirects, to a login host too) when the function is called; the Capture stops when it resolves. Drive the page with real input (page.click, page.fill, page.press, locators), not element.click() inside page.evaluate: --write counts only real clicks, key presses and submits.",
+  "Without --script, Chrome opens headed: the user performs the Task, then closes the browser or presses Enter in the terminal.",
+  "Hosts are host names without scheme or port (login.example.com).",
+  "The profile (~/.site-cli-creator/profile/ by default) keeps cookies between Captures; pass --profile <empty dir> to see a site set its cookies from scratch.",
+];
 
 const SETTLE_MS = 5_000;
 
@@ -105,17 +113,28 @@ await runTool(async () => {
   const { values } = parseFlags(
     process.argv.slice(2),
     {
-      "skill-dir": { type: "string", required: true },
-      task: { type: "string", required: true },
-      url: { type: "string", required: true },
-      write: { type: "boolean" },
-      script: { type: "string" },
-      profile: { type: "string" },
-      headless: { type: "boolean" },
-      origin: { type: "string" },
-      "login-host": { type: "string", multiple: true },
+      "skill-dir": { type: "string", required: true, help: "the CLI skill's folder; the Capture goes to <skill-dir>/captures/<task>/" },
+      task: { type: "string", required: true, help: "the Task's slug, kebab-case (subscription-show)" },
+      url: { type: "string", required: true, help: "the page the Task starts from" },
+      write: {
+        type: "boolean",
+        help: "a write Task: one write goes through for real, the first after the user's first click, key press or submit (writes the page fires on its own while loading are aborted)",
+      },
+      "write-op": { type: "string", help: "with --write: the write that may go through, as the Capture names it (a GraphQL operationName or REST `METHOD /path`)" },
+      "allow-read": {
+        type: "string",
+        multiple: true,
+        help: "a non-GET request that only reads (a POST search, a persisted GraphQL query), as a GraphQL operationName or a part of host/path: it goes through instead of being aborted",
+      },
+      script: { type: "string", help: "a module that drives the page instead of a person (see notes)" },
+      profile: { type: "string", help: "Chrome profile dir (default ~/.site-cli-creator/profile/)" },
+      headless: { type: "boolean", help: "no visible window; only useful with --script" },
+      origin: { type: "string", help: "record calls to this origin instead of site.ts's origin (an API on another host)" },
+      "login-host": { type: "string", multiple: true, help: "a login host not yet in site.ts; its requests are sign-in steps" },
     },
     USAGE,
+    0,
+    NOTES,
   );
   const skillDir = resolve(values["skill-dir"]);
   if (!existsSync(skillDir)) fail(`no such skill dir: ${skillDir}`);
@@ -123,10 +142,17 @@ await runTool(async () => {
   const startUrl = parseHttpUrl(values.url, "url").href;
   const script = values.script ? await loadScript(values.script) : undefined;
 
-  const hints = await siteHints(skillDir);
-  const origin = values.origin ? parseOrigin(values.origin) : (hints.origin ?? new URL(startUrl).origin);
-  const loginHosts = [...hints.loginHosts, ...values["login-host"]].map(hostname);
-  const recorder = new CaptureRecorder({ origin, loginHosts, allowWrite: values.write });
+  const site = await siteHints(skillDir);
+  const origin = values.origin ? parseOrigin(values.origin) : (site.origin ?? new URL(startUrl).origin);
+  const loginHosts = [...site.loginHosts, ...values["login-host"]].map(hostname);
+  if (values["write-op"] && !values.write) fail("--write-op needs --write");
+  const recorder = new CaptureRecorder({
+    origin,
+    loginHosts,
+    allowWrite: values.write,
+    writeOp: values["write-op"],
+    allowRead: values["allow-read"],
+  });
 
   const profile = resolve(values.profile ?? join(homedir(), ".site-cli-creator", "profile"));
   const context = await launch(profile, values.headless);
@@ -161,23 +187,50 @@ await runTool(async () => {
     p.finally(() => pending.delete(p));
   };
 
+  // --write lets through the first write after a real click, key press or submit in the page;
+  // a new main-frame document starts over, so writes a page fires on its own while loading are aborted.
+  await context.exposeBinding("__siteCliGesture", () => recorder.noteGesture());
+  await context.addInitScript(() => {
+    for (const type of ["pointerdown", "keydown", "submit"]) {
+      addEventListener(
+        type,
+        (event) => {
+          if (event.isTrusted) (window as unknown as { __siteCliGesture?: () => void }).__siteCliGesture?.();
+        },
+        true,
+      );
+    }
+  });
+  const isPageLoad = (req: Request): boolean => {
+    try {
+      return req.isNavigationRequest() && req.frame() === req.frame().page().mainFrame();
+    } catch {
+      return false; // a service worker's request has no frame
+    }
+  };
+
   context.on("request", (req) => {
     if (planOf(req)) inflight.add(req);
   });
   await context.route("**/*", async (route) => {
     const req = route.request();
     const plan = planOf(req);
-    if (plan && recorder.shouldAbort(plan)) {
+    let abort = false;
+    if (!plan && !recorder.allowElsewhere({ method: req.method(), url: req.url(), resourceType: req.resourceType() })) {
+      progress(`aborted write outside the recorded hosts: ${req.method()} ${new URL(req.url()).host} (not recorded)`);
+      abort = true;
+    } else if (plan && recorder.shouldAbort(plan)) {
       aborted.add(req);
       progress(`aborted write: ${plan.calls.map((c) => c.shape.operation).join(", ")}`);
-      await route.abort("blockedbyclient").catch(() => {});
-      return;
-    }
-    if (plan?.effect === "write") {
-      const what = plan.loginFlow ? "let sign-in step through" : "let write through";
+      abort = true;
+    } else if (plan?.effect === "write") {
+      const what = plan.loginFlow ? "let sign-in step through" : plan.allowedRead ? "let --allow-read request through" : "let write through";
       progress(`${what}: ${plan.calls.map((c) => c.shape.operation).join(", ")}`);
     }
-    await route.continue().catch(() => {});
+    // Decided first: a form POST is both the user's write and a page load.
+    if (isPageLoad(req)) recorder.noteNavigation();
+    if (abort) await route.abort("blockedbyclient").catch(() => {});
+    else await route.continue().catch(() => {});
   });
   context.on("requestfinished", (req) =>
     track(req, async () => {
@@ -245,13 +298,17 @@ await runTool(async () => {
   operations.forEach((op, i) => writeFileSync(join(dir, files[i] as string), `${JSON.stringify(op, null, 2)}\n`));
   const index = {
     task,
-    startPath: redactPath(new URL(startUrl).pathname),
+    startPath: recorder.redactValues(redactPath(new URL(startUrl).pathname)),
     write: values.write,
+    ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
     operations: operations.map((op, i) => ({
       operation: op.operation,
       kind: op.kind,
       effect: op.effect,
+      ...(op.effectUnknown ? { effectUnknown: true } : {}),
       ...(op.loginFlow ? { loginFlow: true } : {}),
+      ...(op.navigation ? { navigation: true } : {}),
+      ...(op.allowedRead ? { allowedRead: true } : {}),
       method: op.method,
       host: op.host,
       path: op.path,
@@ -263,16 +320,37 @@ await runTool(async () => {
   writeFileSync(join(dir, "index.json"), `${JSON.stringify(index, null, 2)}\n`);
 
   if (scriptError) fail(`--script failed: ${scriptError.message.split("\n")[0]} (shapes so far written to ${dir})`);
+  const blockedElsewhere = [...recorder.blockedElsewhere].sort();
+  const hints: string[] = [];
+  if (values.write && !recorder.wrote) {
+    hints.push(
+      "No write went through: none came after a click, key press or submit" +
+        (values["write-op"] ? ` and matched --write-op ${values["write-op"]}` : "") +
+        ". Check the aborted writes below and capture again (with --write-op <operation> to name the Task's write).",
+    );
+  }
+  if (operations.some((op) => op.effectUnknown)) {
+    hints.push("effectUnknown: a persisted GraphQL query (hash only) was treated as a write and aborted. If it only reads, capture again with --allow-read <operationName>.");
+  }
+  if (blockedElsewhere.length > 0) {
+    hints.push("Writes to hosts outside the recorded scope were aborted (blockedElsewhere). A sign-in host among them: add --login-host <host>. The site's own API: pass --origin <url>.");
+  }
   return {
     task,
     dir,
     stoppedBy,
-    operations: index.operations.map(({ operation, effect, loginFlow, file, aborted: n }) => ({
+    ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
+    operations: index.operations.map(({ operation, effect, effectUnknown, loginFlow, navigation, allowedRead, file, aborted: n }) => ({
       operation,
       effect,
+      ...(effectUnknown ? { effectUnknown } : {}),
       ...(loginFlow ? { loginFlow } : {}),
+      ...(navigation ? { navigation } : {}),
+      ...(allowedRead ? { allowedRead } : {}),
       file,
       aborted: n,
     })),
+    ...(blockedElsewhere.length ? { blockedElsewhere } : {}),
+    ...(hints.length ? { hints } : {}),
   };
 });

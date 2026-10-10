@@ -2,9 +2,52 @@ import type { OperationShape } from "./recorder";
 import { mergeBodies, type BodyShape, type Shape } from "./shape";
 import { propertyKey, zodSource } from "./zod-source";
 
-/** `GET /api/users/:id` → `getApiUsersId`; GraphQL names pass through. */
+const REST_NAME = /^(GET|HEAD|POST|PUT|PATCH|DELETE)\s+(\/\S*)$/;
+/** Path segments that never name the resource: `/api/v2/…`. */
+const NOISE_SEGMENT = /^(?:api|rest|v\d+|public|internal|external|gw|bff)$/i;
+
+function capitalise(word: string): string {
+  return word ? word[0]!.toUpperCase() + word.slice(1) : word;
+}
+
+function singular(noun: string): string {
+  if (/ies$/i.test(noun)) return noun.slice(0, -3) + "y";
+  if (/(?:ss|us|is)$/i.test(noun)) return noun;
+  if (/(?:ches|shes|xes|sses)$/i.test(noun)) return noun.slice(0, -2);
+  return noun.endsWith("s") ? noun.slice(0, -1) : noun;
+}
+
+/**
+ * The file name (without .ts) for an Operation. GraphQL names pass through. A REST
+ * `METHOD /path` becomes a camelCase verb + noun from its last resource segment:
+ * `GET /api/invoices` → `listInvoices`, `GET /api/invoices/:id` → `getInvoice`,
+ * `POST /api/notes` → `createNote`, `PATCH /api/notes/:id` → `updateNote`. The Contract's
+ * `name` stays `METHOD /path`; only the file is named this way.
+ */
 export function operationFileName(name: string): string {
   if (/^[A-Za-z_$][\w$]*$/.test(name)) return name;
+  const rest = REST_NAME.exec(name);
+  if (rest) {
+    const method = rest[1]!;
+    const segments = rest[2]!.split("/").filter(Boolean);
+    const byId = segments.at(-1)?.startsWith(":") ?? false;
+    const nouns = segments.filter((s) => !s.startsWith(":") && !NOISE_SEGMENT.test(s));
+    const noun = (nouns.at(-1) ?? "root").split(/[^A-Za-z0-9]+/).filter(Boolean).map((w, i) => (i === 0 ? w : capitalise(w))).join("");
+    const plural = /[^s]s$/i.test(noun) || /ies$/i.test(noun);
+    const verb =
+      method === "GET" || method === "HEAD"
+        ? byId || !plural
+          ? "get"
+          : "list"
+        : method === "POST"
+          ? "create"
+          : method === "DELETE"
+            ? "delete"
+            : "update";
+    const object = verb === "list" ? noun : singular(noun);
+    const joined = `${verb}${capitalise(object)}`;
+    if (/^[A-Za-z_$][\w$]*$/.test(joined)) return joined;
+  }
   const words = name
     .replace(/:/g, "")
     .split(/[^A-Za-z0-9]+/)
@@ -73,6 +116,10 @@ export function draftOperation(
   lines.push("");
   lines.push("export default defineOperation({");
   lines.push(`  name: ${JSON.stringify(name)},`);
+  if (op.effectUnknown) {
+    lines.push("  // A persisted query (hash only) sent by POST: nothing in the Capture says whether it writes, so it");
+    lines.push("  // was treated as a write. Declare its effect from what it does to the user's data.");
+  }
   lines.push(`  effect: ${JSON.stringify(op.effect)},`);
 
   if (op.kind === "graphql") {
@@ -114,10 +161,13 @@ export function draftOperation(
     lines.push(`  // No JSON response shape: ${why}.`);
     lines.push("  response: z.unknown(),");
   }
+  if (op.navigation) {
+    lines.push("  // A page load (a document request), not an API call: an Operation only if the page itself is the data.");
+  }
   if (op.loginFlow) {
     lines.push("  // The Capture let this through as a sign-in step: it usually belongs in site.ts (login.tokenRequest,");
     lines.push("  // postLogin or bootstrap) rather than here. If it stays an Operation, decide its effect yourself.");
-  } else if (op.effect === "write") {
+  } else if (op.effect === "write" && !op.effectUnknown) {
     lines.push("  // A write needs trigger(page): drive the UI up to this request so `check --writes` can intercept it.");
   }
   lines.push("});");

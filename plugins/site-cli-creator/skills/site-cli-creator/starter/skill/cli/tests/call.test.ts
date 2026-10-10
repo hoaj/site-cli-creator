@@ -158,6 +158,17 @@ describe("auth login", () => {
     expect(loginCalls).toEqual([true, false]);
   });
 
+  test("SITE_CLI_NONINTERACTIVE=1: a failed silent refresh is session at once, no headed Chrome", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" } });
+    const { fetch } = fakeFetch(() => json({}, 401));
+    const d = makeDeps(fetch, home.dir, [null, { authorization: "Bearer new" }]);
+    d.deps.env = { ...d.deps.env, SITE_CLI_NONINTERACTIVE: "1" };
+    const e = await failure(client(loginSite(), d.deps).call(getCustomer, { customerId: "C-1" }));
+    expect(e.kind).toBe("session");
+    expect(e.message).toContain("SITE_CLI_NONINTERACTIVE=1");
+    expect(d.loginCalls).toEqual([true]); // headless only
+  });
+
   test("login that doesn't complete → session", async () => {
     saved();
     const { fetch } = fakeFetch(() => json({}, 401));

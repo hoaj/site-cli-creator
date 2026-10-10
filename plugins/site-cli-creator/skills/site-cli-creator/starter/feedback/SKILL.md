@@ -27,10 +27,14 @@ Work only from the error envelope the CLI just printed: `kind`, `message`, `fing
 
 ### 1. Search for a match
 
-Drift and bug: search by key across open and closed issues.
+The key must reach `gh` byte for byte: a Fingerprint can hold `$`, quotes or backticks from the site's field names (`$type`, `$values`), which a shell expands inside double quotes. So put it in a variable with a quoted heredoc and use only `"$key"` afterwards, never the key pasted inside double quotes:
 
 ```sh
-gh issue list --repo __REPO__ --state all --search "\"<key>\" in:title" --json number,title,state,labels,url
+key=$(cat <<'EOF'
+<key>
+EOF
+)
+gh issue list --repo __REPO__ --state all --search "\"$key\" in:title" --json number,title,state,labels,closedAt,url
 ```
 
 Feature: list open feature requests and judge by meaning.
@@ -39,20 +43,22 @@ Feature: list open feature requests and judge by meaning.
 gh issue list --repo __REPO__ --state open --label feature --json number,title,url
 ```
 
-GitHub's search is fuzzy: for Drift and bug, a match is only an issue whose title is exactly the title step 3 would write (the Fingerprint, or `bug: <bug key>`). When `gh` is missing or not logged in, skip the search and go to step 3; step 4 gives the user a link instead.
+GitHub's search is fuzzy: for Drift and bug, a match is only an issue whose title is exactly the title step 3 would write (the Fingerprint, or `bug: <bug key>`). For Drift, also note open issues whose title starts with the same `<plugin>:<skill>:<operation>:` (the same Operation, seen another way, such as by `check` instead of a command); they are not matches, but the body names them (step 3). When `gh` is missing or not logged in, skip the search and go to step 3; step 4 gives the user a link instead.
 
 ### 2. Decide what to do
 
-Compare `fixed-in:vX.Y.Z` labels with the envelope's `version` as semantic versions.
+Compare `fixed-in:vX.Y.Z` labels with the envelope's `version` as semantic versions. Several matches are normal (a closed issue and the issue filed when it came back), so take the first row that fits, top to bottom:
 
 | Match | Action | Files a new issue |
 |---|---|---|
-| open issue | +1 comment: `+1 on <version>, <os>` | no |
+| open issue (if several, the lowest number) | +1 comment: `+1 on <version>, <os>` | no |
 | closed, `fixed-in` newer than `version` | tell the user to update the plugin and rerun | no |
 | closed, no `fixed-in` label | tell the user a fix is merged and on its way; +1 comment so a stuck release shows | no |
 | closed, `fixed-in` at or below `version` | create an issue that links the closed one (it came back) | yes |
 | feature request that looks like the same Task | ask the user whether to +1 it instead | only if they say it differs |
 | none | create an issue | yes |
+
+With no open match and several closed ones, judge the closed rows by the most recently closed match (`closedAt`), and compare `version` with the highest `fixed-in` label among all of them.
 
 ### 3. Draft
 
@@ -73,6 +79,7 @@ Body for drift and bug:
 ```
 
 <"Previously closed as #n." when step 2 links one>
+<"Same Operation: #n, #m." when step 1 noted open issues with the same operation prefix>
 ````
 
 Body for a feature: the Task in plain words, what the user expected the plugin to return or change, the `version` from `<skill> version` and the `os` from `<skill> doctor`.
@@ -84,11 +91,17 @@ A `check` envelope with several entries in `drifts` gives one issue per entry, e
 Show the user the title, body and the action from step 2 (new issue, +1 or nothing). Say it goes to `__REPO__` on GitHub. File or comment only after a yes; on a correction, show the new text and ask again. Drift is no exception.
 
 ```sh
-gh issue create --repo __REPO__ --title "<title>" [--label feature] --body-file - <<'EOF'
+title=$(cat <<'EOF'
+<title>
+EOF
+)
+gh issue create --repo __REPO__ --title "$title" [--label feature] --body-file - <<'EOF'
 <body>
 EOF
 gh issue comment <n> --repo __REPO__ --body "+1 on <version>, <os>"
 ```
+
+Set the title the same byte-exact way as the key in step 1, so the next user's search finds this issue.
 
 Without `gh`, without a login, or when `gh` is refused permission: give the user a pre-filled link to open instead, with the title, body and label URL-encoded:
 

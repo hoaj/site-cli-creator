@@ -15,10 +15,10 @@
 // | anything else thrown                                   | bug (caught in main)                 |
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, type Account, type DiffEntry } from "./envelope";
-import { driftFingerprint, zodDiff, type BreakType } from "./fingerprint";
+import { driftFingerprint, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, type Session } from "./session";
-import { decodeJwt, effectiveOrigin, isLoginHost, type Env, type Fetch, type Site, type SiteCtx } from "./site";
+import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type Site, type SiteCtx } from "./site";
 
 export type Deps = {
   fetch: Fetch;
@@ -136,6 +136,8 @@ export class Client {
   private session: Session | null;
   private readonly reauthAllowed: boolean;
   private persisted: boolean;
+  /** The account list fetched in this run, labels included. Only the ids are saved (SPEC §7). */
+  private fetchedAccounts?: Account[];
 
   constructor(site: Site, deps: Deps, options: ClientOptions = {}) {
     this.site = site;
@@ -196,6 +198,10 @@ export class Client {
     this.deps.note("signing in again from the Chrome profile (headless)");
     const refreshed = await this.signIn(true);
     if (refreshed) return refreshed;
+    if (nonInteractive(this.deps.env)) {
+      // An agent with no person at the keyboard: fail now instead of waiting for a headed sign-in.
+      throw new Failure("session", `The saved sign-in to ${this.site.origin} has expired and SITE_CLI_NONINTERACTIVE=1 is set, so Chrome was not opened.`);
+    }
     this.deps.note("opening Chrome: sign in there to continue");
     const s = await this.signIn(false);
     if (!s) throw new Failure("session", `Sign-in to ${this.site.origin} did not complete.`);
@@ -227,7 +233,7 @@ export class Client {
   call: Call = (async (op: Operation, vars: unknown) => {
     const v = op.variables.safeParse(vars);
     if (!v.success) {
-      const issues = v.error.issues.map((i) => `${i.path.join(".") || "(variables)"}: ${i.message}`).join("; ");
+      const issues = v.error.issues.map((i) => `${fieldPath(i.path, op.variables) || "(variables)"}: ${i.message}`).join("; ");
       throw new Failure("input", `${op.name}: ${issues}`);
     }
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
@@ -243,26 +249,43 @@ export class Client {
     return this.classify(op, res);
   }) as Call;
 
-  async listAccounts(): Promise<Account[]> {
+  /**
+   * The accounts under this login. A list fetched earlier is reused from session.json, ids only:
+   * labels come from the site and may name a person, so they live only in this run's memory.
+   * `refresh` fetches it again (an --account the cached list lacks, or labels to show the user).
+   */
+  async listAccounts(refresh = false): Promise<Account[]> {
     if (!this.site.accounts) return [];
     const s = await this.ensureSession();
-    if (s.accounts) return s.accounts;
+    if (this.fetchedAccounts) return this.fetchedAccounts;
+    if (!refresh && s.accounts) return s.accounts.map((a) => ({ id: String(a.id) }));
     const raw = await this.site.accounts(this.siteCtx(s, true));
     const list: Account[] = raw.map((a) => (typeof a === "string" ? { id: a } : { id: String(a.id), ...(a.label ? { label: String(a.label) } : {}) }));
+    this.fetchedAccounts = list;
     const current = this.session ?? s;
-    this.session = this.persisted ? saveSession(this.dir, { ...current, accounts: list }) : { ...current, accounts: list };
+    const next = { ...current, accounts: list.map((a) => ({ id: a.id })) };
+    // Saved only where a session is saved anyway (login, bootstrap): an auth "none" skill without
+    // bootstrap keeps nothing on disk, so a stale list can never lock it.
+    this.session = this.persisted && this.savesSession() ? saveSession(this.dir, next) : next;
     return list;
+  }
+
+  private savesSession(): boolean {
+    return this.site.auth === "login" || (this.site.bootstrap !== undefined && this.reauthAllowed);
   }
 
   /** The account a command runs for: --account (checked against the list), else the only one. */
   async resolveAccount(requested: string | undefined): Promise<string | undefined> {
-    const list = await this.listAccounts();
+    let list = await this.listAccounts();
     if (requested !== undefined) {
+      // The cached list may predate an account the user added since: look again before refusing.
+      if (list.length > 0 && !list.some((a) => a.id === requested)) list = await this.listAccounts(true);
       if (list.length > 0 && !list.some((a) => a.id === requested)) {
         throw new Failure("input", `--account ${requested} is not one of the ${list.length} accounts under this login.`, { accounts: list });
       }
       return requested;
     }
+    if (list.length > 1) list = await this.listAccounts(true); // the user picks by label
     if (list.length === 1) return list[0].id;
     if (list.length > 1) throw new Failure("input", `This login has ${list.length} accounts; pass --account <id>.`, { accounts: list });
     return undefined;
@@ -341,7 +364,7 @@ export class Client {
     if (status < 200 || status >= 300) return this.fail(op, "http", "", String(status), `unexpected HTTP ${status}`);
     const parsed = op.response.safeParse(body);
     if (parsed.success) return parsed.data;
-    const diff = zodDiff(parsed.error.issues, body);
+    const diff = zodDiff(parsed.error.issues, body, op.response);
     const first = diff[0] ?? { path: "", code: "" };
     return this.fail(op, "zod", first.path, first.code, `the response no longer matches the Contract at ${first.path || "(root)"} (${first.code})`, diff);
   }

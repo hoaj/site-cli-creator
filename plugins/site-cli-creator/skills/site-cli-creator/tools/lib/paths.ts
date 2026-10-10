@@ -22,3 +22,9 @@ export function generatorVersion(): string {
     return "0.0.0";
   }
 }
+
+/** `bun <absolute path to tools/<name>.ts>`, for the `next` hints the tools print: they work from any directory. */
+export function toolCommand(name: string): string {
+  const path = join(SKILL_ROOT, "tools", `${name}.ts`);
+  return `bun ${/\s/.test(path) ? JSON.stringify(path) : path}`;
+}

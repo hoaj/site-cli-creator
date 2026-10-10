@@ -1,6 +1,7 @@
 // `doctor`: facts for a report or a support question. Never fails: every probe degrades to a
 // finding. Prints the check command but doesn't run it.
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { findChrome, installHint } from "./chrome";
 import { osName } from "./envelope";
 import { loadSession, stateDir } from "./session";
@@ -26,7 +27,36 @@ export type DoctorOptions = {
   /** True when running as a `bun build --compile` binary. */
   compiled?: boolean;
   exists?: (path: string) => boolean;
+  /** The plugin's generated.json; by default found from the binary (bin/ → plugin root) or the source tree. */
+  generatedJson?: string;
 };
+
+/**
+ * Where the plugin's generated.json is: three levels above a compiled binary in
+ * skills/<skill>/bin/, or five above this file in skills/<skill>/cli/src/runtime/.
+ */
+export function generatedJsonPath(compiled: boolean, execPath: string, sourceDir: string = import.meta.dir): string {
+  return compiled ? resolve(dirname(execPath), "../../..", "generated.json") : resolve(sourceDir, "../../../../..", "generated.json");
+}
+
+/**
+ * generated.json's `generatedWith` and `maintainer` (SPEC §5, §13): information only, read at
+ * run time so a maintainer handover shows without a new binary. Falls back to site.ts's
+ * generatedWith when the file is missing or unreadable.
+ */
+export function readGenerated(path: string, site: Pick<Site, "generatedWith">, exists: (p: string) => boolean = existsSync) {
+  try {
+    if (exists(path)) {
+      const g = JSON.parse(readFileSync(path, "utf8")) as { generatedWith?: unknown; maintainer?: unknown };
+      return {
+        generatedWith: typeof g.generatedWith === "string" ? g.generatedWith : site.generatedWith,
+        maintainer: typeof g.maintainer === "string" ? g.maintainer : "unknown",
+        generated: path,
+      };
+    }
+  } catch {}
+  return { generatedWith: site.generatedWith, maintainer: "unknown", generated: `not found (looked at ${path})` };
+}
 
 /** Gatekeeper / SmartScreen leftovers on our own binary (SPEC §9). */
 export async function binaryFindings(path: string, platform: string, run: Exec, exists: (p: string) => boolean): Promise<string[]> {
@@ -61,6 +91,7 @@ export async function doctor(site: Site, options: DoctorOptions = {}) {
   const execPath = options.execPath ?? process.execPath;
   const exists = options.exists ?? existsSync;
   const dir = stateDir(site, env);
+  const generated = readGenerated(options.generatedJson ?? generatedJsonPath(!!options.compiled, execPath), site, exists);
 
   let session: string;
   try {
@@ -101,7 +132,9 @@ export async function doctor(site: Site, options: DoctorOptions = {}) {
     plugin: site.plugin,
     skill: site.skill,
     version: site.version,
-    generatedWith: site.generatedWith,
+    generatedWith: generated.generatedWith,
+    maintainer: generated.maintainer,
+    generated: generated.generated,
     bun: Bun.version,
     os: osName(platform),
     auth: site.auth,

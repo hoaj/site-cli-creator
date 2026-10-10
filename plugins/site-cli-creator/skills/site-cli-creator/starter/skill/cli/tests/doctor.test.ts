@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { chromeCandidates, chromeLaunchOptions, findChrome } from "../src/runtime/chrome";
-import { binaryFindings, doctor, type Exec } from "../src/runtime/doctor";
+import { binaryFindings, doctor, generatedJsonPath, readGenerated, type Exec } from "../src/runtime/doctor";
 import { saveSession } from "../src/runtime/session";
 import { loginSite, makeSite, tempHome } from "./helpers";
 
@@ -104,5 +104,29 @@ describe("doctor", () => {
     expect(out).not.toBe("threw");
     expect((out as any).gh.installed).toBe(false);
     expect((out as any).binary.findings).toEqual([]);
+  });
+});
+
+describe("doctor and generated.json (SPEC §5, §13)", () => {
+  test("prints generatedWith and maintainer from generated.json, so a handover shows without a new binary", async () => {
+    const { writeFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const file = join(home.dir, "generated.json");
+    writeFileSync(file, JSON.stringify({ generatedWith: "0.0.9", maintainer: "alice" }));
+    const out = await doctor(loginSite(), { env: { SITE_CLI_HOME: home.dir }, exec: async () => ({ code: 1, stdout: "" }), generatedJson: file });
+    expect(out).toMatchObject({ generatedWith: "0.0.9", maintainer: "alice", generated: file });
+  });
+
+  test("without generated.json it falls back to site.ts's generatedWith and says where it looked", () => {
+    expect(readGenerated("/nowhere/generated.json", { generatedWith: "0.1.0" })).toEqual({
+      generatedWith: "0.1.0",
+      maintainer: "unknown",
+      generated: "not found (looked at /nowhere/generated.json)",
+    });
+  });
+
+  test("found next to the plugin root from the binary and from the source tree", () => {
+    expect(generatedJsonPath(true, "/p/skills/shop/bin/shop")).toBe("/p/generated.json");
+    expect(generatedJsonPath(false, "/usr/bin/bun", "/p/skills/shop/cli/src/runtime")).toBe("/p/generated.json");
   });
 });

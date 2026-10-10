@@ -85,6 +85,8 @@ describe("new.ts", () => {
     const r = run(NEW, newArgs(dir, ["--no-labels"]));
     expect(r.code).toBe(0);
     expect(r.out).toMatchObject({ plugin: "shop", repo: "acme/shop-plugin", version: "0.1.0", labels: "skipped" });
+    // `next` works from any directory: it names the tool by its absolute path.
+    expect(r.out.next).toStartWith(`bun ${join(SKILL_ROOT, "tools", "add-skill.ts")} --dir ${dir}`);
 
     const claude = readJson(join(dir, ".claude-plugin/plugin.json"));
     expect(claude).toEqual({
@@ -155,7 +157,7 @@ describe("new.ts", () => {
     expect(run(NEW, newArgs(join(work, "x"), ["--no-labels"]), { STARTER_DIR: join(work, "missing") }).out.error.message).toContain("starter/plugin");
   });
 
-  test("creates the three labels with gh, and reports a gh failure", () => {
+  test("creates the three labels with gh; a gh failure is an error that keeps the files and says how to retry", () => {
     const bin = join(work, "gh-bin");
     const log = join(work, "gh.log");
     write(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${log}"\n[ -n "$GH_FAIL" ] && { echo "HTTP 403" >&2; exit 1; }\nexit 0\n`, 0o755);
@@ -169,17 +171,24 @@ describe("new.ts", () => {
       expect(calls[i]).toStartWith(`label create ${name} --repo acme/shop-plugin --force`);
     }
     const failed = run(NEW, newArgs(join(work, "plugin-labels-fail")), { ...env, GH_FAIL: "1" });
-    expect(failed.out.labels.created).toEqual([]);
-    expect(failed.out.labels.failed).toContain("HTTP 403");
-    expect(failed.code).toBe(0);
+    expect(failed.code).toBe(1);
+    expect(failed.out.error.labels.created).toEqual([]);
+    expect(failed.out.error.labels.failed).toContain("HTTP 403");
+    expect(failed.out.error.message).toContain("files were written");
+    expect(failed.out.error.retry).toHaveLength(3);
+    expect(failed.out.error.retry[0]).toStartWith("gh label create feature --repo acme/shop-plugin --force");
+    expect(failed.out.error.retry[0]).toContain("--description 'A Task the plugin");
+    expect(failed.out.error.next).toContain("add-skill.ts --dir");
+    expect(existsSync(join(work, "plugin-labels-fail", "generated.json"))).toBe(true);
 
-    // No gh at all: the plugin is still written and new exits 0, reporting the labels it could not make.
+    // No gh at all: the plugin is still written; new fails and lists the labels it could not make.
     const noGh = join(work, "no-gh-bin");
     mkdirSync(noGh, { recursive: true });
     const missing = run(NEW, newArgs(join(work, "plugin-no-gh")), { PATH: noGh });
-    expect(missing.code).toBe(0);
-    expect(missing.out.labels.created).toEqual([]);
-    expect(missing.out.labels.failed).toContain("gh label create feature");
+    expect(missing.code).toBe(1);
+    expect(missing.out.error.labels.created).toEqual([]);
+    expect(missing.out.error.labels.failed).toContain("gh label create feature");
+    expect(missing.out.error.retry.map((c: string) => c.split(" ")[3])).toEqual(["feature", "unverified", "needs-account"]);
     expect(existsSync(join(work, "plugin-no-gh", "generated.json"))).toBe(true);
   });
 });
@@ -296,6 +305,30 @@ describe("add-skill.ts", () => {
     expect(readJson(join(plugin, ".claude-plugin/plugin.json")).skills).toEqual(["./skills/shop-feedback", "./skills/shop-web"]);
     expect(readJson(join(plugin, ".github/plugin/plugin.json")).skills).toEqual(["./skills/shop-feedback", "./skills/shop-web"]);
     expect(readJson(join(plugin, ".codex-plugin/plugin.json")).skills).toBe("./skills/");
+  });
+
+  test("generatedWith comes from generated.json (the version the plugin was created with), and next is absolute", () => {
+    const generated = join(plugin, "generated.json");
+    const before = readFileSync(generated, "utf8");
+    writeFileSync(generated, JSON.stringify({ generatedWith: "0.0.9", maintainer: "alice" }));
+    try {
+      const r = run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-old", "--origin", "https://old.shop.example", "--auth", "none"]);
+      expect(r.code).toBe(0);
+      expect(readFileSync(join(plugin, "skills/shop-old/cli/src/site.ts"), "utf8")).toContain('generatedWith: "0.0.9"');
+      expect(r.out.next).toStartWith(`bun ${join(SKILL_ROOT, "tools", "capture.ts")} --skill-dir `);
+    } finally {
+      writeFileSync(generated, before);
+      rmSync(join(plugin, "skills/shop-old"), { recursive: true, force: true });
+    }
+  });
+
+  test("--help prints usage and every flag's meaning, exit 0", () => {
+    for (const [tool, flags] of [[NEW, ["--dir", "--plugin", "--repo", "--description", "--maintainer", "--no-labels", "--skip-checks"]], [ADD_SKILL, ["--dir", "--skill", "--origin", "--auth"]]] as const) {
+      const r = run(tool, ["--help"]);
+      expect(r.code).toBe(0);
+      expect(Object.keys(r.out.flags)).toEqual([...flags]);
+      for (const meaning of Object.values(r.out.flags) as string[]) expect(meaning.length).toBeGreaterThan(5);
+    }
   });
 
   test("takes the version from the plugin manifest", () => {

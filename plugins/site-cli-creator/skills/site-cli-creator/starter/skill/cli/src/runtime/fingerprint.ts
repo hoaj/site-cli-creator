@@ -1,5 +1,6 @@
 // Identity of a failure across all users, so the Feedback skill can deduplicate reports.
-// Drift:  plugin:skill:operation:breakType:path:code   (array indices written [];
+// Drift:  plugin:skill:operation:breakType:path:code   (array indices written [], record and
+//         map keys written {} because they are the site's data, e.g. an email or a phone number;
 //         REST params in the operation written {param}, so the only colons are separators:
 //         shop:shop:GET /api/invoices/{id}:http::404)
 // Bug:    plugin:skill:bug:<command-with-dashes>:<ErrorName>:<frame>
@@ -18,12 +19,83 @@ export function operationSegment(operation: string): string {
   return operation.replace(/:([A-Za-z_$][\w$]*)/g, "{$1}");
 }
 
-/** `["data","list",0,"status"]` → `data.list[].status`. */
-export function fieldPath(path: readonly PropertyKey[]): string {
+/** Zod 4's internal definition of a schema, or undefined for anything else. */
+function defOf(schema: unknown): any {
+  return (schema as { _zod?: { def?: unknown } } | null | undefined)?._zod?.def;
+}
+
+/** The schema behind wrappers that do not change where a key sits (optional, nullable, default, pipe, lazy…). */
+function unwrap(schema: unknown): unknown {
+  for (let i = 0; i < 32; i++) {
+    const def = defOf(schema);
+    if (!def) return schema;
+    if (["optional", "nullable", "default", "prefault", "catch", "readonly", "nonoptional", "success"].includes(def.type)) schema = def.innerType;
+    else if (def.type === "pipe") schema = def.in;
+    else if (def.type === "lazy") schema = def.getter();
+    else return schema;
+  }
+  return schema;
+}
+
+/** The schema at one key, and whether the key is a declared field name (true) or the site's data (false). */
+function step(schema: unknown, key: string): { schema: unknown; declared: boolean } {
+  const s = unwrap(schema);
+  const def = defOf(s);
+  if (!def) return { schema: undefined, declared: !isDataKey(key) };
+  switch (def.type) {
+    case "object":
+      return key in def.shape ? { schema: def.shape[key], declared: true } : { schema: def.catchall, declared: false };
+    case "record":
+    case "map":
+      return { schema: def.valueType, declared: false };
+    case "union":
+      for (const option of def.options ?? []) {
+        const hit = step(option, key);
+        if (hit.declared) return hit;
+      }
+      return { schema: undefined, declared: false };
+    case "intersection": {
+      const left = step(def.left, key);
+      return left.declared ? left : step(def.right, key);
+    }
+    default:
+      return { schema: undefined, declared: !isDataKey(key) };
+  }
+}
+
+/** The schema at one array index. */
+function stepIndex(schema: unknown, index: number): unknown {
+  const def = defOf(unwrap(schema));
+  if (def?.type === "array") return def.element;
+  if (def?.type === "tuple") return def.items?.[index] ?? def.rest;
+  return undefined;
+}
+
+/** Without a schema to tell: a key that is not a plain identifier, or that looks like an id, email, phone or name, is data. */
+function isDataKey(key: string): boolean {
+  if (!/^[A-Za-z_$][\w$]*$/.test(key)) return true;
+  return key.length > 48 || key.replace(/\D/g, "").length >= 4;
+}
+
+/**
+ * `["data","list",0,"status"]` → `data.list[].status`. With the schema the path was checked
+ * against, a key that is not a declared field (a z.record or z.map key, an unknown key) is the
+ * site's data, such as an email or a phone number, and is written `{}`, like an index is `[]`.
+ * Without a schema, keys that do not look like field names are written `{}`.
+ */
+export function fieldPath(path: readonly PropertyKey[], schema?: unknown): string {
   let out = "";
+  let current: unknown = schema;
   for (const seg of path) {
-    if (typeof seg === "number") out += "[]";
-    else out += (out ? "." : "") + String(seg);
+    if (typeof seg === "number") {
+      out += "[]";
+      current = stepIndex(current, seg);
+      continue;
+    }
+    const key = String(seg);
+    const next = schema === undefined ? { schema: undefined, declared: !isDataKey(key) } : step(current, key);
+    out += (out ? "." : "") + (next.declared ? key : "{}");
+    current = next.schema;
   }
   return out;
 }
@@ -46,12 +118,12 @@ function valueAt(root: unknown, path: readonly PropertyKey[]): unknown {
 
 type Issue = { code: string; path: readonly PropertyKey[]; expected?: unknown };
 
-/** Zod issues → diff entries without values, one per distinct path + code. */
-export function zodDiff(issues: readonly Issue[], input: unknown, limit = 20): DiffEntry[] {
+/** Zod issues → diff entries without values, one per distinct path + code. Pass the schema so record keys stay out. */
+export function zodDiff(issues: readonly Issue[], input: unknown, schema?: unknown, limit = 20): DiffEntry[] {
   const seen = new Set<string>();
   const out: DiffEntry[] = [];
   for (const issue of issues) {
-    const path = fieldPath(issue.path);
+    const path = fieldPath(issue.path, schema);
     const key = `${path}:${issue.code}`;
     if (seen.has(key)) continue;
     seen.add(key);
