@@ -45,6 +45,30 @@ describe("request building", () => {
     expect(JSON.parse(patch.body!)).toEqual({ name: "New" });
   });
 
+  test("REST bodyType form: the body is form-urlencoded, not JSON", () => {
+    const formRename = defineOperation({
+      ...renameOrder,
+      rest: { method: "PATCH", path: "/api/orders/:orderId", bodyType: "form", body: (v) => ({ name: v.name, tags: ["a", "b&c"], none: undefined }) },
+    });
+    const r = buildRequest(formRename, { orderId: "7", name: "New Name" }, { origin: "https://x.test", headers: {} });
+    expect(r.headers["content-type"]).toBe("application/x-www-form-urlencoded");
+    expect(r.body).toBe("name=New+Name&tags=a&tags=b%26c");
+    expect(new URLSearchParams(r.body).get("name")).toBe("New Name");
+    // JSON stays the default.
+    expect(buildRequest(renameOrder, { orderId: "7", name: "N" }, { origin: "https://x.test", headers: {} }).headers["content-type"]).toBe("application/json");
+    // A form body must be flat: a nested object has no form encoding.
+    const nested = defineOperation({ ...formRename, rest: { ...formRename.rest!, body: () => ({ a: { b: 1 } }) } });
+    expect(() => buildRequest(nested, { orderId: "7", name: "N" }, { origin: "https://x.test", headers: {} })).toThrow(/form/);
+  });
+
+  test("a form write is sent form-encoded with --confirm", async () => {
+    const formRename = defineOperation({ ...renameOrder, rest: { ...renameOrder.rest!, bodyType: "form" } });
+    const { fetch, calls } = fakeFetch(() => json({ ok: true }));
+    await client(makeSite(), makeDeps(fetch, home.dir).deps, true).call(formRename, { orderId: "7", name: "N" });
+    expect(calls[0].headers["content-type"]).toBe("application/x-www-form-urlencoded");
+    expect(calls[0].body).toBe("name=N");
+  });
+
   test("session headers are sent with every call", async () => {
     saved({ authorization: "Bearer cached", cookie: "sid=1" });
     const { fetch, calls } = fakeFetch(() => json({ data: { getCustomer: { id: "C-1", name: "n" } } }));

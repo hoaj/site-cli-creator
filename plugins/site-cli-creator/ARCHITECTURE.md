@@ -132,7 +132,7 @@ type Operation = {
   name: string;                         // GraphQL operationName, or "METHOD /path/:param"
   effect: "read" | "write";
   graphql?: string;                     // trimmed query text
-  rest?: { method: "GET"|"POST"|"PUT"|"PATCH"|"DELETE"; path: string; body?: (vars) => unknown; query?: (vars) => Record<string,string> };
+  rest?: { method: "GET"|"POST"|"PUT"|"PATCH"|"DELETE"; path: string; body?: (vars) => unknown; bodyType?: "json"|"form"; query?: (vars) => Record<string,string> };
   variables: z.ZodType;                 // validated before any call → input
   response: z.ZodType;                  // only fields the CLI reads → Zod failure is Drift
   needs?: Record<string, { from: "session"; key: string } | { from: string; pick: (result: any) => unknown }>;
@@ -140,7 +140,7 @@ type Operation = {
 };
 ```
 
-REST `path` params are written `:name` and filled from variables. GraphQL Operations POST `{operationName, query, variables}` to `origin + graphqlPath`.
+REST `path` params are written `:name` and filled from variables. `body(vars)` is sent as JSON (`application/json`), or with `bodyType: "form"` form-urlencoded (`buildRequest`: a flat object; arrays repeat their key, undefined/null are left out, a nested object is a ContractError). One variables convention for REST, shared by `draft-contract` (tools/lib/draft.ts) and `check --writes` (`capturedVariables`): path params, query keys and the body's fields are all top-level variables (`body: (v) => ({ name: v.name })`); a body that is no object is the variable `body`; a body keyed by data (a Shape `record`) drafts as `.catchall(...)` with `body: ({ <url keys>, ...body }) => body`. GraphQL Operations POST `{operationName, query, variables}` to `origin + graphqlPath`.
 
 ### command.ts — `defineCommand`
 
@@ -210,7 +210,8 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
 
 - Orders read Operations by `needs` (topological). Resolves each variable from `session` or from an earlier result via `pick`.
 - `--op <name>` checks one Operation (with its chain). `--writes` also runs each write Operation's `trigger(page)` in Chrome (login profile, or a fresh temp profile for auth none), intercepts the matching request with `page.route`, compares the request body shape to the Contract's `variables`, and aborts it. `check` never writes.
-- While a trigger runs, every request gets `triggerVerdict(site, target, declaredWrites, reads, origin, req)`: the target write is captured and aborted; GET/HEAD/OPTIONS pass; another declared write is aborted; a non-GET passes only when it goes to a login host, is a declared read Operation, matches `login.tokenRequest` (auth login), matches `site.readOnlyRequests`, or is a GraphQL document whose query text is no mutation; a GraphQL mutation that is not a declared read is aborted even when `tokenRequest`/`readOnlyRequests` matches its URL; everything else is aborted. `WriteChecker = (writes, reads, declaredWrites?) => Promise<Map<name, DriftEntry|null>>`.
+- The intercepted body is read by its content-type (`parseCaptured`): form-urlencoded into an object of its fields, otherwise JSON when it parses, else text. For a REST write with a `body`, a request whose encoding (json/form, from its content-type) differs from `rest.bodyType` is request Drift with code `body_type` (`expected`/`received` are the encodings).
+- While a trigger runs, every request gets `triggerVerdict(site, target, declaredWrites, reads, origin, req)`: the target write is captured and aborted; GET/HEAD/OPTIONS pass; another declared write is aborted; a login host passes; a GraphQL request (a POST to `site.graphqlPath` on the origin, or a non-form body with a document carrying `query` text or `extensions.persistedQuery`) is decided by its documents alone and never by a URL rule: it passes only when every document's operation (`graphqlOperation`: the definition `operationName` selects, else the only definition or the `{ … }` shorthand, scanning all top-level definitions as tools/lib/graphql.ts `describeQuery` does) is a query, or its `operationName` names a declared GraphQL read; a mutation or subscription, no query text (persisted, hash only), several definitions without `operationName`, an `operationName` the text does not define, or an empty batch aborts. Any other non-GET passes only when it is a declared read Operation, matches `login.tokenRequest` (auth login) or matches `site.readOnlyRequests`; everything else is aborted. `matchesOperation` names a GraphQL document by that same selected operation. `WriteChecker = (writes, reads, declaredWrites?) => Promise<Map<name, DriftEntry|null>>`.
 - A network, session or input failure on one Operation does not discard Drift already found: the Operation gets a `failed` row (reason: the kind), and `check` goes on (after a session failure it reaches nothing more). If anything drifted it exits 3 with every drift (the message counts the Operations it could not check); otherwise it exits with the first other failure's kind.
 - Result: `{ ok: true, operations: [{operation, effect, status: "ok"|"skipped"}] }` or a drift Failure with `drifts`.
 

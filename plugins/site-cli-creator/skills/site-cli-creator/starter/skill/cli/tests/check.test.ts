@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { run } from "../src/main";
-import { chainOrder, capturedVariables, check, compareWrite, isDeclaredRead, isReadOnlyRequest, matchesOperation, triggerStep, triggerVerdict, withChain, type WriteChecker } from "../src/runtime/check";
+import { chainOrder, capturedVariables, check, compareWrite, isDeclaredRead, isReadOnlyRequest, matchesOperation, parseCaptured, triggerStep, triggerVerdict, withChain, type WriteChecker } from "../src/runtime/check";
 import { Failure } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
 import { saveSession } from "../src/runtime/session";
@@ -235,9 +235,52 @@ describe("check over writes", () => {
     expect(triggerVerdict(s, renameOrder, [renameOrder], reads, origin, req("POST", `${origin}/graphql`, { operationName: "createQuote", query: "mutation createQuote { x }" }))).toBe("abort");
     const readMutation = defineOperation({ ...listProducts, name: "createQuote" });
     expect(triggerVerdict(s, renameOrder, [renameOrder], [readMutation], origin, req("POST", `${origin}/graphql`, { operationName: "createQuote", query: "mutation createQuote { x }" }))).toBe("pass");
-    expect(triggerVerdict(s, renameOrder, [renameOrder], [], origin, req("POST", `${origin}/graphql`, { operationName: "persisted", extensions: {} }))).toBe("pass");
+    // A document with no query text (persisted, hash only) may write: it passes only as a declared read, never on tokenRequest.
+    expect(triggerVerdict(s, renameOrder, [renameOrder], [], origin, req("POST", `${origin}/graphql`, { operationName: "persisted", extensions: {} }))).toBe("abort");
     // tokenRequest only counts for login skills.
     expect(triggerVerdict(makeSite(), renameOrder, writes, [], origin, req("POST", `${origin}/graphql`, { operationName: "p", extensions: {} }))).toBe("abort");
+  });
+
+  test("triggerVerdict: a mutation anywhere in a GraphQL document is aborted, whatever URL rule matches", () => {
+    // tokenRequest "/graphql" (loginSite) and readOnlyRequests both name the GraphQL endpoint.
+    const s = loginSite({ readOnlyRequests: ["/graphql"] });
+    const reads = [getCustomer, listProducts];
+    const v = (body: unknown, url = `${origin}/graphql`) => triggerVerdict(s, renameOrder, [renameOrder], reads, origin, req("POST", url, body));
+    // A fragment before the mutation.
+    expect(v({ query: "fragment F on Quote { id }\nmutation createQuote { createQuote { ...F } }" })).toBe("abort");
+    expect(v({ operationName: "createQuote", query: "fragment F on Quote { id } mutation createQuote { createQuote { ...F } }" })).toBe("abort");
+    // A query first, and operationName selects the mutation after it.
+    expect(v({ operationName: "createQuote", query: "query a { x }\nmutation createQuote { y }" })).toBe("abort");
+    // ...but when operationName selects the query, only the query runs.
+    expect(v({ operationName: "a", query: "query a { x }\nmutation createQuote { y }" })).toBe("pass");
+    // Several operations and no operationName: not clear which runs.
+    expect(v({ query: "query a { x }\nmutation createQuote { y }" })).toBe("abort");
+    // An operationName the text does not define.
+    expect(v({ operationName: "nope", query: "query a { x } mutation b { y }" })).toBe("abort");
+    // Persisted (hash only): a write unless its operationName is a declared read.
+    expect(v({ operationName: "createQuote", variables: {}, extensions: { persistedQuery: { sha256Hash: "h" } } })).toBe("abort");
+    expect(v({ extensions: { persistedQuery: { sha256Hash: "h" } } })).toBe("abort");
+    expect(v({ operationName: "listProducts", extensions: { persistedQuery: { sha256Hash: "h" } } })).toBe("pass");
+    // A batch with one hidden mutation, and a query document that names a read but runs a mutation.
+    expect(v([{ operationName: "getCustomer", query: "query getCustomer { x }" }, { query: "fragment F on Q { id } mutation m { y }" }])).toBe("abort");
+    expect(v([])).toBe("abort");
+    // Not a GraphQL document at all, sent to the GraphQL endpoint: aborted.
+    expect(v("not json")).toBe("abort");
+    expect(v({ query: "search words" })).toBe("abort");
+    // The same rules hold for a GraphQL document sent to another path.
+    expect(v({ query: "fragment F on Q { id } mutation m { y }" }, `${origin}/api/gql`)).toBe("abort");
+    // Mutation words in comments, strings, field names and fragments are no mutation.
+    expect(v({ query: "# mutation\nquery a { mutation(arg: \"mutation x { }\") { id } }" })).toBe("pass");
+    expect(v({ query: "{ x { ...F } } fragment F on X { id }" })).toBe("pass");
+    expect(v({ operationName: "a", query: "fragment F on X { id } query a { x { ...F } }" })).toBe("pass");
+    // Subscriptions are not reads.
+    expect(v({ query: "subscription s { x }" })).toBe("abort");
+  });
+
+  test("matchesOperation: the GraphQL operation that runs, not the first definition", () => {
+    const gql = defineOperation({ ...listProducts, name: "createQuote", effect: "write" });
+    expect(matchesOperation(site, gql, origin, req("POST", `${origin}/graphql`, { query: "fragment F on Q { id }\nmutation createQuote { x { ...F } }" }))).toBe(true);
+    expect(matchesOperation(site, gql, origin, req("POST", `${origin}/graphql`, { operationName: "a", query: "query a { x } mutation createQuote { y }" }))).toBe(false);
   });
 
   test("isReadOnlyRequest: strings match the URL path, RegExps the whole URL", () => {
@@ -270,6 +313,33 @@ describe("check over writes", () => {
       diff: [{ path: "name", code: "invalid_type", expected: "string", received: "undefined" }],
     });
     expect(JSON.stringify(changed)).not.toContain("SECRET");
+  });
+
+  test("parseCaptured reads a request body by its content-type: JSON, form, else text", () => {
+    expect(parseCaptured('{"name":"N"}', "application/json; charset=utf-8")).toEqual({ name: "N" });
+    expect(parseCaptured("name=New+Name&tag=a%26b", "application/x-www-form-urlencoded;charset=UTF-8")).toEqual({ name: "New Name", tag: "a&b" });
+    // A form body is never read as JSON, even when its text happens to parse.
+    expect(parseCaptured("1", "application/x-www-form-urlencoded")).toEqual({ "1": "" });
+    expect(parseCaptured('{"a":1}', undefined)).toEqual({ a: 1 });
+    expect(parseCaptured("plain", "text/plain")).toBe("plain");
+    expect(parseCaptured(null, "application/json")).toBeUndefined();
+  });
+
+  test("compareWrite: a form write passes against a form request, and the body encoding is part of its shape", () => {
+    const formRename = defineOperation({ ...renameOrder, rest: { ...renameOrder.rest!, bodyType: "form" } });
+    const form = { method: "PATCH", url: new URL(`${origin}/api/orders/7`), body: parseCaptured("name=New", "application/x-www-form-urlencoded"), contentType: "application/x-www-form-urlencoded" };
+    expect(capturedVariables(formRename, form)).toEqual({ orderId: "7", name: "New" });
+    expect(compareWrite(site, formRename, form)).toBeNull();
+    // The page switched from a form post to JSON (or back): request Drift, with type names only.
+    const asJson = { method: "PATCH", url: new URL(`${origin}/api/orders/7`), body: { name: "New" }, contentType: "application/json" };
+    expect(compareWrite(site, formRename, asJson)).toEqual({
+      operation: renameOrder.name,
+      fingerprint: "acme:shop:PATCH /api/orders/{orderId}:request::body_type",
+      diff: [{ path: "", code: "body_type", expected: "form", received: "json" }],
+    });
+    expect(compareWrite(site, renameOrder, form)!.diff).toEqual([{ path: "", code: "body_type", expected: "json", received: "form" }]);
+    // No content-type (or another one) says nothing about the encoding.
+    expect(compareWrite(site, renameOrder, req("PATCH", `${origin}/api/orders/7`, { name: "New" }))).toBeNull();
   });
 
   test("compareWrite: trigger errors and missing requests are trigger drift", () => {
