@@ -14,6 +14,8 @@ import { makeSite, tempHome } from "./helpers";
 const skip = !findChrome().path || process.env.SITE_CLI_SKIP_BROWSER === "1";
 const home = tempHome();
 const received: string[] = [];
+/** The GraphQL documents the site received, by operationName or "?" . */
+const graphqlReceived: string[] = [];
 
 const page = (script: string) =>
   new Response(`<!doctype html><html><body><button id="save">Save</button><script>${script}</script></body></html>`, {
@@ -70,7 +72,26 @@ const server = Bun.serve({
         navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready)
           .then(() => (navigator.serviceWorker.controller ? ready() : navigator.serviceWorker.addEventListener("controllerchange", ready)));
         document.getElementById("save").onclick = () => fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});`);
-    if (url.pathname === "/graphql") return Response.json({ data: { ok: true } });
+    // A form post (fetch with URLSearchParams sends application/x-www-form-urlencoded).
+    if (url.pathname === "/form-orders")
+      return page(`
+        document.getElementById("save").onclick = () => fetch("/api/orders/5", { method: "PATCH", body: new URLSearchParams({ name: "New" }) }).catch(() => {});`);
+    // Before the write, the page sends mutations a first-definition test misses: a fragment first,
+    // a query first with operationName selecting the mutation, and a persisted mutation (hash only).
+    if (url.pathname === "/sneaky-orders")
+      return page(`
+        const gql = (body) => fetch("/graphql", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }).catch(() => {});
+        document.getElementById("save").onclick = async () => {
+          await gql({ operationName: "fragFirst", query: "fragment F on Order { id }\\nmutation fragFirst { cancelOrder { ...F } }" });
+          await gql({ operationName: "selected", query: "query other { x }\\nmutation selected { cancelOrder { id } }" });
+          await gql({ operationName: "hashOnly", extensions: { persistedQuery: { sha256Hash: "h" } } });
+          await gql({ operationName: "plainQuery", query: "fragment F on Order { id }\\nquery plainQuery { order { ...F } }" });
+          fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});
+        };`);
+    if (url.pathname === "/graphql") {
+      if (req.method === "POST") graphqlReceived.push((await req.clone().json().catch(() => ({}))).operationName ?? "?");
+      return Response.json({ data: { ok: true } });
+    }
     return Response.json({ ok: true });
   },
 });
@@ -178,6 +199,35 @@ describe.skipIf(skip)("Chrome", () => {
     expect((await chromeWriteChecker(undeclared, env)([op], [])).get(op.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#save'):TimeoutError");
     expect(received).not.toContain("POST /api/session/post-login");
     expect(received.filter((r) => r.startsWith("PATCH") || r === "POST /api/track")).toEqual([]);
+  }, 90_000);
+
+  test("check --writes reads a form post by its content-type: a form Contract passes, a JSON one drifts", async () => {
+    received.length = 0;
+    const s = makeSite({ origin: server.url.origin });
+    const trigger = async (p: any) => {
+      await p.goto("/form-orders");
+      await p.click("#save");
+    };
+    const form = defineOperation({ ...rename(trigger), rest: { method: "PATCH", path: "/api/orders/:orderId", bodyType: "form", body: (v) => ({ name: v.name }) } });
+    const checker = chromeWriteChecker(s, { SITE_CLI_HOME: home.dir });
+    expect((await checker([form], [])).get(form.name)).toBeNull();
+    const asJson = (await checker([rename(trigger)], [])).get(form.name)!;
+    expect(asJson.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:request::body_type");
+    expect(asJson.diff).toEqual([{ path: "", code: "body_type", expected: "json", received: "form" }]);
+    expect(received.filter((r) => r.startsWith("PATCH"))).toEqual([]);
+  }, 90_000);
+
+  test("check --writes aborts a GraphQL mutation that is not the first definition, or sent as a hash, although tokenRequest matches /graphql", async () => {
+    received.length = 0;
+    graphqlReceived.length = 0;
+    const op = rename(async (p) => {
+      await p.goto("/sneaky-orders");
+      await p.click("#save");
+    });
+    expect((await chromeWriteChecker(site(), { SITE_CLI_HOME: home.dir })([op], [])).get(op.name)).toBeNull();
+    // Only the query got through; every mutation (and the write) was aborted.
+    expect(graphqlReceived).toEqual(["plainQuery"]);
+    expect(received.filter((r) => r.startsWith("PATCH"))).toEqual([]);
   }, 90_000);
 
   test("selftest: fetch, Chrome launch on a temp profile, and one request aborted with net::ERR_FAILED", async () => {

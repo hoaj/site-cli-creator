@@ -20,14 +20,19 @@ export type Operation<V extends z.ZodType = z.ZodType, R extends z.ZodType = z.Z
   /** Trimmed GraphQL query: only the fields the CLI reads. POSTed to origin + site.graphqlPath. */
   graphql?: string;
   /**
-   * REST request. `:name` segments in `path` are filled from variables. For `check --writes`,
-   * the intercepted request's path params, query and JSON body fields are merged and checked
-   * against `variables`.
+   * REST request. `:name` segments in `path` are filled from variables. `body` builds the request
+   * body from variables, sent as JSON, or form-urlencoded when `bodyType` is "form" (a flat object
+   * of strings, numbers, booleans or arrays of them). For `check --writes`, the intercepted request's
+   * path params, query and body fields (JSON or form, by its content-type) are merged into one object
+   * and checked against `variables`; a body that is no object is the variable `body`. So a Contract
+   * keeps each body field a top-level variable: `body: (v) => ({ name: v.name })`.
    */
   rest?: {
     method: Method;
     path: string;
     body?(vars: z.output<V>): unknown;
+    /** How `body` is encoded: "json" (the default) or "form" (application/x-www-form-urlencoded). */
+    bodyType?: "json" | "form";
     query?(vars: z.output<V>): Record<string, string>;
   };
   /** Validated before any call; a failure is `input` and nothing is sent. */

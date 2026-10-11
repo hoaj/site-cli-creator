@@ -2,6 +2,8 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { buildRequest } from "../starter/skill/cli/src/runtime/call";
+import { capturedVariables, compareWrite, parseCaptured } from "../starter/skill/cli/src/runtime/check";
 import { draftOperation, namePathParams, operationFileName } from "../tools/lib/draft";
 import { GENERATOR_ROOT, SKILL_ROOT } from "../tools/lib/paths";
 import { CaptureRecorder, type OperationShape, type RequestInfo } from "../tools/lib/recorder";
@@ -126,13 +128,69 @@ describe("draftOperation", () => {
     const op = await importDraft("patchInvoice.ts", source);
     expect(op.rest?.method).toBe("PATCH");
     expect(op.rest?.path).toBe("/api/customers/:id/invoices/:id2");
-    const vars = { id: "1", id2: "2", status: "open", page: "1", body: { note: "n", flags: { pinned: true } } };
+    // A JSON object body's fields are variables of their own, next to path params and query (as check reads them).
+    const vars = { id: "1", id2: "2", status: "open", page: "1", note: "n", flags: { pinned: true } };
     expect(op.variables.safeParse(vars).success).toBe(true);
     expect(op.rest?.query?.(vars)).toEqual({ status: "open", page: "1" });
-    expect(op.rest?.body?.(vars)).toEqual(vars.body);
+    expect(op.rest?.body?.(vars)).toEqual({ note: "n", flags: { pinned: true } });
+    expect(op.rest).not.toHaveProperty("bodyType");
     expect(op.effect).toBe("write");
     expect(op.response.safeParse({ invoice: { id: "I", total: 1, lines: [] } }).success).toBe(true);
     expect(source).toContain("trigger(page)");
+  });
+
+  test("a drafted REST write passes check --writes against a page that sends exactly the captured body", async () => {
+    const page = { note: "n", flags: { pinned: true } };
+    const [write] = capture([
+      { req: { url: `${ORIGIN}/api/customers/123456/notes`, method: "POST", headers: { "content-type": "application/json" }, postData: json(page) }, aborted: true },
+    ]) as [OperationShape];
+    const op = (await importDraft("createNote.ts", draftOperation(write).source)) as any;
+    const site = { plugin: "p", skill: "s" } as any;
+    const captured = { method: "POST", url: new URL(`${ORIGIN}/api/customers/123456/notes`), body: page, contentType: "application/json" };
+    expect(compareWrite(site, op, captured)).toBeNull();
+    // ...and the CLI sends the same body back.
+    const sent = buildRequest(op, capturedVariables(op, captured), { origin: ORIGIN, headers: {} });
+    expect(JSON.parse(sent.body!)).toEqual(page);
+    expect(sent.headers["content-type"]).toBe("application/json");
+    // A body that changed shape is still request Drift.
+    expect(compareWrite(site, op, { ...captured, body: { text: "n" } })?.fingerprint).toBe("p:s:POST /api/customers/{id}/notes:request:note:invalid_type");
+  });
+
+  test("a form-urlencoded REST write drafts bodyType form, and check and call agree on it", async () => {
+    const [write] = capture([
+      { req: { url: `${ORIGIN}/api/orders/7`, method: "PATCH", headers: { "content-type": "application/x-www-form-urlencoded" }, postData: Buffer.from("name=New+Name&qty=2") }, aborted: true },
+    ]) as [OperationShape];
+    const { source } = draftOperation(write);
+    expect(source).toContain('bodyType: "form"');
+    const op = (await importDraft("updateOrder.ts", source)) as any;
+    const site = { plugin: "p", skill: "s" } as any;
+    const contentType = "application/x-www-form-urlencoded";
+    const captured = { method: "PATCH", url: new URL(`${ORIGIN}/api/orders/7`), body: parseCaptured("name=New+Name&qty=2", contentType), contentType };
+    expect(compareWrite(site, op, captured)).toBeNull();
+    const sent = buildRequest(op, capturedVariables(op, captured), { origin: ORIGIN, headers: {} });
+    expect(sent.headers["content-type"]).toBe(contentType);
+    expect(sent.body).toBe("name=New+Name&qty=2");
+  });
+
+  test("a JSON body that is not an object stays one `body` variable", async () => {
+    const [write] = capture([
+      { req: { url: `${ORIGIN}/api/tags`, method: "PUT", headers: { "content-type": "application/json" }, postData: json(["a", "b"]) }, aborted: true },
+    ]) as [OperationShape];
+    const op = (await importDraft("updateTag.ts", draftOperation(write).source)) as any;
+    const captured = { method: "PUT", url: new URL(`${ORIGIN}/api/tags`), body: ["a", "b"], contentType: "application/json" };
+    expect(compareWrite({ plugin: "p", skill: "s" } as any, op, captured)).toBeNull();
+    expect(JSON.parse(buildRequest(op, capturedVariables(op, captured), { origin: ORIGIN, headers: {} }).body!)).toEqual(["a", "b"]);
+  });
+
+  test("a JSON object body keyed by data: its keys are variables too, and check agrees", async () => {
+    const page = { "12345678": { qty: 1 }, "87654321": { qty: 2 } };
+    const [write] = capture([
+      { req: { url: `${ORIGIN}/api/carts/42?mode=x`, method: "PUT", headers: { "content-type": "application/json" }, postData: json(page) }, aborted: true },
+    ]) as [OperationShape];
+    const op = (await importDraft("updateCart.ts", draftOperation(write).source)) as any;
+    const captured = { method: "PUT", url: new URL(`${ORIGIN}/api/carts/42?mode=x`), body: page, contentType: "application/json" };
+    expect(compareWrite({ plugin: "p", skill: "s" } as any, op, captured)).toBeNull();
+    expect(JSON.parse(buildRequest(op, capturedVariables(op, captured), { origin: ORIGIN, headers: {} }).body!)).toEqual(page);
   });
 
   test("aborted write: unknown response, still compiles", async () => {
@@ -154,7 +212,7 @@ describe("draftOperation", () => {
   test("drafts type-check against the runtime's Operation type", () => {
     const tsc = Bun.spawnSync(
       [process.execPath, "x", "tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "esnext", "--module", "esnext",
-        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts"].map((f) => join(work, "cli", "src", "operations", f))],
+        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts"].map((f) => join(work, "cli", "src", "operations", f))],
       { cwd: GENERATOR_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("");

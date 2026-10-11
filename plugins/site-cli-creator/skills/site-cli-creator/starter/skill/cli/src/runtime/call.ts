@@ -72,10 +72,33 @@ export function buildRequest(op: Operation, vars: unknown, base: { origin: strin
   }
   let body: string | undefined;
   if (op.rest.body) {
-    body = JSON.stringify(op.rest.body(vars));
-    headers["content-type"] = "application/json";
+    const value = op.rest.body(vars);
+    if (op.rest.bodyType === "form") {
+      body = formBody(op.name, value);
+      headers["content-type"] = "application/x-www-form-urlencoded";
+    } else {
+      body = JSON.stringify(value);
+      headers["content-type"] = "application/json";
+    }
   }
   return { method: op.rest.method, url: url.toString(), headers, body };
+}
+
+/** A form-urlencoded body from a flat object: arrays repeat their key, undefined and null are left out. */
+function formBody(name: string, value: unknown): string {
+  if (value instanceof URLSearchParams) return value.toString();
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new ContractError(`${name}: a form body (bodyType "form") must be an object of fields`);
+  const form = new URLSearchParams();
+  const add = (key: string, v: unknown) => {
+    if (v === undefined || v === null) return;
+    if (typeof v === "object") throw new ContractError(`${name}: form field ${key} is an object; a form body (bodyType "form") holds only strings, numbers, booleans and arrays of them`);
+    form.append(key, String(v));
+  };
+  for (const [key, v] of Object.entries(value)) {
+    if (Array.isArray(v)) for (const item of v) add(key, item);
+    else add(key, v);
+  }
+  return form.toString();
 }
 
 async function readBody(r: Response): Promise<unknown> {

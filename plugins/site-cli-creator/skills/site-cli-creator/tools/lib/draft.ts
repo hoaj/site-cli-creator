@@ -137,20 +137,39 @@ export function draftOperation(
     const { path, params } = namePathParams(op.path);
     const queryKeys = objectFields(op.request.query);
     const body = op.request.body;
-    const jsonBody = body && (body.kind === "json" || body.kind === "form") ? body.shape : undefined;
+    const bodyShape = body && (body.kind === "json" || body.kind === "form") ? body.shape : undefined;
+    // One convention with check --writes (capturedVariables): an object body's fields are top-level
+    // variables next to path params and query; any other body is the one variable `body`.
+    const bodyFields = bodyShape?.type === "object" ? bodyShape : undefined;
+    const fieldKeys = bodyFields ? Object.keys(bodyFields.fields) : [];
+    const optional = new Set(bodyFields?.optional ?? []);
+    const urlKeys = [...params, ...queryKeys.filter((k) => !params.includes(k))];
     const rest: string[] = [`method: ${JSON.stringify(op.method)}`, `path: ${JSON.stringify(path)}`];
     if (queryKeys.length) {
       const pairs = queryKeys.map((k) => `${propertyKey(k)}: v[${JSON.stringify(k)}]`).join(", ");
       rest.push(`query: (v) => ({ ${pairs} })`);
     }
-    if (jsonBody) rest.push("body: (v) => v.body");
+    if (bodyFields) {
+      const pairs = fieldKeys.map((k) => `${propertyKey(k)}: v[${JSON.stringify(k)}]`).join(", ");
+      rest.push(pairs ? `body: (v) => ({ ${pairs} })` : "body: () => ({})");
+    } else if (bodyShape?.type === "record") {
+      // Keyed by data (ids, dates): the keys are top-level variables too, so the body is every variable but the URL's.
+      const omit = urlKeys.map((k, i) => `${JSON.stringify(k)}: _${i}, `).join("");
+      rest.push(`body: ({ ${omit}...body }) => body`);
+    } else if (bodyShape) rest.push("body: (v) => v.body");
+    if (body?.kind === "form") rest.push('bodyType: "form"');
+    const clash = fieldKeys.filter((k) => urlKeys.includes(k));
+    if (clash.length) {
+      lines.push(`  // ${clash.join(", ")}: in the URL and in the body. One variable carries both, and check compares the body's value.`);
+    }
     lines.push(`  rest: { ${rest.join(", ")} },`);
     const varLines = [
-      ...params.map((p) => `    ${propertyKey(p)}: z.string(),`),
-      ...queryKeys.filter((k) => !params.includes(k)).map((k) => `    ${propertyKey(k)}: z.string(),`),
-      ...(jsonBody ? [`    body: ${indent(zodSource(jsonBody, 0), 2)},`] : []),
+      ...urlKeys.filter((k) => !fieldKeys.includes(k)).map((k) => `    ${propertyKey(k)}: z.string(),`),
+      ...fieldKeys.map((k) => `    ${propertyKey(k)}: ${indent(zodSource(bodyFields!.fields[k], 0), 2)}${optional.has(k) ? ".optional()" : ""},`),
+      ...(bodyShape && !bodyFields && bodyShape.type !== "record" ? [`    body: ${indent(zodSource(bodyShape, 0), 2)},`] : []),
     ];
-    lines.push(varLines.length ? `  variables: z.object({\n${varLines.join("\n")}\n  }),` : "  variables: z.object({}),");
+    const catchall = bodyShape?.type === "record" ? `.catchall(${indent(zodSource(bodyShape.values, 0), 1)})` : "";
+    lines.push(varLines.length ? `  variables: z.object({\n${varLines.join("\n")}\n  })${catchall},` : `  variables: z.object({})${catchall},`);
   }
 
   const body = successBody(op);

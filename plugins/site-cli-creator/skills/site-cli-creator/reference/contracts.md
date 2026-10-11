@@ -37,7 +37,7 @@ One file per Operation: `cli/src/operations/<file>.ts`, `export default defineOp
 | `name` | GraphQL: the frontend's `operationName`, unchanged. REST: `"GET /api/invoices/:id"`, with `:name` params filled from `variables`. In a Fingerprint the params are written `{name}`: `shop:shop:GET /api/invoices/{id}:http::404` |
 | `effect` | `write` when the call changes the user's data on the site, whatever its method; else `read` |
 | `graphql` | the frontend's operation with every selection the command does not read removed; keep its name, arguments and variable definitions |
-| `rest` | `{ method, path, query?: (vars) => ({...}), body?: (vars) => ({...}) }`; build the body the Capture shows from `variables` |
+| `rest` | `{ method, path, query?: (vars) => ({...}), body?: (vars) => ({...}), bodyType?: "json" \| "form" }`; build the body the Capture shows from `variables` (below) |
 | `variables` | every input the call takes, as Zod; a failure is exit 2 (input) and nothing is sent |
 | `response` | only the fields the command reads (below) |
 | `needs` | where each variable comes from (below) |
@@ -61,6 +61,12 @@ export default defineOperation({
   needs: { id: { from: "GET /api/invoices", pick: (r) => r.invoices[0]?.id } },
 });
 ```
+
+### REST request bodies
+
+Every body field is a variable of its own, next to the path params and the query: `body: (v) => ({ name: v.name, qty: v.qty })` with `variables: z.object({ orderId, name, qty })`. `check --writes` reads the intercepted request the same way (path params, query and body fields merged into one object) and checks it against `variables`, so a nested `body` variable would be Drift on every check. Only a body that is no object (a JSON array or scalar) is the one variable `body`, sent with `body: (v) => v.body`. `draft-contract.ts` drafts it this way.
+
+`bodyType` says how the body is sent: `"json"` (the default, `application/json`) or `"form"` (`application/x-www-form-urlencoded`, a flat object of strings, numbers, booleans or arrays of them). Keep the one the Capture's request used; the draft sets `"form"` from its content-type. Form values arrive as strings, so their variables are `z.string()`. `check --writes` reads the intercepted body by its content-type, and a page that switches encoding is request Drift (`body_type`).
 
 ### Cutting `response` down
 
@@ -156,7 +162,7 @@ export default defineCommand({
 - `tokenRequest`: a substring or RegExp of a request with an `authorization` header that **every** load of the start page sends, even when already signed in: frontends often cache their token, so a token or post-login call seen in the first Capture may never come again. Compare two Captures of the same page and pick one that is in both (usually the API or GraphQL endpoint). For cookie-only sites, a path that only answers 2xx when logged in.
 - `postLogin` returns ids and nothing else. Which JWT claims it needs is in the Capture: `request.bearerClaims` in a shape file lists the bearer's claim names and types (never values). A post-login response often carries names, national ids, addresses, emails and phone numbers: parse the one field you need with Zod and drop the rest.
 - `bootstrap` uses plain `fetch` only. Which cookie it needs is in the Capture: `responses[].setCookies` names the cookies a response set (the front page, usually), and the API shapes list the request headers that carry it back (`cookie`, `x-csrf-token`). A site that needs a real browser or a solved challenge to answer is behind a bot wall: out of scope.
-- `readOnlyRequests`: while `check --writes` runs a `trigger`, GET requests pass, and so do non-GET requests to a login host, to `tokenRequest` (login skills), to a declared read Operation, to a `readOnlyRequests` entry, and GraphQL documents whose query text is no mutation. Every other non-GET request is aborted, so an undeclared write never reaches the site. A declared write Operation and a GraphQL mutation that is not a declared read are aborted even when `tokenRequest` or `readOnlyRequests` matches their URL. List a request here only when it changes no data; when a page waits for an aborted POST, its `trigger` times out and `check` reports trigger Drift. Capture's `loginFlow: true` calls usually belong here or in `postLogin`.
+- `readOnlyRequests`: while `check --writes` runs a `trigger`, GET requests pass, and so do non-GET requests to a login host, to `tokenRequest` (login skills), to a declared read Operation and to a `readOnlyRequests` entry. Every other non-GET request is aborted, so an undeclared write never reaches the site. A declared write Operation is aborted even when one of these rules matches its URL. A GraphQL request (a POST to `graphqlPath`, or a GraphQL document sent anywhere) is decided by its documents alone, never by `tokenRequest` or `readOnlyRequests`: it passes only when every document runs a query (the definition its `operationName` selects, else its only one; a fragment first does not hide a mutation) or is named as a declared read Operation. A persisted query sent as a hash only passes when its `operationName` is a declared read, so declare the page's persisted reads as Operations. List a request here only when it changes no data; when a page waits for an aborted POST, its `trigger` times out and `check` reports trigger Drift. Capture's `loginFlow: true` calls usually belong here or in `postLogin`.
 - `accounts` labels are what the user recognises (a product name, the last digits of a number), never a full personal identifier. Only the ids are saved; labels are fetched again when the user must choose.
 
 ```ts
