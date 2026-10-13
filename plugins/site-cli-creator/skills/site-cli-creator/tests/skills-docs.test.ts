@@ -216,6 +216,18 @@ describe("SPEC behaviours in the skills", () => {
     expect(pkg.scripts.typecheck).toBe("tsc --noEmit -p .");
   });
 
+  test("fix mode re-captures first, then signs the CLI in from the Capture profile, so the maintainer signs in once (cold read)", () => {
+    const fix = read(join(GEN, "reference/fix.md"));
+    const drift = fix.slice(fix.indexOf("## 2a. Drift"), fix.indexOf("### Unverified"));
+    expect(drift).toContain("login --from-profile ~/.site-cli-creator/profile");
+    expect(drift.indexOf("tools/capture.ts")).toBeGreaterThan(-1);
+    expect(drift.indexOf("tools/capture.ts")).toBeLessThan(drift.indexOf("login --from-profile"));
+    const md = read(join(GEN, "SKILL.md"));
+    const line = md.split("\n").find((l) => l.startsWith("- Drift:")) ?? "";
+    expect(line).toContain("login --from-profile");
+    expect(line.indexOf("re-capture")).toBeLessThan(line.indexOf("login --from-profile"));
+  });
+
   test("session row says auth none never exits 4", () => {
     expect(read(join(GEN, "starter/skill/SKILL.md"))).toMatch(/\| 4 \| session \|.*only skills with `login`/);
   });
