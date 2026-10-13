@@ -18,7 +18,7 @@ import { copyExpected, OPERATION_NAMES } from "../fixtures/expected/copy";
 import { ACCOUNT, INVOICES, newStore, SUBSCRIPTIONS, USER } from "../fixtures/site/data";
 import { startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
 import { findChrome } from "../starter/skill/cli/src/runtime/chrome";
-import { SKILL_ROOT } from "../tools/lib/paths";
+import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 
 const TOOLS = join(SKILL_ROOT, "tools");
 const BUN = process.execPath;
@@ -230,7 +230,7 @@ for (const auth of ["none", "login"] as const) {
       expect(added.code, added.stderr).toBe(0);
       expect(added.out).toMatchObject({ plugin: PLUGIN, skill, auth, version: "0.1.0" });
 
-      const copied = copyExpected(auth, join(cliDir, "src"), { plugin: PLUGIN, skill, repo: REPO, generatorVersion: "0.1.0", origin: site.url });
+      const copied = copyExpected(auth, join(cliDir, "src"), { plugin: PLUGIN, skill, repo: REPO, generatorVersion: generatorVersion(), origin: site.url });
       expect(copied).toContain("site.ts");
       expect(copied.filter((f) => f.startsWith("commands/")).length).toBe(4);
 

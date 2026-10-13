@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { GENERATOR_ROOT, SKILL_ROOT } from "../tools/lib/paths";
+import { GENERATOR_ROOT, generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 import { commandsTable, helpCommands, registrySource, replaceCommandsBlock, setNeedsChrome } from "../tools/lib/regen";
 
 const REGEN = join(SKILL_ROOT, "tools", "regen.ts");
@@ -271,7 +271,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code and the fixtur
         plugin: "shop",
         skill: "shop",
         repo: "acme/shop",
-        generatorVersion: "0.1.0",
+        generatorVersion: generatorVersion(),
         origin: "http://127.0.0.1:9",
       });
       const site = join(skill, "cli/src/site.ts");
