@@ -59,8 +59,9 @@ describe("check over reads", () => {
       ["listProducts", { customerId: "C-1" }],
       ["getInvoice", { productId: "P1" }],
     ]);
+    // A warning means check did not cover everything: ok is false, but the exit stays 0 (no Drift, SPEC §10).
     expect(result).toEqual({
-      ok: true,
+      ok: false,
       operations: [
         { operation: "getCustomer", effect: "read", status: "ok" },
         { operation: "listProducts", effect: "read", status: "ok" },
@@ -90,6 +91,7 @@ describe("check over reads", () => {
     // A constant that does not fit the variables schema can never be checked either: skipped, with a warning.
     const wrong = defineOperation({ ...search, needs: { limit: { value: "one" }, sortBy: { value: "BestMatch" } } });
     const skipped = await check(client(makeSite(), makeDeps(fetch, home.dir).deps), [wrong], {});
+    expect(skipped.ok).toBe(false);
     expect(skipped.operations).toEqual([{ operation: "GET /api/search/suppliers", effect: "read", status: "skipped", reason: "never checkable: the needs entry for limit does not fit variables (expected number)" }]);
     expect(skipped.warnings).toEqual([
       'GET /api/search/suppliers is never checked: the needs entry for limit does not fit variables (expected number). Change each constant to fit the variable\'s schema (a REST query variable drafted as z.string() takes { value: "1" }, not { value: 1 }).',
@@ -381,6 +383,17 @@ describe("check over writes", () => {
     expect(triggerStep(err("page.goto: net::ERR_CONNECTION_REFUSED"))).toBe("");
     expect(triggerStep(err(`x\n  - waiting for locator('${"#a".repeat(100)}')`)).length).toBe(80);
   });
+});
+
+test("check through run(): warnings make ok false but keep exit 0 (a Contract gap, not Drift; SPEC §10)", async () => {
+  const app = makeApp(makeSite(), makeDeps(fakeFetch(happySite).fetch, home.dir).deps);
+  const r = await run(["check"], app);
+  expect(r.code).toBe(0);
+  expect((r.output as any).ok).toBe(false);
+  expect((r.output as any).warnings).toEqual([expect.stringContaining("GET /api/orders/:orderId is never checked")]);
+  const clean = await run(["check", "--op", "getCustomer"], app);
+  expect((clean.output as any).ok).toBe(true);
+  expect((clean.output as any).warnings).toBeUndefined();
 });
 
 test("check through run(): --op and drift envelope with drifts[] (exit 3)", async () => {

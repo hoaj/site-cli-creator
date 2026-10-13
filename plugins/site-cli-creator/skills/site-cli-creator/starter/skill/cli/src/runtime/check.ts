@@ -15,7 +15,8 @@ import { effectiveOrigin, isLoginHost, tokenMatches, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
 /** `warnings`: read Operations that can never be checked (a required variable nothing in `needs` supplies). */
-export type CheckResult = { ok: true; operations: CheckRow[]; warnings?: string[] };
+/** `ok` is false when `warnings` lists an Operation check could not cover; the exit stays 0 (no Drift). */
+export type CheckResult = { ok: boolean; operations: CheckRow[]; warnings?: string[] };
 export type CheckOptions = { op?: string; writes?: boolean; account?: string };
 /**
  * Checks write Operations; returns one entry per Operation, null when its request still matches.
@@ -172,7 +173,7 @@ export async function check(client: Client, operations: Operation[], options: Ch
     throw new Failure("drift", `check: ${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation).join(", ")}.${also}`, { drifts });
   }
   if (stopped) throw stopped;
-  return { ok: true, operations: rows, ...(warnings.length ? { warnings } : {}) };
+  return { ok: warnings.length === 0, operations: rows, ...(warnings.length ? { warnings } : {}) };
 }
 
 /**
