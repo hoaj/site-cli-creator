@@ -1,0 +1,59 @@
+{
+  "operation": "GET /",
+  "kind": "rest",
+  "effect": "read",
+  "navigation": true,
+  "resourceType": "document",
+  "host": "www.mylogbuy.com",
+  "method": "GET",
+  "path": "/",
+  "request": {
+    "headers": {
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+      "baggage": null,
+      "cookie": null,
+      "next-router-state-tree": null,
+      "next-url": null,
+      "referer": null,
+      "rsc": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "upgrade-insecure-requests": null,
+      "user-agent": null,
+      "x-deployment-id": null
+    },
+    "query": {
+      "type": "object",
+      "fields": {
+        "_rsc": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 307,
+      "contentType": "text/html",
+      "headers": {
+        "cache-control": null,
+        "content-type": "text/html",
+        "date": null,
+        "location": null,
+        "server": null,
+        "strict-transport-security": null,
+        "x-vercel-id": null
+      },
+      "setCookies": [
+        "language"
+      ],
+      "body": {
+        "kind": "empty"
+      }
+    }
+  ],
+  "seen": 2,
+  "aborted": 0
+}
