@@ -16,8 +16,9 @@ export type LoginOptions = {
   env?: Env;
   note?: (m: string) => void;
   /**
-   * Another Chrome profile that is already signed in (the Capture tool's): its cookies for the site
-   * origin and the login hosts seed this sign-in, in memory only, so the user signs in once.
+   * Another Chrome profile that is already signed in (the Capture tool's): its cookies for the
+   * site's hosts and the login hosts seed this sign-in, in memory only, so the user signs in once.
+   * The sign-in then runs in a Chrome context that keeps nothing on disk, not in the CLI's profile.
    */
   fromProfile?: string;
 };
@@ -94,6 +95,29 @@ export async function launch(site: Site, userDataDir: string, headless: boolean,
 }
 
 /**
+ * Chrome with no user-data dir of the CLI's own (an incognito-style context): cookies added to it
+ * stay in memory and go when it closes. Close it with closeContext(), which closes the browser too.
+ */
+export async function launchInMemory(site: Site, headless: boolean, env: Env = process.env): Promise<BrowserContext> {
+  const missing = chromeMissing(site, env);
+  if (missing) throw missing;
+  const { chromium } = await import("playwright-core");
+  const browser = await chromium.launch({ ...chromeLaunchOptions(findChrome(env)), headless });
+  try {
+    return await browser.newContext({ baseURL: effectiveOrigin(site, env), viewport: headless ? { width: 1280, height: 900 } : null });
+  } catch (error) {
+    await browser.close().catch(() => {});
+    throw error;
+  }
+}
+
+/** Closes a context from launch() or launchInMemory(), and the browser launchInMemory() started. */
+async function closeContext(context: BrowserContext): Promise<void> {
+  await context.close().catch(() => {});
+  await context.browser()?.close().catch(() => {});
+}
+
+/**
  * How long a sign-in may take: site.login.timeoutMs (10 min by default) for the headed login, at
  * most 30 s for the headless refresh. Under SITE_CLI_TEST=1, env SITE_CLI_LOGIN_TIMEOUT_MS
  * replaces site.login.timeoutMs, so tests of a sign-in that never completes don't wait 10 minutes.
@@ -117,8 +141,10 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Re
     if (seed.length === 0) return null;
     options.note?.(`signing in with ${seed.length} cookie(s) from ${options.fromProfile} (kept in memory)`);
   }
-  const profile = ensureStateDir(profileDir(ensureStateDir(stateDir(site, env))));
-  const context = await launch(site, profile, headless, env);
+  // Seeded cookies stay in memory: the sign-in runs in a context with no profile on disk.
+  const context = seed.length
+    ? await launchInMemory(site, headless, env)
+    : await launch(site, ensureStateDir(profileDir(ensureStateDir(stateDir(site, env)))), headless, env);
   try {
     if (seed.length) await context.addCookies(seed);
     const done = new Promise<Request | "logged-out" | null>((resolve) => {
@@ -162,6 +188,6 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Re
     else if (sent.cookie) headers.cookie = sent.cookie;
     return headers;
   } finally {
-    await context.close().catch(() => {});
+    await closeContext(context);
   }
 }
