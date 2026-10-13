@@ -79,7 +79,11 @@ async function launch(profile: string, headless: boolean): Promise<BrowserContex
 /** How often a headed Capture reminds stderr that it is still recording (SITE_CLI_CAPTURE_HINT_MS overrides). */
 const HINT_MS = Number(process.env.SITE_CLI_CAPTURE_HINT_MS) || 30_000;
 
-type Stop = { reason: Promise<string>; dispose(): void };
+/** How long a failed --script waits for the stop its failure may come from (the Task window closing). */
+const STOP_GRACE_MS = 1_000;
+
+/** `stoppedBy` is set the moment the Capture stops, before `reason`'s callbacks run. */
+type Stop = { reason: Promise<string>; readonly stoppedBy?: string; dispose(): void };
 
 /**
  * What ends a Capture besides a --script finishing: the browser closing; the Task window (the first
@@ -88,8 +92,13 @@ type Stop = { reason: Promise<string>; dispose(): void };
  * Capture (how an agent ends a Capture it runs in the background); and Enter in the terminal.
  */
 function watchStop(context: BrowserContext, first: Page, inScope: (url: string) => boolean, interactive: boolean): Stop {
-  let done!: (reason: string) => void;
-  const reason = new Promise<string>((resolve) => (done = resolve));
+  let stoppedBy: string | undefined;
+  let resolveReason!: (reason: string) => void;
+  const reason = new Promise<string>((resolve) => (resolveReason = resolve));
+  const done = (why: string) => {
+    stoppedBy ??= why;
+    resolveReason(stoppedBy);
+  };
   context.on("close", () => done("browser closed"));
   const onPageClose = (closed: Page, lastUrl: string) => {
     const open = context.pages().filter((p) => p !== closed && !p.isClosed());
@@ -122,6 +131,9 @@ function watchStop(context: BrowserContext, first: Page, inScope: (url: string) 
   }
   return {
     reason,
+    get stoppedBy() {
+      return stoppedBy;
+    },
     dispose() {
       process.off("SIGINT", onSignal);
       process.off("SIGTERM", onSignal);
@@ -316,17 +328,18 @@ await runTool(async () => {
     else progress(`could not open --url (${(error as Error).message.split("\n")[0]}); navigate in the browser`);
   }
   if (script && !scriptError) {
-    let stopped = false;
     const finished = script(page).then(
       () => "script finished",
-      (error) => {
-        // A script still waiting when the Task window closed fails with it; that is no script error.
-        if (!stopped) scriptError = error as Error;
+      async (error) => {
+        // A script still waiting when the Task window closed fails with it: that is the stop, not a
+        // script error. Its failure can arrive just before the close event, so wait briefly for it.
+        const stopped = stop.stoppedBy ?? (await Promise.race([stop.reason, Bun.sleep(STOP_GRACE_MS).then(() => undefined)]));
+        if (stopped) return stopped;
+        scriptError = error as Error;
         return "script failed";
       },
     );
     stoppedBy = await Promise.race([finished, stop.reason]);
-    stopped = true;
   } else if (script) {
     stoppedBy = "script failed";
   } else {
