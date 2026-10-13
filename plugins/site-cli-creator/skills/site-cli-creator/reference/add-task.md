@@ -30,7 +30,7 @@ The tool records calls to the origin in `site.ts`; when the site's API lives on 
 
 What goes through:
 
-- **Read Task:** every write is aborted, on every host, except sign-in steps (a token or post-login request, a sign-in form on a login host). Writes on hosts outside the Capture are listed in `blockedElsewhere`: a sign-in host there needs `--login-host`; the site's own API needs `--origin`.
+- **Read Task:** every write is aborted, on every host, except sign-in steps (a token or post-login request, a sign-in form on a login host). Writes on hosts outside the Capture are listed in `blockedElsewhere`: a sign-in host there needs `--login-host`; the site's own API needs `--origin`. `loginHosts` names the hosts the sign-in went through; a hint names those site.ts `login.hosts` still lacks.
 - **Write Task (`--write`):** one write goes through for real: the first one after the user's first click, key press or form submit in the page. Writes a page fires on its own while loading (YouSee's `createQuote`) are aborted. Say so before starting, and agree on a harmless write (a setting they can revert). The output's `wrote` names the write that went through; if it is not the Task's write, or `hints` says none went through, capture again with `--write-op <operation>` (its name from the first Capture's aborted writes).
 - **A POST that only reads** (a search, a persisted GraphQL query sent as a hash, marked `effectUnknown`) is aborted too, and the page may break. Capture again with `--allow-read <operationName or host/path part>` for each one, once you are sure it changes nothing.
 
