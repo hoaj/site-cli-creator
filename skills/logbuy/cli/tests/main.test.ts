@@ -1,6 +1,7 @@
 // Routing, flag parsing, envelopes, dry runs and --account, through main's run().
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { isEntry, parseFlags, run, splitGlobals } from "../src/main";
 import { defineCommand } from "../src/runtime/command";
@@ -290,6 +291,36 @@ describe("login", () => {
     expect(code).toBe(4);
     expect(errorOf(output).next).toContain("shop login");
     expect(loginCalls).toEqual([false]);
+  });
+
+  test("login --from-profile signs in headless from that profile; when it does not carry over → session (exit 4)", async () => {
+    const seen: unknown[] = [];
+    const { deps } = makeDeps(fakeFetch(happySite).fetch, home.dir);
+    const answers = [{ authorization: "Bearer t" }, null];
+    deps.login = async (headless, options) => {
+      seen.push({ headless, options });
+      return answers.shift() ?? null;
+    };
+    const ok = await run(["login", "--from-profile", "/tmp/capture-profile"], makeApp(loginSite(), deps));
+    expect(ok.code).toBe(0);
+    expect(ok.output).toEqual({ loggedIn: true, fromProfile: true, stateDir: home.dir, ids: ["customerId"] });
+    expect(seen).toEqual([{ headless: true, options: { fromProfile: "/tmp/capture-profile" } }]);
+    const failed = await run(["login", "--from-profile", "/tmp/capture-profile"], makeApp(loginSite(), deps));
+    expect(failed.code).toBe(4);
+    expect(errorOf(failed.output).message).toContain("run login without --from-profile");
+  });
+
+  test("login --from-profile=~/<dir> expands the ~ the shell left alone (review)", async () => {
+    const seen: unknown[] = [];
+    const { deps } = makeDeps(fakeFetch(happySite).fetch, home.dir);
+    deps.login = async (_headless, options) => {
+      seen.push(options?.fromProfile);
+      return { authorization: "Bearer t" };
+    };
+    for (const arg of ["--from-profile=~/.site-cli-creator/profile", "--from-profile=~"]) {
+      expect((await run(["login", arg], makeApp(loginSite(), deps))).code).toBe(0);
+    }
+    expect(seen).toEqual([join(homedir(), ".site-cli-creator", "profile"), homedir()]);
   });
 
   test("a login skill without a session signs in before running the command", async () => {

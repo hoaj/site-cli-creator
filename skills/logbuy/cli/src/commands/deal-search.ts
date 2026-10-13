@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineCommand } from "../runtime/command";
 import searchSuppliers from "../operations/searchSuppliers";
-import { toDeal } from "../deals";
+import { toDeal } from "../lib/deals";
 
 export default defineCommand({
   name: "deal search",

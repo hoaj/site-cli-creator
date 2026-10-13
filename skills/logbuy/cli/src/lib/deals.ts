@@ -1,6 +1,6 @@
-// Shared output shape of the deal commands. Lives outside commands/, which regen registers wholesale.
+// Shared output shape of the deal commands (shared command code lives in src/lib/).
 import type { z } from "zod";
-import type searchSuppliers from "./operations/searchSuppliers";
+import type searchSuppliers from "../operations/searchSuppliers";
 
 type Item = z.infer<typeof searchSuppliers.response>["results"]["items"][number];
 
