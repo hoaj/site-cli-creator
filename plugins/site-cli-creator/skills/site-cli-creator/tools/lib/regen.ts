@@ -13,8 +13,10 @@ export function moduleFiles(dir: string): string[] {
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-/** A command file's name: `<noun>-<verb>.ts`, kebab-case (`subscription-show.ts`, `invoice-list-all.ts`). */
-export const COMMAND_FILE = /^[a-z0-9]+(?:-[a-z0-9]+)+\.ts$/;
+/** The file a command belongs in: its name with dashes (`subscription show` → `subscription-show.ts`). */
+export function commandFileName(name: string): string {
+  return `${name.trim().split(/\s+/).join("-")}.ts`;
+}
 
 /** Whether a module's default export is a command (runtime/command.ts): a name, the Operations it uses, a run function. */
 export function isCommandExport(value: unknown): boolean {

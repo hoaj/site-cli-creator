@@ -219,7 +219,7 @@ describe("regen.ts", () => {
     expect(r.stderr).toContain("GET /api/search/suppliers is never checked");
   });
 
-  test("only <noun>-<verb>.ts files whose default export is a command are registered; others are warnings (#37)", () => {
+  test("only files whose default export is a command are registered; others are warnings (#37)", () => {
     const skill = fakeSkill("helpers", "none", { getAccount: "read" });
     const commands = join(skill, "cli/src/commands");
     write(join(commands, "deals.ts"), "export const toDeal = (d: { id: string }) => ({ id: d.id });\n");
@@ -234,8 +234,25 @@ describe("regen.ts", () => {
     expect(r.out.warnings).toEqual([
       "commands/deal-format.ts is not registered: its default export is no command (defineCommand). Shared code for commands goes in cli/src/lib/.",
       "commands/deal-mapper.ts is not registered: its default export is no command (defineCommand). Shared code for commands goes in cli/src/lib/.",
-      "commands/deals.ts is not registered: a command file is named <noun>-<verb>.ts. Shared code for commands goes in cli/src/lib/.",
+      "commands/deals.ts is not registered: its default export is no command (defineCommand). Shared code for commands goes in cli/src/lib/.",
     ]);
+  });
+
+  test("a command file without a dash (a 0.1.0 plugin's commands/status.ts) stays registered; a name that does not match its command is a warning (review)", () => {
+    const skill = fakeSkill("legacy-names", "none", { getAccount: "read" });
+    const commands = join(skill, "cli/src/commands");
+    write(join(commands, "status.ts"), `export default { name: "status", summary: "Status.", uses: [], flags: [], run: async () => ({}) };\n`);
+    write(join(commands, "bills.ts"), `export default { name: "bill list", summary: "Bills.", uses: [], flags: [], run: async () => ({}) };\n`);
+    const r = regen(skill);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.out.commands).toEqual([
+      { name: "bill list", write: false },
+      { name: "status", write: false },
+      { name: "subscription show", write: false },
+    ]);
+    const registry = readFileSync(join(skill, "cli/src/registry.ts"), "utf8");
+    expect(registry).toContain("export const commands = [billsCommand, statusCommand, subscriptionShowCommand];");
+    expect(r.out.warnings).toEqual(['commands/bills.ts holds the command "bill list": name the file bill-list.ts (it is registered as it is).']);
   });
 
   test("failures print a JSON error", () => {
