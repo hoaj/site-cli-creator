@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { copyExpected } from "../fixtures/expected/copy";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 import { chromePaths, unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
 import { findTokens } from "../tools/lib/template";
@@ -409,4 +410,44 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     expect(proc.stderr.toString()).toContain(" 0 fail");
     expect(proc.exitCode).toBe(0);
   });
+
+  // A generated plugin's own CI runs `bun test` at the plugin root. Its Starter tests must hold
+  // for any generator version and any generated.json, not only the ones the generator had when
+  // the test was written (cold read of 0.2.0: doctor.test.ts expected generatedWith "0.1.0").
+  test("a generated plugin's full bun test passes at the plugin root and in each skill's cli (both auth modes)", () => {
+    const dir = join(work, "full");
+    const env = { STARTER_DIR: REAL_STARTER };
+    expect(run(NEW, newArgs(dir, ["--no-labels"]), env).code).toBe(0);
+    const sh = (cmd: string[], cwd: string) => {
+      const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: cleanEnv() });
+      return { code: p.exitCode, out: (p.stdout.toString() + p.stderr.toString()).replace(/\x1b\[[0-9;]*m/g, "") };
+    };
+    for (const auth of ["none", "login"] as const) {
+      const skill = `shop-${auth}`;
+      const origin = "http://127.0.0.1:9";
+      expect(run(ADD_SKILL, ["--dir", dir, "--skill", skill, "--origin", origin, "--auth", auth], env).code).toBe(0);
+      const cli = join(dir, "skills", skill, "cli");
+      copyExpected(auth, join(cli, "src"), { plugin: "shop", skill, repo: "acme/shop-plugin", generatorVersion: generatorVersion(), origin });
+      const install = sh([process.execPath, "install"], cli);
+      expect(install.code, install.out).toBe(0);
+      const regen = run(join(SKILL_ROOT, "tools", "regen.ts"), ["--skill-dir", join(dir, "skills", skill)], env);
+      expect(regen.code, JSON.stringify(regen.out)).toBe(0);
+    }
+    const install = sh([process.execPath, "install"], dir);
+    expect(install.code, install.out).toBe(0);
+    // The root run already covers every skill's tests; one cli on its own proves they also pass from there.
+    for (const cwd of [dir, join(dir, "skills", "shop-login", "cli")]) {
+      const tested = sh([process.execPath, "test"], cwd);
+      expect(tested.out, cwd).toMatch(/ 0 fail/);
+      expect(tested.out, cwd).not.toMatch(/ [1-9]\d* fail/);
+      expect(tested.code, `${cwd}\n${tested.out}`).toBe(0);
+    }
+  }, 900_000);
 });
+
+/** The environment without anything a developer's shell may have set for site CLIs. */
+function cleanEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith("SITE_CLI_") && k !== "STARTER_DIR") env[k] = v;
+  return env;
+}
