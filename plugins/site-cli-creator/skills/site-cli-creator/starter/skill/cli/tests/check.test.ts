@@ -66,9 +66,34 @@ describe("check over reads", () => {
         { operation: "listProducts", effect: "read", status: "ok" },
         { operation: "getInvoice", effect: "read", status: "ok" },
         { operation: "PATCH /api/orders/:orderId", effect: "write", status: "skipped", reason: "run check --writes" },
-        { operation: "GET /api/orders/:orderId", effect: "read", status: "skipped", reason: "needs input the chain does not supply" },
+        { operation: "GET /api/orders/:orderId", effect: "read", status: "skipped", reason: "never checkable: nothing supplies orderId" },
+      ],
+      warnings: [
+        'GET /api/orders/:orderId is never checked: nothing supplies orderId. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> }.',
       ],
     });
+  });
+
+  test("constant needs ({ value }) feed fixed variables, so an Operation without a chain is checked (#35)", async () => {
+    const search = defineOperation({
+      name: "GET /api/search/suppliers",
+      effect: "read",
+      rest: { method: "GET", path: "/api/search/suppliers", query: (v) => ({ limit: String(v.limit), sortBy: v.sortBy }) },
+      variables: z.object({ limit: z.number(), sortBy: z.string() }),
+      response: z.object({ items: z.array(z.object({ name: z.string() })) }),
+      needs: { limit: { value: 1 }, sortBy: { value: "BestMatch" } },
+    });
+    const { fetch, calls } = fakeFetch((r) => (r.url.includes("/api/search/suppliers") ? json({ items: [{ name: "x" }] }) : happySite(r)));
+    const result = await check(client(makeSite(), makeDeps(fetch, home.dir).deps), [search], {});
+    expect(result).toEqual({ ok: true, operations: [{ operation: "GET /api/search/suppliers", effect: "read", status: "ok" }] });
+    expect(calls.map((c) => c.url)).toEqual(["https://shop.example.test/api/search/suppliers?limit=1&sortBy=BestMatch"]);
+    // A constant that does not fit the variables schema can never be checked either: skipped, with a warning.
+    const wrong = defineOperation({ ...search, needs: { limit: { value: "one" }, sortBy: { value: "BestMatch" } } });
+    const skipped = await check(client(makeSite(), makeDeps(fetch, home.dir).deps), [wrong], {});
+    expect(skipped.operations).toEqual([{ operation: "GET /api/search/suppliers", effect: "read", status: "skipped", reason: "never checkable: the constant for limit does not fit variables" }]);
+    expect(skipped.warnings).toEqual([
+      'GET /api/search/suppliers is never checked: the constant for limit does not fit variables. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> }.',
+    ]);
   });
 
   test("a pick with no value skips the Operation instead of failing", async () => {

@@ -14,7 +14,8 @@ import { ensureStateDir, profileDir, stateDir } from "./session";
 import { effectiveOrigin, isLoginHost, tokenMatches, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
-export type CheckResult = { ok: true; operations: CheckRow[] };
+/** `warnings`: read Operations that can never be checked (a required variable nothing in `needs` supplies). */
+export type CheckResult = { ok: true; operations: CheckRow[]; warnings?: string[] };
 export type CheckOptions = { op?: string; writes?: boolean; account?: string };
 /**
  * Checks write Operations; returns one entry per Operation, null when its request still matches.
@@ -24,13 +25,18 @@ export type CheckOptions = { op?: string; writes?: boolean; account?: string };
 export type WriteChecker = (writes: Operation[], reads: Operation[], declaredWrites?: Operation[]) => Promise<Map<string, DriftEntry | null>>;
 
 const isSessionNeed = (n: object): n is { from: "session"; key: string } => "key" in n;
+const isConstantNeed = (n: object): n is { value: unknown } => "value" in n && !("from" in n);
+/** A need on another Operation's result (the chain). */
+const isPickNeed = (n: object): n is { from: string; pick(result: any): unknown } => "pick" in n;
+
+const NEVER_CHECKED_FIX = 'Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> }.';
 
 /** Operations ordered so every Operation comes after the ones it `needs`; ties keep registry order. */
 export function chainOrder(ops: Operation[]): Operation[] {
   const byName = new Map(ops.map((o) => [o.name, o]));
   const deps = (op: Operation) =>
     Object.values(op.needs ?? {}).flatMap((n) => {
-      if (isSessionNeed(n)) return [];
+      if (!isPickNeed(n)) return [];
       if (!byName.has(n.from)) throw new ContractError(`${op.name} needs ${n.from}, which is not in the registry`);
       return [n.from];
     });
@@ -59,7 +65,7 @@ export function withChain(ops: Operation[], name: string): Operation[] {
   const add = (op: Operation) => {
     if (keep.has(op.name)) return;
     keep.add(op.name);
-    for (const n of Object.values(op.needs ?? {})) if (!isSessionNeed(n) && byName.has(n.from)) add(byName.get(n.from)!);
+    for (const n of Object.values(op.needs ?? {})) if (isPickNeed(n) && byName.has(n.from)) add(byName.get(n.from)!);
   };
   add(target);
   return ops.filter((o) => keep.has(o.name));
@@ -68,6 +74,7 @@ export function withChain(ops: Operation[], name: string): Operation[] {
 export async function check(client: Client, operations: Operation[], options: CheckOptions, checkWrites?: WriteChecker): Promise<CheckResult> {
   const selected = chainOrder(options.op ? withChain(operations, options.op) : operations);
   const rows: CheckRow[] = [];
+  const warnings: string[] = [];
   const drifts: DriftEntry[] = [];
   const results = new Map<string, unknown>();
   const unavailable = new Set<string>();
@@ -95,7 +102,9 @@ export async function check(client: Client, operations: Operation[], options: Ch
       const vars: Record<string, unknown> = {};
       let missing: string | undefined;
       for (const [key, need] of Object.entries(op.needs ?? {})) {
-        if (isSessionNeed(need)) {
+        if (isConstantNeed(need)) {
+          vars[key] = need.value;
+        } else if (isSessionNeed(need)) {
           if (need.key === "account") vars[key] = await (account ??= client.resolveAccount(options.account));
           else vars[key] = (await client.ensureSession()).ids[need.key];
         } else if (unavailable.has(need.from)) {
@@ -104,7 +113,7 @@ export async function check(client: Client, operations: Operation[], options: Ch
         } else {
           vars[key] = need.pick(results.get(need.from));
         }
-        if (vars[key] === undefined || vars[key] === null) {
+        if (!isConstantNeed(need) && (vars[key] === undefined || vars[key] === null)) {
           missing = `no value for ${key}`;
           break;
         }
@@ -113,8 +122,13 @@ export async function check(client: Client, operations: Operation[], options: Ch
         skip(missing);
         continue;
       }
-      if (!op.variables.safeParse(vars).success) {
-        skip("needs input the chain does not supply");
+      const parsed = op.variables.safeParse(vars);
+      if (!parsed.success) {
+        const never = neverCheckable(op, parsed.error.issues);
+        if (never) {
+          skip(`never checkable: ${never}`);
+          warnings.push(`${op.name} is never checked: ${never}. ${NEVER_CHECKED_FIX}`);
+        } else skip("needs input the chain does not supply");
         continue;
       }
       results.set(op.name, await client.call(op, vars));
@@ -157,7 +171,24 @@ export async function check(client: Client, operations: Operation[], options: Ch
     throw new Failure("drift", `check: ${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation).join(", ")}.${also}`, { drifts });
   }
   if (stopped) throw stopped;
-  return { ok: true, operations: rows };
+  return { ok: true, operations: rows, ...(warnings.length ? { warnings } : {}) };
+}
+
+/**
+ * Why an Operation's variables can never be built from its `needs`, whatever the account holds:
+ * a required variable with no entry, or a constant that does not fit. Undefined when the failure
+ * comes from a picked or session value (the account's data), which another account may supply.
+ */
+function neverCheckable(op: Operation, issues: { path: PropertyKey[] }[]): string | undefined {
+  const needs = op.needs ?? {};
+  const keys = [...new Set(issues.map((i) => i.path[0]).filter((k): k is string => typeof k === "string"))];
+  const missing = keys.filter((k) => !(k in needs));
+  const constants = keys.filter((k) => k in needs && isConstantNeed(needs[k]!));
+  const why = [
+    ...(missing.length ? [`nothing supplies ${missing.join(", ")}`] : []),
+    ...(constants.length ? [`the constant for ${constants.join(", ")} does not fit variables`] : []),
+  ];
+  return why.length ? why.join("; ") : undefined;
 }
 
 // ---- write checks in Chrome ----

@@ -154,3 +154,24 @@ export function cliPaths(skillDir: string) {
     skillMd: join(skillDir, "SKILL.md"),
   };
 }
+
+type SchemaLike = { safeParse(value: unknown): { success: boolean }; shape?: Record<string, SchemaLike> };
+
+/**
+ * The required variables of a read Operation that no `needs` entry supplies: `check` can never call
+ * it, so it would only ever be skipped (SPEC §10). A variable is required when its schema rejects
+ * `undefined` (no `.optional()`, no `.default()`). Undefined when the variables are no z.object.
+ */
+export function unsuppliedVariables(op: { variables?: unknown; needs?: unknown }): string[] {
+  const variables = op.variables as SchemaLike | undefined;
+  const shape = variables?.shape;
+  if (!shape || typeof shape !== "object") return [];
+  const needs = typeof op.needs === "object" && op.needs !== null ? (op.needs as Record<string, unknown>) : {};
+  return Object.entries(shape)
+    .filter(([key, field]) => !(key in needs) && typeof field?.safeParse === "function" && !field.safeParse(undefined).success)
+    .map(([key]) => key);
+}
+
+export function neverCheckedWarning(name: string, keys: string[]): string {
+  return `${name} is never checked: nothing in needs supplies ${keys.join(", ")}. Give each a \`needs\` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } (reference/contracts.md).`;
+}

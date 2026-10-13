@@ -111,7 +111,7 @@ Each `src/operations/<name>.ts` exports:
 | `graphql` / `rest` | the trimmed query: only the fields the CLI reads, not the frontend's text |
 | `variables` | a Zod schema, validated before any call (input kind) |
 | `response` | a Zod schema covering only the fields the CLI reads. The script drafts it from the Capture, and the agent cuts it down and decides which fields may be null, because one Capture is too narrow to decide nullability |
-| `needs` | for each variable, where it comes from: another Operation's result plus a pick, or `session`. `check` uses this chain, and no personal data is stored |
+| `needs` | for each variable, where it comes from: another Operation's result plus a pick, `session`, or a constant (`{ value }`: a fixed parameter the command passes). `check` uses this chain, and no personal data is stored |
 | `trigger(page)` | writes only: drives the UI in Playwright up to the request, so `check` can intercept and abort it |
 
 The Zod schema is both the runtime parser and the TypeScript type, so Drift shows up as a parse failure.
@@ -248,6 +248,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/skil
 
 **`check`:**
 - Calls every **read** Operation live, in chain order, and validates it against its Contract. Plain `check` never launches Chrome.
+- A read Operation it can never call, because a required variable has no `needs` entry, is skipped and listed in the output's `warnings`. That is a Contract gap, not Drift, so it doesn't change the exit code. `regen` warns about it too, and the generator fixes it before `check` passes.
 - With `--writes` (or `--op <write>`), it also runs `trigger(page)` headless from the profile for each **write** Operation, intercepts the write request, compares its shape and aborts it. `check` never writes.
 - If anything drifted, it exits 3 with one entry per drifted Operation, and each can be filed through the Feedback skill.
 - **Nothing runs `check` automatically.** Users run it on demand, to answer "is the site broken or is it me?". The generator runs it, with `--writes`, in `add-task` and `fix`. A Task command validates only the Operations it calls. After Drift, nobody sweeps the other Operations: `fix` runs the full `check` anyway. The maintainer schedules no proactive runs in v1, so users surface Drift. CI doesn't run `check`: login skills need a real account, and for `auth: "none"` skills the same no-automatic-runs rule keeps v1 simple.

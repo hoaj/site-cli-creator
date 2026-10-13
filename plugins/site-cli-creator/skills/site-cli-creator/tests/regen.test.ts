@@ -202,6 +202,20 @@ describe("regen.ts", () => {
     expect(regen(login).out.needsChrome).toBe(true);
   });
 
+  test("a read Operation with a required variable nothing in needs supplies is a warning (#35)", () => {
+    const skill = fakeSkill("never-checked", "none", { getAccount: "read" });
+    const opFile = (name: string, needs: string) =>
+      `import { z } from "zod";\nexport default { name: ${JSON.stringify(name)}, effect: "read", variables: z.object({ limit: z.number(), sortBy: z.string().default("BestMatch"), q: z.string().optional() }), response: z.unknown()${needs} };\n`;
+    write(join(skill, "cli/src/operations/searchSuppliers.ts"), opFile("GET /api/search/suppliers", ""));
+    write(join(skill, "cli/src/operations/searchShops.ts"), opFile("GET /api/search/shops", ", needs: { limit: { value: 1 } }"));
+    const r = regen(skill);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.out.warnings).toEqual([
+      'GET /api/search/suppliers is never checked: nothing in needs supplies limit. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } (reference/contracts.md).',
+    ]);
+    expect(r.stderr).toContain("GET /api/search/suppliers is never checked");
+  });
+
   test("failures print a JSON error", () => {
     const skill = fakeSkill("help-fails", "none", { getAccount: "read" });
     const r = regen(skill, { FAIL_HELP: "1" });
