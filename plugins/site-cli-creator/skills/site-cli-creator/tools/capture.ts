@@ -22,7 +22,7 @@ const USAGE =
 
 const NOTES = [
   "--script <file.ts> must `export default async (page) => { ... }` (page is a Playwright Page). The tool has already opened --url (and followed its redirects, to a login host too) when the function is called; the Capture stops when it resolves. Drive the page with real input (page.click, page.fill, page.press, locators), not element.click() inside page.evaluate: --write counts only real clicks, key presses and submits.",
-  "Without --script, Chrome opens headed: the user performs the Task, then closes the Task window (other windows it opened close with it) or presses Enter in the terminal. SIGINT or SIGTERM (kill -INT <pid>; stderr prints the pid) is a clean stop that still writes the Capture: use it to end a Capture you run in the background.",
+  "Without --script, Chrome opens headed: the user performs the Task, then closes the Task window or presses Enter in the terminal. The Capture ends when no window on the site is left open (windows on other sites, such as a shop the page opened, close with it); a tab the site opened on its own hosts keeps it going. SIGINT or SIGTERM (kill -INT <pid>; stderr prints the pid) is a clean stop that still writes the Capture: use it to end a Capture you run in the background.",
   "Hosts are host names without scheme or port (login.example.com).",
   "The profile (~/.site-cli-creator/profile/ by default) keeps cookies between Captures; pass --profile <empty dir> to see a site set its cookies from scratch.",
 ];
@@ -86,10 +86,12 @@ const STOP_GRACE_MS = 1_000;
 type Stop = { reason: Promise<string>; readonly stoppedBy?: string; dispose(): void };
 
 /**
- * What ends a Capture besides a --script finishing: the browser closing; the Task window (the first
- * page) closing, or the last page on the recorded hosts, even while other windows (a shop the page
- * opened) stay open: capture.ts closes those; SIGINT or SIGTERM, a clean stop that still writes the
- * Capture (how an agent ends a Capture it runs in the background); and Enter in the terminal.
+ * What ends a Capture besides a --script finishing: the browser closing; the last window on the
+ * recorded hosts closing (the Task window, the first page, counts even when it had left them), even
+ * while windows on other sites (a shop the page opened) stay open: capture.ts closes those. A tab the
+ * site opened on its own hosts keeps the Capture going after the first one closes. SIGINT or SIGTERM,
+ * a clean stop that still writes the Capture (how an agent ends a Capture it runs in the
+ * background); and Enter in the terminal.
  */
 function watchStop(context: BrowserContext, first: Page, inScope: (url: string) => boolean, interactive: boolean): Stop {
   let stoppedBy: string | undefined;
@@ -102,7 +104,9 @@ function watchStop(context: BrowserContext, first: Page, inScope: (url: string) 
   context.on("close", () => done("browser closed"));
   const onPageClose = (closed: Page, lastUrl: string) => {
     const open = context.pages().filter((p) => p !== closed && !p.isClosed());
-    if (closed === first || (inScope(lastUrl) && !open.some((p) => inScope(p.url())))) done("task window closed");
+    // The Task goes on in another window on the site (a tab it opened): keep recording.
+    if (open.some((p) => inScope(p.url()))) return;
+    if (closed === first || inScope(lastUrl)) done("task window closed");
   };
   const watch = (page: Page) => {
     let lastUrl = page.url();
@@ -125,7 +129,7 @@ function watchStop(context: BrowserContext, first: Page, inScope: (url: string) 
     hint = setInterval(() => {
       const n = context.pages().filter((p) => !p.isClosed()).length;
       progress(
-        `still recording: ${n} window${n === 1 ? "" : "s"} open; close the Task window (the others close with it), press Enter here, or run: kill -INT ${process.pid}`,
+        `still recording: ${n} window${n === 1 ? "" : "s"} open; close the site's windows (windows on other sites close with them), press Enter here, or run: kill -INT ${process.pid}`,
       );
     }, HINT_MS);
   }
@@ -349,7 +353,7 @@ await runTool(async () => {
     stoppedBy = await stop.reason;
   }
   stop.dispose();
-  // Windows still open when the Task window closed (a shop the page opened): closed with the browser.
+  // Windows on other sites still open when the last one on the site closed (a shop the page opened): closed with the browser.
   const closedWindows = stoppedBy === "task window closed" ? context.pages().filter((p) => !p.isClosed()).length : 0;
   if (closedWindows) progress(`closing ${closedWindows} other window${closedWindows === 1 ? "" : "s"} still open`);
 
