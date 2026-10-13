@@ -1,0 +1,20 @@
+{
+  "name": "logbuy",
+  "interface": {
+    "displayName": "logbuy"
+  },
+  "plugins": [
+    {
+      "name": "logbuy",
+      "source": {
+        "source": "local",
+        "path": "./"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

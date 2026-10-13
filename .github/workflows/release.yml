@@ -1,0 +1,156 @@
+# A merge to main whose plugin version has no tag yet releases it: build every CLI skill for
+# every target, publish release vX.Y.Z with the binaries, then label the issues the released
+# PRs fixed with fixed-in:vX.Y.Z. A failed build shows up as a red run on main.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+# One group per commit: a single shared group cancels a run still waiting for the one in
+# progress, and the version it carried would never be released. Each run releases its own
+# commit's version (actions/checkout checks out github.sha); `publish` is serialised per version
+# and skips a release that exists, so two runs of one version publish it once.
+concurrency:
+  group: release-${{ github.sha }}
+  cancel-in-progress: false
+
+env:
+  BUN_VERSION: "1.4.3"
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      release: ${{ steps.version.outputs.release }}
+      skills: ${{ steps.skills.outputs.skills }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - id: version
+        name: Read the plugin version and look for its tag
+        run: |
+          version="$(jq -r .version .claude-plugin/plugin.json)"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          cli=('skills/*/cli/src/*' 'skills/*/cli/package.json' 'skills/*/cli/build.ts')
+          parent=""
+          if git rev-parse --verify --quiet 'HEAD^' >/dev/null; then
+            parent="$(git show 'HEAD^:.claude-plugin/plugin.json' 2>/dev/null | jq -r .version 2>/dev/null || true)"
+          fi
+          # Two PRs that bumped to the same version can both merge when the second was not
+          # rebased. Its CLI changes would then never get a binary, so fail loudly instead,
+          # whether or not the first one's release exists yet.
+          changed=""
+          if [ "$parent" = "$version" ]; then
+            changed="$(git diff --name-only 'HEAD^' HEAD -- "${cli[@]}")"
+          elif git rev-parse --verify --quiet "refs/tags/v$version" >/dev/null; then
+            changed="$(git diff --name-only "v$version" HEAD -- "${cli[@]}")"
+          fi
+          if [ -n "$changed" ]; then
+            echo "::error::main changed CLI code in v$version without a version bump: open a PR that runs \`bun run bump patch\`. Changed: $(echo "$changed" | tr '\n' ' ')"
+            exit 1
+          fi
+          if git rev-parse --verify --quiet "refs/tags/v$version" >/dev/null; then
+            echo "v$version is already released: nothing to do"
+            echo "release=false" >>"$GITHUB_OUTPUT"
+          else
+            echo "release=true" >>"$GITHUB_OUTPUT"
+          fi
+      - id: skills
+        name: List the CLI skills
+        run: |
+          skills="$(find skills -mindepth 2 -maxdepth 2 -type d -name cli | cut -d/ -f2 | sort | jq -Rnc '[inputs]')"
+          echo "skills=$skills" >>"$GITHUB_OUTPUT"
+          echo "CLI skills: $skills"
+
+  build:
+    needs: plan
+    if: needs.plan.outputs.release == 'true' && needs.plan.outputs.skills != '[]'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        skill: ${{ fromJSON(needs.plan.outputs.skills) }}
+        target: [darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64]
+    defaults:
+      run:
+        working-directory: skills/${{ matrix.skill }}/cli
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Install dependencies
+        run: if [ -f bun.lock ]; then bun install --frozen-lockfile; else bun install; fi
+      - name: Build
+        env:
+          SKILL: ${{ matrix.skill }}
+          TARGET: ${{ matrix.target }}
+        run: |
+          ext=""
+          if [ "$TARGET" = windows-x64 ]; then ext=".exe"; fi
+          bun build.ts "bun-$TARGET" "dist/$SKILL-$TARGET$ext"
+          ls -la dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: bin-${{ matrix.skill }}-${{ matrix.target }}
+          path: skills/${{ matrix.skill }}/cli/dist/${{ matrix.skill }}-${{ matrix.target }}*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: [plan, build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: publish-v${{ needs.plan.outputs.version }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: bin-*
+          path: dist
+          merge-multiple: true
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          ls -la dist
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            echo "v$VERSION was published by an earlier run of the same version: nothing to do"
+            exit 0
+          fi
+          gh release create "v$VERSION" dist/* --target "$GITHUB_SHA" --title "v$VERSION" --generate-notes
+
+  fixed-in:
+    needs: [plan, publish]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - name: Label the issues this release fixed
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          git fetch --tags --force origin
+          bun scripts/fixed-in.ts "v$VERSION" --repo "$GITHUB_REPOSITORY" --branch main
