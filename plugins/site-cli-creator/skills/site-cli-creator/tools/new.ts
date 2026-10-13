@@ -20,6 +20,8 @@ const USAGE =
 
 const LABELS = [
   { name: "feature", color: "a2eeef", description: "A Task the plugin can't do yet (filed by the Feedback skill)" },
+  { name: "drift", color: "d93f0b", description: "The site changed away from a Contract (filed by the Feedback skill; fixed by fix)" },
+  { name: "bug", color: "b60205", description: "A bug in the plugin's own code (filed by the Feedback skill; fixed by fix)" },
   { name: "unverified", color: "fbca04", description: "Fix made from the issue's diff; the maintainer's account can't reach the Task" },
   { name: "needs-account", color: "d4c5f9", description: "The maintainer's account can't perform this Task" },
 ];
@@ -133,8 +135,8 @@ await runTool(async () => {
     progress(`creating labels on ${values.repo}`);
     labels = createLabels(values.repo);
     if (labels.failed) {
-      // The loop needs these labels (the Feedback skill files with `feature`, fix uses `unverified`,
-      // add-task `needs-account`), so this is a failure; the files are written and safe to keep.
+      // The loop needs these labels (the Feedback skill files with `feature`, `drift` and `bug`, fix
+      // uses `unverified`, add-task `needs-account`), so this is a failure; the files are kept.
       const created = labels.created;
       const retry = LABELS.filter((l) => !created.includes(l.name)).map((l) => labelArgs(values.repo, l).map(shellWord).join(" "));
       fail(
