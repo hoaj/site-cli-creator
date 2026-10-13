@@ -292,6 +292,23 @@ describe("login", () => {
     expect(loginCalls).toEqual([false]);
   });
 
+  test("login --from-profile signs in headless from that profile; when it does not carry over → session (exit 4)", async () => {
+    const seen: unknown[] = [];
+    const { deps } = makeDeps(fakeFetch(happySite).fetch, home.dir);
+    const answers = [{ authorization: "Bearer t" }, null];
+    deps.login = async (headless, options) => {
+      seen.push({ headless, options });
+      return answers.shift() ?? null;
+    };
+    const ok = await run(["login", "--from-profile", "/tmp/capture-profile"], makeApp(loginSite(), deps));
+    expect(ok.code).toBe(0);
+    expect(ok.output).toEqual({ loggedIn: true, fromProfile: true, stateDir: home.dir, ids: ["customerId"] });
+    expect(seen).toEqual([{ headless: true, options: { fromProfile: "/tmp/capture-profile" } }]);
+    const failed = await run(["login", "--from-profile", "/tmp/capture-profile"], makeApp(loginSite(), deps));
+    expect(failed.code).toBe(4);
+    expect(errorOf(failed.output).message).toContain("run login without --from-profile");
+  });
+
   test("a login skill without a session signs in before running the command", async () => {
     const { deps, loginCalls } = makeDeps(fakeFetch(happySite).fetch, home.dir, [{ authorization: "Bearer t" }]);
     const { code } = await run(["products", "show"], makeApp(loginSite(), deps));

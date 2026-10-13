@@ -205,6 +205,7 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
 
 - `chrome.ts` finds Chrome at the fixed per-OS paths (SPEC §9), `SITE_CLI_CHROME` overrides.
 - `login(headless)` uses `chromium.launchPersistentContext(profile, {channel: "chrome", headless})`, opens `site.login.startUrl`, waits for `tokenRequest`, collects the `authorization` header and the cookies for the site origin, runs `postLogin`, saves the session.
+- `login --from-profile <dir>` (`Deps.login(headless, {fromProfile})`, `profileCookies()`): opens that Chrome profile headless (the Capture tool's `~/.site-cli-creator/profile`), reads its cookies for the site origin and `login.hosts` (domain match, parent domains included) into memory, closes it, adds them to the skill's own profile, then runs the headless sign-in above. Cookie values are never written except into `session.json` (0600) as for any login, and never logged (stderr names only their count). A missing dir or a profile Chrome can't open (a Capture still running on it) is input; no sign-in carried over is session. It prints `{loggedIn, fromProfile: true, stateDir, ids}`.
 - Tests set `SITE_CLI_TEST=1`. Only then does env `SITE_CLI_ORIGIN` override `site.origin` (the fixture site runs on localhost), env `SITE_CLI_LOGIN_TIMEOUT_MS` replace `site.login.timeoutMs` (`loginTimeoutMs()`: the headed sign-in waits that long, the headless refresh at most 30 s; tests of a sign-in that never completes), and `login` may run headless.
 
 ### check (check.ts) — SPEC §10
@@ -219,7 +220,7 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
 
 ### built-in commands (main.ts) — SPEC §8
 
-`help` (JSON: commands with flags and write marker, built-ins, exit codes), `login` (auth login only), `check [--op <name>] [--writes]`, `doctor`, `version`. Task commands are `<noun> <verb> [--flags]`. `--account <id>` and `--confirm` are global flags. Unknown command or flag → input.
+`help` (JSON: commands with flags and write marker, built-ins, exit codes), `login [--from-profile <dir>]` (auth login only), `check [--op <name>] [--writes]`, `doctor`, `version`. Task commands are `<noun> <verb> [--flags]`. `--account <id>` and `--confirm` are global flags. Unknown command or flag → input.
 
 Hidden built-in `selftest --url <http(s) url> [--no-chrome]` (runtime/selftest.ts, not listed by `help`): the platform smoke test of SPEC §9 / #29. It fetches the URL, launches Chrome headless with a temp profile and channel `chrome`, routes one request and aborts it (`net::ERR_FAILED`), and prints `{ok: true, fetch: <status>, chrome: true, abort: true}`; with `--no-chrome`, `{ok: true, fetch: <status>}`. A failed fetch is network (exit 5); no Chrome is input (exit 2). The generator's CI runs it on every target in `run-smoke`.
 

@@ -319,6 +319,25 @@ describe("fixture site, auth login", () => {
     expect((await fetch(`${site.loginUrl}/login?autologin=1`, { redirect: "manual" })).status).toBe(303);
   });
 
+  test("the login host remembers a sign-in in a cookie: it signs in again at once, even while blockSignIn holds, until revokeSessions", async () => {
+    const first = await fetch(`${site.loginUrl}/login?autologin=1`, { redirect: "manual" });
+    expect(first.status).toBe(303);
+    const idp = first.headers.getSetCookie().map((c) => c.split(";")[0]!).find((c) => c.startsWith("idp_sid="));
+    expect(idp).toBeDefined();
+    expect(first.headers.getSetCookie().find((c) => c.startsWith("idp_sid="))).toContain("Max-Age=");
+    site.blockSignIn(true);
+    try {
+      const again = await fetch(`${site.loginUrl}/login`, { headers: { cookie: idp! }, redirect: "manual" });
+      expect(again.status).toBe(303);
+      expect(again.headers.get("location")).toStartWith(`${site.url}/auth/callback?code=`);
+      expect((await fetch(`${site.loginUrl}/login`, { redirect: "manual" })).status).toBe(200);
+    } finally {
+      site.blockSignIn(false);
+    }
+    site.revokeSessions();
+    expect((await fetch(`${site.loginUrl}/login`, { headers: { cookie: idp! }, redirect: "manual" })).status).toBe(200);
+  });
+
   test("revokeSessions ends the session: REST redirects to sign-in, GraphQL answers 401", async () => {
     const h = await loginHeaders(site);
     site.revokeSessions();
