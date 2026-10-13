@@ -93,7 +93,7 @@ needs: { limit: { value: "1" }, sortBy: { value: "BestMatch" } }                
 
 `from` is the other Operation's `name`; `pick` gets its parsed `response`. `key: "account"` means the selected `--account`. `value` is a constant (any JSON value) for a fixed parameter the command always passes (a page size, a sort order), or a harmless sample for one only the user can supply (a search word, a choice): keep the Contract's `variables` as the site wants them and put check's input here, not in Zod defaults. A constant must fit its variable's schema: `draft-contract` drafts REST query variables as `z.string()` (a query value is text), so a page size is `{ value: "1" }`, not `{ value: 1 }`. To keep a number variable instead, make it `z.coerce.number()` (or `z.number()`) with `{ value: 1 }`, and turn it into a string in `rest.query` (`limit: String(v.limit)`).
 
-Every required variable of a read Operation needs an entry that fits it, or `check` can never call it: it skips the Operation as `never checkable` and lists it in its output's `warnings` (`no needs entry for <variable>`, or `the needs entry for <variable> does not fit variables` for a constant the schema rejects), and `regen.ts` prints the same warnings (`warnings` in its JSON). Fix each one before `check`.
+Every required variable of a read Operation needs an entry that fits it, or `check` can never call it: it skips the Operation as `never checkable`, lists it in its output's `warnings` and prints `"ok": false` (still exit 0) (`no needs entry for <variable>`, or `the needs entry for <variable> does not fit variables` for a constant the schema rejects), and `regen.ts` prints the same warnings (`warnings` in its JSON). Fix each one before `check`.
 
 ### Writes and `trigger`
 
