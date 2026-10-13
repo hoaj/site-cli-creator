@@ -129,6 +129,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 
   There is no `last-error.json`. The Feedback skill works from the error JSON the CLI just printed (§10).
 - **`login`** launches headed Chrome via `launchPersistentContext(profile, {channel: "chrome"})`. It waits up to 10 minutes for the request named by `site.tokenRequest`, sniffs its `authorization` header and the cookies, then runs the site's **post-login step**.
+- **`login --from-profile <dir>`** lets the maintainer sign in once: right after the first Capture, it reads the Capture profile's cookies for the site origin and its login hosts, in memory only, and runs the same sign-in headless with them. Nothing is written but `session.json`, and no cookie value is logged.
 - **Post-login step** (`site.ts`): site-specific, written by the agent from the Capture. It derives the chain-root ids and keeps nothing else. For YouSee:
   1. Decode `ciam_id` and `individual_id` from the access token.
   2. `POST /shop/api/session-management/post-login` with `{ciamId, individualId}`, sending both the bearer and the cookie.
@@ -154,7 +155,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 - **Task commands:** `<noun> <verb> [flags]`, one per Task. There is no raw `op <name>` escape hatch, because it would invite working around Drift.
 - **Built-in, the same in every CLI skill:**
   - `help`: commands, flags and exit codes, as JSON;
-  - `login` (only for `auth: "login"`);
+  - `login [--from-profile <dir>]` (only for `auth: "login"`, §7);
   - `check [--op <name>] [--writes]` (§10);
   - `doctor`: versions, `generatedWith`, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;
   - `version`.

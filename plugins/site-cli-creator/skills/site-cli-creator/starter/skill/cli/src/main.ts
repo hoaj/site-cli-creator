@@ -1,5 +1,6 @@
 // Routing and flag parsing. The only file that imports ./site and ./registry; everything else
 // is a runtime module driven from here, so tests can run `run()` with a fake site and fetch.
+import { resolve } from "node:path";
 import site from "./site";
 import { commands, operations } from "./registry";
 import { Client, type Deps } from "./runtime/call";
@@ -85,7 +86,7 @@ function defaultDeps(app: App): Deps {
   return {
     fetch: (input, init) => fetch(input, init),
     env: process.env,
-    login: (headless) => chromeLogin(app.site, { headless, note }),
+    login: (headless, options) => chromeLogin(app.site, { headless, note, fromProfile: options?.fromProfile }),
     sleep: (ms) => Bun.sleep(ms),
     retryDelays: [500, 1500],
     note,
@@ -143,10 +144,21 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
     }
     if (builtin === "login" && site.auth === "login") {
       commandName = "login";
-      builtinFlags("login");
-      const session = await client.signIn(false);
-      if (!session) throw new Failure("session", `Sign-in to ${site.origin} did not complete; run login again and finish signing in in the Chrome window.`);
-      return ok({ loggedIn: true, stateDir: client.dir, ids: Object.keys(session.ids) });
+      const raw = builtinFlags("login")["from-profile"] as string | undefined;
+      if (raw === undefined) {
+        const session = await client.signIn(false);
+        if (!session) throw new Failure("session", `Sign-in to ${site.origin} did not complete; run login again and finish signing in in the Chrome window.`);
+        return ok({ loggedIn: true, stateDir: client.dir, ids: Object.keys(session.ids) });
+      }
+      // Reuse a sign-in another Chrome profile holds (the Capture's), headless: the user signs in once.
+      const session = await client.signIn(true, { fromProfile: resolve(raw) });
+      if (!session) {
+        throw new Failure(
+          "session",
+          `The sign-in in ${raw} did not carry over to ${site.origin} (none there, expired, or not kept in cookies); run login without --from-profile and sign in in the Chrome window.`,
+        );
+      }
+      return ok({ loggedIn: true, fromProfile: true, stateDir: client.dir, ids: Object.keys(session.ids) });
     }
 
     const name = words.slice(0, 2).join(" ");

@@ -1,6 +1,7 @@
 // Sign-in through the user's Chrome on the tool-owned profile (SPEC §7). Headed for `login`,
 // headless for the silent refresh. Under SITE_CLI_TEST=1 the headed sign-in runs headless too.
-import type { BrowserContext, Request } from "playwright-core";
+import { existsSync } from "node:fs";
+import type { BrowserContext, Cookie, Request } from "playwright-core";
 import { findChrome, chromeLaunchOptions, installHint } from "./chrome";
 import { ContractError, Failure } from "./envelope";
 import { ensureStateDir, profileDir, stateDir } from "./session";
@@ -10,7 +11,54 @@ const REFRESH_TIMEOUT_MS = 30_000;
 /** How long a headless refresh may sit on a login host before it counts as logged out (SSO hops pass through). */
 const LOGIN_HOST_GRACE_MS = 5_000;
 
-export type LoginOptions = { headless: boolean; env?: Env; note?: (m: string) => void };
+export type LoginOptions = {
+  headless: boolean;
+  env?: Env;
+  note?: (m: string) => void;
+  /**
+   * Another Chrome profile that is already signed in (the Capture tool's): its cookies for the site
+   * origin and the login hosts seed this sign-in, in memory only, so the user signs in once.
+   */
+  fromProfile?: string;
+};
+
+/** A host name from a login host entry (`login.example.com`, `localhost:4100`, or a URL). */
+function hostName(host: string): string {
+  try {
+    return new URL(host.includes("://") ? host : `http://${host}`).hostname.toLowerCase();
+  } catch {
+    return host.toLowerCase();
+  }
+}
+
+/** Whether a cookie's domain applies to a host: the host itself, or a parent domain (`.example.com`). */
+const domainMatches = (host: string, domain: string) => {
+  const d = domain.replace(/^\./, "").toLowerCase();
+  return host === d || host.endsWith(`.${d}`);
+};
+
+/**
+ * The cookies another Chrome profile holds for the site origin and its login hosts, read with
+ * Playwright and kept in memory: never written, never logged. Chrome keeps only persistent cookies
+ * between runs, so a sign-in held in session cookies or in page storage does not carry over.
+ */
+export async function profileCookies(site: Site, dir: string, env: Env = process.env): Promise<Cookie[]> {
+  if (!existsSync(dir)) throw new Failure("input", `--from-profile: no such Chrome profile dir: ${dir}`);
+  let context: BrowserContext;
+  try {
+    context = await launch(site, dir, true, env);
+  } catch (error) {
+    if (error instanceof Failure) throw error;
+    const why = String((error as Error)?.message ?? error).split("\n")[0];
+    throw new Failure("input", `--from-profile: could not open ${dir} (${why}). If a Capture is still running on it, end it first.`);
+  }
+  try {
+    const hosts = [new URL(effectiveOrigin(site, env)).hostname, ...(site.login?.hosts ?? []).map(hostName)];
+    return (await context.cookies()).filter((c) => hosts.some((h) => domainMatches(h, c.domain)));
+  } finally {
+    await context.close().catch(() => {});
+  }
+}
 
 export function chromeMissing(site: Site, env: Env = process.env): Failure | null {
   const chrome = findChrome(env);
@@ -50,9 +98,15 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Re
   const headless = options.headless || isTest(env);
   const timeoutMs = loginTimeoutMs(site, options.headless, env);
   const origin = effectiveOrigin(site, env);
+  const seed = options.fromProfile ? await profileCookies(site, options.fromProfile, env) : [];
+  if (options.fromProfile) {
+    if (seed.length === 0) return null;
+    options.note?.(`signing in with ${seed.length} cookie(s) from ${options.fromProfile} (kept in memory)`);
+  }
   const profile = ensureStateDir(profileDir(ensureStateDir(stateDir(site, env))));
   const context = await launch(site, profile, headless, env);
   try {
+    if (seed.length) await context.addCookies(seed);
     const done = new Promise<Request | "logged-out" | null>((resolve) => {
       const timer = setTimeout(() => resolve(null), timeoutMs);
       let grace: ReturnType<typeof setTimeout> | undefined;

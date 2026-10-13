@@ -42,9 +42,9 @@ export type FixtureSite = {
   setDrift(name: Drift | null): void;
   /** Invalidates every issued bearer while keeping login sessions: data APIs answer 401. */
   revokeTokens(): void;
-  /** Ends every login session and bearer: REST reads redirect to the login host, GraphQL answers 401. */
+  /** Ends every login session, bearer and remembered login-host sign-in: REST reads redirect to the login host, GraphQL answers 401. */
   revokeSessions(): void;
-  /** While true, the login host refuses every sign-in (autologin included), so a login never completes. */
+  /** While true, the login host refuses every new sign-in (autologin included), so a login never completes; a browser it remembers (idp_sid cookie) still passes. */
   blockSignIn(blocked: boolean): void;
   /** Notes stored on the account, including ones added through addNote. */
   notes(): Note[];
@@ -56,6 +56,8 @@ export type FixtureSite = {
 const SESSION_COOKIE = "shop_sid";
 const HINT_COOKIE = "shop_hint";
 const CSRF_COOKIE = "csrf_token";
+/** The login host's own sign-in, as an SSO host keeps one: a later visit signs in at once. */
+const IDP_COOKIE = "idp_sid";
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -103,6 +105,7 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
   const tokens = new Map<string, string>(); // login: bearer → session id
   const codes = new Map<string, string>(); // login: one-time sign-in code → session id
   const csrfTokens = new Set<string>(); // none: issued CSRF tokens
+  const idpSessions = new Set<string>(); // login: sign-ins the login host remembers (IDP_COOKIE)
   let signInBlocked = false;
   let siteUrl = "";
   let loginUrl = "";
@@ -211,11 +214,18 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
     const code = randomId();
     sessions.add(sid);
     codes.set(code, sid);
-    return redirect(303, `${siteUrl}/auth/callback?code=${code}`);
+    const idp = randomId();
+    idpSessions.add(idp);
+    const res = redirect(303, `${siteUrl}/auth/callback?code=${code}`);
+    res.headers.append("set-cookie", `${IDP_COOKIE}=${idp}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400`);
+    return res;
   };
 
   const handleLoginHost = async (req: Request, route: string, url: URL): Promise<Response> => {
     if (route === "GET /login") {
+      // Already signed in at the login host: no new sign-in is needed, so blockSignIn does not stop it.
+      const idp = readCookies(req)[IDP_COOKIE];
+      if (idp && idpSessions.has(idp)) return signedIn();
       if (signInBlocked) return html(200, loginPage("Log ind er midlertidigt lukket."));
       return url.searchParams.get("autologin") === "1" ? signedIn() : html(200, loginPage());
     }
@@ -314,6 +324,7 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
     revokeTokens: () => tokens.clear(),
     revokeSessions: () => {
       sessions.clear();
+      idpSessions.clear();
       tokens.clear();
       codes.clear();
     },
