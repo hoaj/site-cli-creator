@@ -36,6 +36,11 @@ Generator 0.1.0 → 0.2.0 in the three plugin manifests; marketplaces 1.2.0 → 
 
 `logbuy` (generatedWith 0.1.0) carries the old `check` (no constant `needs`, no warnings) and `login` (no `--from-profile`). Its own workaround (Zod defaults for `limit` and `sortBy`) still works, so porting is optional.
 
-## What the round skipped
+## 7. Cold read: what it caught
 
-The cold read (step 7) was not run before the PR opened; it ran afterwards. Run it before opening the PR, so its findings land in the same branch.
+The cold read was skipped before the PR opened and run afterwards, three times:
+
+1. **FAIL.** A freshly generated plugin's own `bun test` failed: a Starter test (`doctor.test.ts`) read the plugin's real `generated.json` and expected `generatedWith` "0.1.0", which held only while the generator was 0.1.0. The generator's 467 tests were green, because none ran a generated plugin's full suite. Fixed the test, and fixed the class with a scaffold test that generates a plugin and runs its whole `bun test`. The same read found four smaller gaps (no `loginHosts` in the Capture output, fix mode signing in twice, a `needs` constant example of the wrong type, `check` saying `ok: true` beside warnings).
+2. **PASS** after those fixes, with two one-line doc clarifications applied.
+
+Lesson: green generator tests are not a green generated plugin. Run the cold read before opening the PR, so its findings land in the same branch, and rerun it after any fix that changes docs or tool output.
