@@ -68,12 +68,12 @@ function fakeSkill(name: string, auth: "login" | "none", ops: Record<string, str
   const imports = Object.keys(ops).map((f) => `import ${f} from "../operations/${f}";`).join("\n");
   write(
     join(src, "commands", "subscription-show.ts"),
-    `${imports}\nexport default { name: "subscription show", summary: "Your products | prices", uses: [${Object.keys(ops).filter((f) => ops[f] === "read").join(", ")}], flags: [{ name: "all", type: "boolean", description: "include ended" }] };\n`,
+    `${imports}\nexport default { name: "subscription show", summary: "Your products | prices", uses: [${Object.keys(ops).filter((f) => ops[f] === "read").join(", ")}], flags: [{ name: "all", type: "boolean", description: "include ended" }], run: async () => ({}) };\n`,
   );
   if (Object.values(ops).includes("write")) {
     write(
       join(src, "commands", "note-add.ts"),
-      `${imports}\nexport default { name: "note add", summary: "Add a note.", uses: [${Object.keys(ops).join(", ")}], flags: [{ name: "text", type: "string", required: true }] };\n`,
+      `${imports}\nexport default { name: "note add", summary: "Add a note.", uses: [${Object.keys(ops).join(", ")}], flags: [{ name: "text", type: "string", required: true }], run: async () => ({}) };\n`,
     );
   }
   symlinkSync(join(GENERATOR_ROOT, "node_modules"), join(skill, "cli", "node_modules"));
@@ -214,6 +214,25 @@ describe("regen.ts", () => {
       'GET /api/search/suppliers is never checked: nothing in needs supplies limit. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } (reference/contracts.md).',
     ]);
     expect(r.stderr).toContain("GET /api/search/suppliers is never checked");
+  });
+
+  test("only <noun>-<verb>.ts files whose default export is a command are registered; others are warnings (#37)", () => {
+    const skill = fakeSkill("helpers", "none", { getAccount: "read" });
+    const commands = join(skill, "cli/src/commands");
+    write(join(commands, "deals.ts"), "export const toDeal = (d: { id: string }) => ({ id: d.id });\n");
+    write(join(commands, "deal-format.ts"), "export function shopUrl(id: string) { return `/shop/${id}`; }\n");
+    write(join(commands, "deal-mapper.ts"), "export default { toDeal: (d: unknown) => d };\n");
+    const r = regen(skill);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.out.commands).toEqual([{ name: "subscription show", write: false }]);
+    const registry = readFileSync(join(skill, "cli/src/registry.ts"), "utf8");
+    expect(registry).toContain("export const commands = [subscriptionShowCommand];");
+    expect(registry).not.toMatch(/deal/);
+    expect(r.out.warnings).toEqual([
+      "commands/deal-format.ts is not registered: its default export is no command (defineCommand). Shared code for commands goes in cli/src/lib/.",
+      "commands/deal-mapper.ts is not registered: its default export is no command (defineCommand). Shared code for commands goes in cli/src/lib/.",
+      "commands/deals.ts is not registered: a command file is named <noun>-<verb>.ts. Shared code for commands goes in cli/src/lib/.",
+    ]);
   });
 
   test("failures print a JSON error", () => {

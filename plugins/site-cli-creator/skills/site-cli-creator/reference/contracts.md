@@ -15,7 +15,7 @@ How to write the three kinds of AGENT file in a CLI skill. Each section below ha
 | `site.ts` with login and `postLogin` | `login/site.ts` |
 | `site.ts` without login, with `bootstrap` | `none/site.ts` |
 
-The fixture's `__ORIGIN__` and other `__TOKENS__` are filled in when it is copied; your files hold real values. `registry.ts` imports every file in `operations/` and `commands/`: run `regen.ts` after adding or renaming one.
+The fixture's `__ORIGIN__` and other `__TOKENS__` are filled in when it is copied; your files hold real values. `registry.ts` imports every file in `operations/` and every command in `commands/`: run `regen.ts` after adding or renaming one.
 
 ## Runtime facts
 
@@ -145,6 +145,13 @@ export default defineCommand({
     return { id: invoice.id, due: invoice.dueDate, amountDKK: invoice.amountDKK };
   },
 });
+```
+
+**Shared code between commands** (an output mapper, a URL builder) goes in `cli/src/lib/<name>.ts`, never in `commands/`: `regen.ts` registers only `commands/<noun>-<verb>.ts` files whose default export is a command, and warns about any other file there (`warnings` in its JSON).
+
+```ts
+// cli/src/lib/deals.ts, imported by commands/deal-search.ts as `import { toDeal } from "../lib/deals";`
+export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.name, url: `https://shop.example/deal/${d.id}` });
 ```
 
 ## site.ts
