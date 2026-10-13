@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.1.0, both skills exist", () => {
+  test("version 0.2.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.1.0");
+      expect(m.version).toBe("0.2.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -49,7 +49,7 @@ describe("manifests", () => {
       const mk = JSON.parse(read(join(REPO, p)));
       const entry = mk.plugins.find((x: { name: string }) => x.name === "site-cli-creator");
       expect(entry).toEqual({ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description });
-      expect(mk.metadata.version).toBe("1.2.0");
+      expect(mk.metadata.version).toBe("1.3.0");
     }
     expect(read(join(REPO, "README.md"))).toContain("[site-cli-creator](./plugins/site-cli-creator)");
   });
@@ -184,6 +184,11 @@ describe("SPEC behaviours in the skills", () => {
     expect(md).toContain("exactly the title");
     for (const s of ["open issue", "closed, `fixed-in` newer", "closed, no `fixed-in` label", "links the closed one", "| none | create an issue"]) expect(md).toContain(s);
     expect(md).toContain("--label feature");
+    // Drift and bugs carry their own labels, so the queue filters with one click; dedup stays by title.
+    expect(md).toMatch(/\| drift \| the Fingerprint, exactly \| `drift` \|/);
+    expect(md).toMatch(/\| bug \| `bug: <bug key>` \| `bug` \|/);
+    expect(md).toContain("--label <label>");
+    expect(md).toContain("labels=<label>");
     expect(md).toContain("one issue per entry");
     expect(md).not.toMatch(/version and OS from `<skill> version`/);
   });
@@ -193,6 +198,8 @@ describe("SPEC behaviours in the skills", () => {
     for (const s of ["unverified", "needs-account", "check --op", "## Maintainer handover", "generated.json", "ADMIN"]) expect(md).toContain(s);
     const fix = read(join(GEN, "reference/fix.md"));
     for (const s of ["--label unverified", "gh pr checks", "gh pr merge", "Fixes #<n>", "site-cli-creator-feedback"]) expect(fix).toContain(s);
+    for (const s of ["gh issue list --repo <owner/name> --state open --label drift", "gh issue list --repo <owner/name> --state open --label bug"]) expect(fix).toContain(s);
+    for (const s of ["`drift`", "`bug`"]) expect(read(join(GEN, "reference/new.md"))).toContain(s);
   });
 
   test("the guidance documents what dogfooding agents had to read source for", () => {
@@ -207,6 +214,26 @@ describe("SPEC behaviours in the skills", () => {
     expect(read(join(GEN, "SKILL.md"))).toContain("bun build.ts bun-<os>-<arch> ../bin/<skill>");
     const pkg = JSON.parse(read(join(GEN, "starter/skill/cli/package.json")));
     expect(pkg.scripts.typecheck).toBe("tsc --noEmit -p .");
+  });
+
+  test("fix mode re-captures first, then signs the CLI in from the Capture profile, so the maintainer signs in once (cold read)", () => {
+    const fix = read(join(GEN, "reference/fix.md"));
+    const drift = fix.slice(fix.indexOf("## 2a. Drift"), fix.indexOf("### Unverified"));
+    expect(drift).toContain("login --from-profile ~/.site-cli-creator/profile");
+    expect(drift.indexOf("tools/capture.ts")).toBeGreaterThan(-1);
+    expect(drift.indexOf("tools/capture.ts")).toBeLessThan(drift.indexOf("login --from-profile"));
+    const md = read(join(GEN, "SKILL.md"));
+    const line = md.split("\n").find((l) => l.startsWith("- Drift:")) ?? "";
+    expect(line).toContain("login --from-profile");
+    expect(line.indexOf("re-capture")).toBeLessThan(line.indexOf("login --from-profile"));
+  });
+
+  test("contracts.md's needs constants fit the variables draft-contract drafts (REST query values are strings) (cold read)", () => {
+    const contracts = read(join(GEN, "reference/contracts.md"));
+    expect(contracts).toContain('limit: { value: "1" }');
+    expect(contracts).not.toMatch(/^needs: .*\{ value: \d/m);
+    expect(contracts).toContain("A constant must fit its variable's schema");
+    for (const s of ["no needs entry for", "does not fit variables"]) expect(contracts).toContain(s);
   });
 
   test("session row says auth none never exits 4", () => {

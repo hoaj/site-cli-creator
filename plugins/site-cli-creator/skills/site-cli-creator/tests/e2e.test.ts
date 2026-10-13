@@ -18,7 +18,7 @@ import { copyExpected, OPERATION_NAMES } from "../fixtures/expected/copy";
 import { ACCOUNT, INVOICES, newStore, SUBSCRIPTIONS, USER } from "../fixtures/site/data";
 import { startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
 import { findChrome } from "../starter/skill/cli/src/runtime/chrome";
-import { SKILL_ROOT } from "../tools/lib/paths";
+import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 
 const TOOLS = join(SKILL_ROOT, "tools");
 const BUN = process.execPath;
@@ -230,7 +230,7 @@ for (const auth of ["none", "login"] as const) {
       expect(added.code, added.stderr).toBe(0);
       expect(added.out).toMatchObject({ plugin: PLUGIN, skill, auth, version: "0.1.0" });
 
-      const copied = copyExpected(auth, join(cliDir, "src"), { plugin: PLUGIN, skill, repo: REPO, generatorVersion: "0.1.0", origin: site.url });
+      const copied = copyExpected(auth, join(cliDir, "src"), { plugin: PLUGIN, skill, repo: REPO, generatorVersion: generatorVersion(), origin: site.url });
       expect(copied).toContain("site.ts");
       expect(copied.filter((f) => f.startsWith("commands/")).length).toBe(4);
 
@@ -309,6 +309,51 @@ for (const auth of ["none", "login"] as const) {
         const again = await cli(["invoice", "list"]);
         expect(again.code, again.stderr).toBe(0);
       }, 180_000);
+
+      test("login --from-profile reuses a Capture's sign-in: no second sign-in, session.json only (#38)", async () => {
+        // The maintainer signs in once, during a Capture, on the Capture's own profile.
+        const capProfile = join(work, "capture-profile");
+        const capSkill = join(work, "capture-skill");
+        mkdirSync(capSkill, { recursive: true });
+        const scripts = join(work, "scripts");
+        mkdirSync(scripts, { recursive: true });
+        writeFileSync(join(scripts, "signed-in.ts"), `export default async (page) => {\n  await page.waitForSelector("body[data-state=loaded]", { timeout: 30000 });\n};\n`);
+        const captured = await tool(
+          "capture.ts",
+          ["--skill-dir", capSkill, "--task", "sign-in", "--url", `${site.loginUrl}/login?autologin=1`, "--headless", "--script", join(scripts, "signed-in.ts"), "--profile", capProfile, "--origin", site.url, "--login-host", new URL(site.loginUrl).hostname],
+          { env: { SITE_CLI_CHROME: CHROME! }, timeout: 180_000 },
+        );
+        expect(captured.code, JSON.stringify(captured.out) + captured.stderr).toBe(0);
+
+        // From here on no new sign-in can complete: a plain login on a fresh state dir fails.
+        const freshHome = join(work, "state-from-profile");
+        site.blockSignIn(true);
+        try {
+          const plain = await cli(["login"], { env: { SITE_CLI_HOME: freshHome, SITE_CLI_LOGIN_TIMEOUT_MS: "3000" } });
+          expect(plain.code, plain.stderr).toBe(4);
+
+          const r = await cli(["login", "--from-profile", capProfile], { env: { SITE_CLI_HOME: freshHome } });
+          expect(r.code, r.stdout + r.stderr).toBe(0);
+          expect(r.out).toEqual({ loggedIn: true, fromProfile: true, stateDir: freshHome, ids: ["customerId"] });
+          const file = join(freshHome, "session.json");
+          expect(statSync(file).mode & 0o777).toBe(0o600);
+          const session = JSON.parse(readFileSync(file, "utf8"));
+          expect(session.ids).toEqual({ customerId: USER.customerId });
+          // Cookie values never reach stdout or stderr.
+          const sid = /shop_sid=([^;]+)/.exec(session.headers.cookie)?.[1];
+          expect(sid).toBeDefined();
+          expect(r.stdout + r.stderr).not.toContain(sid!);
+          // The session works.
+          const sub = await cli(["subscription", "show"], { env: { SITE_CLI_HOME: freshHome, SITE_CLI_NONINTERACTIVE: "1" } });
+          expect(sub.code, sub.stderr).toBe(0);
+
+          const missing = await cli(["login", "--from-profile", join(work, "no-such-profile")], { env: { SITE_CLI_HOME: freshHome } });
+          expect(missing.code).toBe(2);
+          expect(missing.out.error.message).toContain("no such Chrome profile");
+        } finally {
+          site.blockSignIn(false);
+        }
+      }, 300_000);
     } else {
       test("there is no login command without a login", async () => {
         const r = await cli(["login"]);

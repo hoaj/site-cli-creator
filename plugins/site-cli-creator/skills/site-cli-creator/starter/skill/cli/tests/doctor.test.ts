@@ -1,4 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { chromeCandidates, chromeLaunchOptions, findChrome } from "../src/runtime/chrome";
 import { binaryFindings, doctor, generatedJsonPath, readGenerated, type Exec } from "../src/runtime/doctor";
 import { saveSession } from "../src/runtime/session";
@@ -41,17 +43,24 @@ describe("doctor", () => {
 
   test("reports versions, state, Chrome, gh and the check command", async () => {
     saveSession(home.dir, { headers: {}, ids: {}, savedAt: "2026-10-01T00:00:00.000Z" });
+    // Injected, never the plugin's own generated.json: this test must hold in every generated
+    // plugin, whatever generator version and maintainer it was created with.
+    const generated = join(home.dir, "generated.json");
+    writeFileSync(generated, JSON.stringify({ generatedWith: "9.8.7", maintainer: "octo" }));
     const out = await doctor(loginSite(), {
       env: { SITE_CLI_HOME: home.dir, SITE_CLI_CHROME: "/x/chrome" },
       exec: fakeExec({}),
       exists: () => true,
       platform: "darwin",
+      generatedJson: generated,
     });
     expect(out).toMatchObject({
       plugin: "acme",
       skill: "shop",
       version: "1.2.3",
-      generatedWith: "0.1.0",
+      generatedWith: "9.8.7",
+      maintainer: "octo",
+      generated,
       bun: Bun.version,
       stateDir: home.dir,
       session: "saved 2026-10-01T00:00:00.000Z",
@@ -109,8 +118,6 @@ describe("doctor", () => {
 
 describe("doctor and generated.json (SPEC §5, §13)", () => {
   test("prints generatedWith and maintainer from generated.json, so a handover shows without a new binary", async () => {
-    const { writeFileSync } = await import("node:fs");
-    const { join } = await import("node:path");
     const file = join(home.dir, "generated.json");
     writeFileSync(file, JSON.stringify({ generatedWith: "0.0.9", maintainer: "alice" }));
     const out = await doctor(loginSite(), { env: { SITE_CLI_HOME: home.dir }, exec: async () => ({ code: 1, stdout: "" }), generatedJson: file });

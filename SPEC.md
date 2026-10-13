@@ -25,7 +25,7 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/
 
 | Mode | Trigger | Does |
 |---|---|---|
-| `new` | a new site | copies the Starter code (§5) into a new plugin, writes `generated.json`, creates the repo labels the loop uses (`feature`, `unverified`, `needs-account`; `fixed-in:*` labels are made by `release.yml`), then runs **add-skill** for the first CLI skill |
+| `new` | a new site | copies the Starter code (§5) into a new plugin, writes `generated.json`, creates the repo labels the loop uses (`feature`, `drift`, `bug`, `unverified`, `needs-account`; `fixed-in:*` labels are made by `release.yml`), then runs **add-skill** for the first CLI skill |
 | `add-skill` | a new site or login in an existing plugin | creates `skills/<skill>/`, asks whether the site needs a login and confirms it from the Capture (`auth`, §7), sets up login or `bootstrap`, then runs **add-task** for each Task |
 | `add-task` | a feature request filed by the Feedback skill, or the maintainer | runs the Task loop (§3) once, reusing existing Operations, then opens a PR that the maintainer merges. If the maintainer's account can't perform the Task, the issue is closed with an explanation and the label `needs-account` (§13) |
 | `fix` | a Drift or bug issue | **Drift:** re-captures only the affected Task, updates the Contract, runs `check`, opens a PR that auto-merges when green. If the maintainer's account can't reach the Task, see §13. **Bug:** fixes it in the plugin's own code, wherever it sits, and opens a PR. If the bug came from the Starter code, it also offers an issue through `site-cli-creator-feedback`, so new plugins get the fix (§5) |
@@ -82,6 +82,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
       src/registry.ts                       GENERATED  static imports, so `bun build --compile` sees them
       src/operations/<name>.ts              AGENT      one Contract per Operation
       src/commands/<noun>-<verb>.ts         AGENT      one per Task
+      src/lib/*.ts                          AGENT      code shared between commands, never registered
 ```
 
 There is no CLI framework. Routing and flag parsing are about 30 lines in `main.ts`. Maintainer-only tooling never ships inside `skills/`, because agents load every skill folder they find.
@@ -111,7 +112,7 @@ Each `src/operations/<name>.ts` exports:
 | `graphql` / `rest` | the trimmed query: only the fields the CLI reads, not the frontend's text |
 | `variables` | a Zod schema, validated before any call (input kind) |
 | `response` | a Zod schema covering only the fields the CLI reads. The script drafts it from the Capture, and the agent cuts it down and decides which fields may be null, because one Capture is too narrow to decide nullability |
-| `needs` | for each variable, where it comes from: another Operation's result plus a pick, or `session`. `check` uses this chain, and no personal data is stored |
+| `needs` | for each variable, where it comes from: another Operation's result plus a pick, `session`, or a constant (`{ value }`: a fixed parameter the command passes). `check` uses this chain, and no personal data is stored |
 | `trigger(page)` | writes only: drives the UI in Playwright up to the request, so `check` can intercept and abort it |
 
 The Zod schema is both the runtime parser and the TypeScript type, so Drift shows up as a parse failure.
@@ -128,6 +129,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 
   There is no `last-error.json`. The Feedback skill works from the error JSON the CLI just printed (§10).
 - **`login`** launches headed Chrome via `launchPersistentContext(profile, {channel: "chrome"})`. It waits up to 10 minutes for the request named by `site.tokenRequest`, sniffs its `authorization` header and the cookies, then runs the site's **post-login step**.
+- **`login --from-profile <dir>`** lets the maintainer sign in once: right after the first Capture, it reads the Capture profile's cookies for the site's hosts (the origin's domain and its subdomains, as the Capture records them) and its login hosts, in memory only, and runs the same sign-in headless with them in a Chrome context that keeps nothing on disk (not the CLI's `profile/`). Nothing is written but `session.json`, and no cookie value is logged.
 - **Post-login step** (`site.ts`): site-specific, written by the agent from the Capture. It derives the chain-root ids and keeps nothing else. For YouSee:
   1. Decode `ciam_id` and `individual_id` from the access token.
   2. `POST /shop/api/session-management/post-login` with `{ciamId, individualId}`, sending both the bearer and the cookie.
@@ -153,7 +155,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 - **Task commands:** `<noun> <verb> [flags]`, one per Task. There is no raw `op <name>` escape hatch, because it would invite working around Drift.
 - **Built-in, the same in every CLI skill:**
   - `help`: commands, flags and exit codes, as JSON;
-  - `login` (only for `auth: "login"`);
+  - `login [--from-profile <dir>]` (only for `auth: "login"`, §7);
   - `check [--op <name>] [--writes]` (§10);
   - `doctor`: versions, `generatedWith`, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;
   - `version`.
@@ -248,6 +250,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/skil
 
 **`check`:**
 - Calls every **read** Operation live, in chain order, and validates it against its Contract. Plain `check` never launches Chrome.
+- A read Operation it can never call, because a required variable has no `needs` entry or its constant does not fit the variable's schema, is skipped and listed in the output's `warnings`. That is a Contract gap, not Drift, so it doesn't change the exit code; the output's `ok` is false whenever `warnings` is present. `regen` warns about it too, and the generator fixes it before `check` passes.
 - With `--writes` (or `--op <write>`), it also runs `trigger(page)` headless from the profile for each **write** Operation, intercepts the write request, compares its shape and aborts it. `check` never writes.
 - If anything drifted, it exits 3 with one entry per drifted Operation, and each can be filed through the Feedback skill.
 - **Nothing runs `check` automatically.** Users run it on demand, to answer "is the site broken or is it me?". The generator runs it, with `--writes`, in `add-task` and `fix`. A Task command validates only the Operations it calls. After Drift, nobody sweeps the other Operations: `fix` runs the full `check` anyway. The maintainer schedules no proactive runs in v1, so users surface Drift. CI doesn't run `check`: login skills need a real account, and for `auth: "none"` skills the same no-automatic-runs rule keeps v1 simple.
@@ -264,7 +267,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/skil
   5. Otherwise, create an issue that links any closed match.
 - **Bug key**, decided in [Dedup key for bug reports](https://github.com/hoaj/skills/issues/28): `plugin:skill:bug:<command>:<ErrorName>:<frame>`. `<frame>` is the first stack frame inside the plugin's own `src/`, written as its path relative to `src/` plus the function name, with no line or column, so a rebuild doesn't change the key. For example, `yousee:yousee:bug:subscription-show:TypeError:commands/subscription-show.ts#render`. The CLI computes it and puts it in the envelope's `fingerprint` field, so the Feedback skill deduplicates bugs exactly like Drift.
 - **Feature requests** have no key. The skill lists open issues with the label `feature`, and if one looks like the same Task, it asks the user whether to +1 it instead of filing a new one.
-- **Titles:** the Fingerprint for Drift, `bug: <bug key>` for a bug, and `feature: <skill>: <Task in plain words>` with the label `feature` for a feature request. The body holds the diff or stack trace and never values.
+- **Titles:** the Fingerprint for Drift with the label `drift`, `bug: <bug key>` for a bug with the label `bug`, and `feature: <skill>: <Task in plain words>` with the label `feature` for a feature request. Labels only filter the queue (`fix` lists it with `--label drift` and `--label bug`); dedup goes by the exact title. The body holds the diff or stack trace and never values.
 - **Without `gh`, or without permission to file:** the skill gives the user a pre-filled `/issues/new` link, titled as above. Duplicates are caught by `fix` through that Fingerprint.
 - **What the user sees:** a short message with the issue link. On Drift the agent stops the task.
 

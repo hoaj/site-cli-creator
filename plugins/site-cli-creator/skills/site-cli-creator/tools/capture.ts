@@ -22,7 +22,7 @@ const USAGE =
 
 const NOTES = [
   "--script <file.ts> must `export default async (page) => { ... }` (page is a Playwright Page). The tool has already opened --url (and followed its redirects, to a login host too) when the function is called; the Capture stops when it resolves. Drive the page with real input (page.click, page.fill, page.press, locators), not element.click() inside page.evaluate: --write counts only real clicks, key presses and submits.",
-  "Without --script, Chrome opens headed: the user performs the Task, then closes the browser or presses Enter in the terminal.",
+  "Without --script, Chrome opens headed: the user performs the Task, then closes the Task window or presses Enter in the terminal. The Capture ends when no window on the site is left open (windows on other sites, such as a shop the page opened, close with it); a tab the site opened on its own hosts keeps it going. SIGINT or SIGTERM (kill -INT <pid>; stderr prints the pid) is a clean stop that still writes the Capture: use it to end a Capture you run in the background.",
   "Hosts are host names without scheme or port (login.example.com).",
   "The profile (~/.site-cli-creator/profile/ by default) keeps cookies between Captures; pass --profile <empty dir> to see a site set its cookies from scratch.",
 ];
@@ -67,23 +67,84 @@ async function launch(profile: string, headless: boolean): Promise<BrowserContex
       headless,
       viewport: headless ? undefined : null,
       serviceWorkers: "block",
+      // SIGINT and SIGTERM stop the Capture cleanly (watchStop): the browser closes after the shapes are written.
+      handleSIGINT: false,
+      handleSIGTERM: false,
     });
   } catch (error) {
     fail(`could not start Google Chrome: ${(error as Error).message.split("\n")[0]}`);
   }
 }
 
-function waitForStop(context: BrowserContext, interactive: boolean): Promise<string> {
-  return new Promise((done) => {
-    context.on("close", () => done("browser closed"));
-    if (!interactive) return;
-    process.once("SIGINT", () => done("interrupted"));
-    if (process.stdin.readable) {
-      process.stdin.on("data", (chunk) => {
-        if (chunk.toString().includes("\n")) done("enter");
-      });
-    }
-  });
+/** How often a headed Capture reminds stderr that it is still recording (SITE_CLI_CAPTURE_HINT_MS overrides). */
+const HINT_MS = Number(process.env.SITE_CLI_CAPTURE_HINT_MS) || 30_000;
+
+/** How long a failed --script waits for the stop its failure may come from (the Task window closing). */
+const STOP_GRACE_MS = 1_000;
+
+/** `stoppedBy` is set the moment the Capture stops, before `reason`'s callbacks run. */
+type Stop = { reason: Promise<string>; readonly stoppedBy?: string; dispose(): void };
+
+/**
+ * What ends a Capture besides a --script finishing: the browser closing; the last window on the
+ * recorded hosts closing (the Task window, the first page, counts even when it had left them), even
+ * while windows on other sites (a shop the page opened) stay open: capture.ts closes those. A tab the
+ * site opened on its own hosts keeps the Capture going after the first one closes. SIGINT or SIGTERM,
+ * a clean stop that still writes the Capture (how an agent ends a Capture it runs in the
+ * background); and Enter in the terminal.
+ */
+function watchStop(context: BrowserContext, first: Page, inScope: (url: string) => boolean, interactive: boolean): Stop {
+  let stoppedBy: string | undefined;
+  let resolveReason!: (reason: string) => void;
+  const reason = new Promise<string>((resolve) => (resolveReason = resolve));
+  const done = (why: string) => {
+    stoppedBy ??= why;
+    resolveReason(stoppedBy);
+  };
+  context.on("close", () => done("browser closed"));
+  const onPageClose = (closed: Page, lastUrl: string) => {
+    const open = context.pages().filter((p) => p !== closed && !p.isClosed());
+    // The Task goes on in another window on the site (a tab it opened): keep recording.
+    if (open.some((p) => inScope(p.url()))) return;
+    if (closed === first || inScope(lastUrl)) done("task window closed");
+  };
+  const watch = (page: Page) => {
+    let lastUrl = page.url();
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) lastUrl = frame.url();
+    });
+    page.on("close", () => onPageClose(page, lastUrl));
+  };
+  for (const page of context.pages()) watch(page);
+  context.on("page", watch);
+  const onSignal = (signal: NodeJS.Signals) => done(signal);
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  const onData = (chunk: Buffer) => {
+    if (chunk.toString().includes("\n")) done("enter");
+  };
+  if (interactive && process.stdin.readable) process.stdin.on("data", onData);
+  let hint: ReturnType<typeof setInterval> | undefined;
+  if (interactive) {
+    hint = setInterval(() => {
+      const n = context.pages().filter((p) => !p.isClosed()).length;
+      progress(
+        `still recording: ${n} window${n === 1 ? "" : "s"} open; close the site's windows (windows on other sites close with them), press Enter here, or run: kill -INT ${process.pid}`,
+      );
+    }, HINT_MS);
+  }
+  return {
+    reason,
+    get stoppedBy() {
+      return stoppedBy;
+    },
+    dispose() {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      process.stdin.off("data", onData);
+      if (hint) clearInterval(hint);
+    },
+  };
 }
 
 async function loadScript(file: string): Promise<(page: Page) => Promise<void>> {
@@ -158,6 +219,8 @@ await runTool(async () => {
   const context = await launch(profile, values.headless);
 
   const plans = new WeakMap<Request, Planned | null>();
+  /** Paths of server actions already explained on stderr. */
+  const hintedActions = new Set<string>();
   const aborted = new WeakSet<Request>();
   const pending = new Set<Promise<void>>();
   /** In-scope requests sent but not yet finished or failed. */
@@ -221,7 +284,14 @@ await runTool(async () => {
       abort = true;
     } else if (plan && recorder.shouldAbort(plan)) {
       aborted.add(req);
-      progress(`aborted write: ${plan.calls.map((c) => c.shape.operation).join(", ")}`);
+      const names = plan.calls.map((c) => c.shape.operation).join(", ");
+      progress(`aborted write: ${names}`);
+      // A read Task aborts Next.js server actions too, and the page may show an error: say why at once.
+      const path = plan.calls[0]?.shape.path;
+      if (plan.serverAction && path && !hintedActions.has(path)) {
+        hintedActions.add(path);
+        progress(`server action aborted (${names}): if the page breaks, capture again with --allow-read ${path}`);
+      }
       abort = true;
     } else if (plan?.effect === "write") {
       const what = plan.loginFlow ? "let sign-in step through" : plan.allowedRead ? "let --allow-read request through" : "let write through";
@@ -251,8 +321,8 @@ await runTool(async () => {
     }),
   );
 
-  const stop = waitForStop(context, !script);
   const page = context.pages()[0] ?? (await context.newPage());
+  const stop = watchStop(context, page, (url) => recorder.inScope(url), !script);
   let scriptError: Error | undefined;
   let stoppedBy: string;
   try {
@@ -262,18 +332,30 @@ await runTool(async () => {
     else progress(`could not open --url (${(error as Error).message.split("\n")[0]}); navigate in the browser`);
   }
   if (script && !scriptError) {
-    try {
-      await script(page);
-    } catch (error) {
-      scriptError = error as Error;
-    }
-    stoppedBy = scriptError ? "script failed" : "script finished";
+    const finished = script(page).then(
+      () => "script finished",
+      async (error) => {
+        // A script still waiting when the Task window closed fails with it: that is the stop, not a
+        // script error. Its failure can arrive just before the close event, so wait briefly for it.
+        const stopped = stop.stoppedBy ?? (await Promise.race([stop.reason, Bun.sleep(STOP_GRACE_MS).then(() => undefined)]));
+        if (stopped) return stopped;
+        scriptError = error as Error;
+        return "script failed";
+      },
+    );
+    stoppedBy = await Promise.race([finished, stop.reason]);
   } else if (script) {
     stoppedBy = "script failed";
   } else {
-    progress("Perform the Task in Chrome, then close the browser or press Enter here.");
-    stoppedBy = await stop;
+    progress(
+      `Perform the Task in Chrome, then close the Task window or press Enter here. Capture pid ${process.pid}: kill -INT ${process.pid} stops it cleanly too.`,
+    );
+    stoppedBy = await stop.reason;
   }
+  stop.dispose();
+  // Windows on other sites still open when the last one on the site closed (a shop the page opened): closed with the browser.
+  const closedWindows = stoppedBy === "task window closed" ? context.pages().filter((p) => !p.isClosed()).length : 0;
+  if (closedWindows) progress(`closing ${closedWindows} other window${closedWindows === 1 ? "" : "s"} still open`);
 
   // fetch() resolves on headers, so a script can end before its bodies arrive.
   const deadline = Date.now() + SETTLE_MS;
@@ -296,11 +378,14 @@ await runTool(async () => {
   mkdirSync(dir, { recursive: true });
   clearPreviousCapture(dir);
   operations.forEach((op, i) => writeFileSync(join(dir, files[i] as string), `${JSON.stringify(op, null, 2)}\n`));
+  // Host names only: where the sign-in went, so site.ts login.hosts can list them.
+  const signInHosts = [...recorder.signInHosts].sort();
   const index = {
     task,
     startPath: recorder.redactValues(redactPath(new URL(startUrl).pathname)),
     write: values.write,
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
+    ...(signInHosts.length ? { loginHosts: signInHosts } : {}),
     operations: operations.map((op, i) => ({
       operation: op.operation,
       kind: op.kind,
@@ -309,6 +394,8 @@ await runTool(async () => {
       ...(op.loginFlow ? { loginFlow: true } : {}),
       ...(op.navigation ? { navigation: true } : {}),
       ...(op.allowedRead ? { allowedRead: true } : {}),
+      ...(op.serverAction ? { serverAction: true } : {}),
+      ...(op.rsc ? { rsc: true } : {}),
       method: op.method,
       host: op.host,
       path: op.path,
@@ -329,8 +416,20 @@ await runTool(async () => {
         ". Check the aborted writes below and capture again (with --write-op <operation> to name the Task's write).",
     );
   }
-  if (operations.some((op) => op.effectUnknown)) {
+  if (operations.some((op) => op.effectUnknown && !op.serverAction)) {
     hints.push("effectUnknown: a persisted GraphQL query (hash only) was treated as a write and aborted. If it only reads, capture again with --allow-read <operationName>.");
+  }
+  if (operations.some((op) => op.serverAction || op.rsc)) {
+    hints.push(
+      "Next.js: serverAction (a POST with a next-action header) and rsc (a text/x-component stream) are never Operations. If an aborted server action broke the page, capture again with --allow-read <its path>. Look for the JSON /api route the page also calls (reference/add-task.md, Next.js sites).",
+    );
+  }
+  const declared = new Set(recorder.declaredLoginHosts);
+  const undeclared = signInHosts.filter((h) => !declared.has(h));
+  if (undeclared.length > 0) {
+    hints.push(
+      `Sign-in went through ${undeclared.join(", ")} (loginHosts): add ${undeclared.length === 1 ? "it" : "them"} to site.ts login.hosts (host names, no port), or pass --login-host until then. Leave out a host that only served a token to the site's own pages.`,
+    );
   }
   if (blockedElsewhere.length > 0) {
     hints.push("Writes to hosts outside the recorded scope were aborted (blockedElsewhere). A sign-in host among them: add --login-host <host>. The site's own API: pass --origin <url>.");
@@ -339,17 +438,21 @@ await runTool(async () => {
     task,
     dir,
     stoppedBy,
+    ...(closedWindows ? { closedWindows } : {}),
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
-    operations: index.operations.map(({ operation, effect, effectUnknown, loginFlow, navigation, allowedRead, file, aborted: n }) => ({
+    operations: index.operations.map(({ operation, effect, effectUnknown, loginFlow, navigation, allowedRead, serverAction, rsc, file, aborted: n }) => ({
       operation,
       effect,
       ...(effectUnknown ? { effectUnknown } : {}),
       ...(loginFlow ? { loginFlow } : {}),
       ...(navigation ? { navigation } : {}),
       ...(allowedRead ? { allowedRead } : {}),
+      ...(serverAction ? { serverAction } : {}),
+      ...(rsc ? { rsc } : {}),
       file,
       aborted: n,
     })),
+    ...(signInHosts.length ? { loginHosts: signInHosts } : {}),
     ...(blockedElsewhere.length ? { blockedElsewhere } : {}),
     ...(hints.length ? { hints } : {}),
   };
