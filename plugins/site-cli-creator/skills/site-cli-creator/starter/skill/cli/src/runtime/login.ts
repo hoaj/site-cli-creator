@@ -5,7 +5,7 @@ import type { BrowserContext, Cookie, Request } from "playwright-core";
 import { findChrome, chromeLaunchOptions, installHint } from "./chrome";
 import { ContractError, Failure } from "./envelope";
 import { ensureStateDir, profileDir, stateDir } from "./session";
-import { effectiveOrigin, isLoginHost, isTest, rebase, tokenMatches, type Env, type Site } from "./site";
+import { effectiveOrigin, isLoginHost, isTest, onSiteDomain, rebase, siteDomain, tokenMatches, type Env, type Site } from "./site";
 
 const REFRESH_TIMEOUT_MS = 30_000;
 /** How long a headless refresh may sit on a login host before it counts as logged out (SSO hops pass through). */
@@ -38,6 +38,21 @@ const domainMatches = (host: string, domain: string) => {
 };
 
 /**
+ * Whether a cookie, by its domain, belongs to the site: what `login --from-profile` carries over.
+ * The hosts are the ones the runtime and the Capture tool treat as the site's: a host on the
+ * origin's domain (`api.example.com` for `www.example.com`, as the Capture records it), a login
+ * host or its subdomain (isLoginHost), or a parent domain of either (`.example.com`).
+ */
+export function siteCookie(site: Site, cookieDomain: string, env: Env = process.env): boolean {
+  const cookieHost = cookieDomain.replace(/^\./, "").toLowerCase();
+  const origin = effectiveOrigin(site, env);
+  const domain = siteDomain(origin);
+  if (onSiteDomain(domain, cookieHost) || isLoginHost(site, `http://${cookieHost}`)) return true;
+  const hosts = [new URL(origin).hostname, ...(site.login?.hosts ?? []).map(hostName)];
+  return hosts.some((h) => domainMatches(h, cookieHost));
+}
+
+/**
  * The cookies another Chrome profile holds for the site origin and its login hosts, read with
  * Playwright and kept in memory: never written, never logged. Chrome keeps only persistent cookies
  * between runs, so a sign-in held in session cookies or in page storage does not carry over.
@@ -53,8 +68,7 @@ export async function profileCookies(site: Site, dir: string, env: Env = process
     throw new Failure("input", `--from-profile: could not open ${dir} (${why}). If a Capture is still running on it, end it first.`);
   }
   try {
-    const hosts = [new URL(effectiveOrigin(site, env)).hostname, ...(site.login?.hosts ?? []).map(hostName)];
-    return (await context.cookies()).filter((c) => hosts.some((h) => domainMatches(h, c.domain)));
+    return (await context.cookies()).filter((c) => siteCookie(site, c.domain, env));
   } finally {
     await context.close().catch(() => {});
   }

@@ -5,6 +5,7 @@
 // Values are held in memory only, to recognise them when they reappear in a
 // URL path (a username, a search term), and are never written anywhere.
 
+import { onSiteDomain, siteDomain } from "../../starter/skill/cli/src/runtime/site";
 import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
 import {
   bodyShape,
@@ -107,10 +108,6 @@ export type Planned = {
   /** `host/path` as sent and with the path redacted, for --allow-read and --write-op matching. In memory only. */
   where: string[];
 };
-
-function baseDomain(host: string): string {
-  return host.replace(/^www\./, "");
-}
 
 // ---- sign-in steps ----
 //
@@ -291,7 +288,7 @@ export class CaptureRecorder {
 
   constructor(opts: RecorderOptions) {
     this.originHost = new URL(opts.origin).hostname;
-    this.domain = baseDomain(this.originHost);
+    this.domain = siteDomain(opts.origin);
     this.loginHosts = new Set((opts.loginHosts ?? []).map((h) => h.toLowerCase()));
     this.allowWrite = opts.allowWrite ?? false;
     this.writeOp = opts.writeOp?.trim() || undefined;
@@ -317,7 +314,7 @@ export class CaptureRecorder {
   inScope(url: string): boolean {
     const host = httpHost(url);
     if (!host) return false;
-    return host === this.domain || host.endsWith(`.${this.domain}`) || this.isLoginHost(host);
+    return onSiteDomain(this.domain, host) || this.isLoginHost(host);
   }
 
   /** A trusted click, key press or form submit in a page (capture.ts reports them). */
