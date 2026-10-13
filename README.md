@@ -30,6 +30,7 @@ copilot plugin install bankmcp
 |--------|-------|-------------|
 | [bankmcp](./plugins/bankmcp) | `/bankmcp:setup` | Set up your own BankMCP server (read-only bank access for Claude or ChatGPT), locally or on Railway |
 | [site-cli-creator](./plugins/site-cli-creator) | `/site-cli-creator:site-cli-creator`, `/site-cli-creator:site-cli-creator-feedback` | Turn the calls a website makes into a plugin of CLI skills that coding agents can run, with Drift checks and a feedback loop |
+| [logbuy](https://github.com/hoaj/logbuy-plugin) (private repo) | `/logbuy:logbuy`, `/logbuy:logbuy-feedback` | Find deals on Visma LogBuy (mylogbuy.com): search products, show a deal, browse categories. Claude Code only through this marketplace (`/plugin install logbuy@hoaj-skills`); in Cursor and Copilot CLI add `hoaj/logbuy-plugin` as its own marketplace. Needs access to the private repo |
 
 ## Adding a plugin
 
