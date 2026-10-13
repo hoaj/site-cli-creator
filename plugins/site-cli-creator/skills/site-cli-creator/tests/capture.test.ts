@@ -141,6 +141,9 @@ beforeAll(() => {
     join(work, "sso.ts"),
     `export default async (page) => {\n  await page.fill("#username", "jens.hansen@example.dk");\n  await page.fill("#password", "${SSO_PASSWORD}");\n  await page.click("#go");\n  await page.waitForFunction(() => window.loaded === true);\n};\n`,
   );
+  // A wait that fails when the Task window closes (as a pending page.waitForSelector does): it rejects
+  // on the same close event that stops the Capture.
+  writeFileSync(join(work, "closed-wait.ts"), "export default (page) => new Promise((resolve, reject) => {\n  page.once('close', () => reject(new Error('page.waitForSelector: Target page, context or browser has been closed')));\n  setTimeout(() => page.close().catch(() => {}), 500);\n});\n");
   writeFileSync(join(work, "noop.ts"), "export default async () => {};\n");
   writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
   writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
@@ -399,6 +402,13 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(r.out.stoppedBy).toBe("task window closed");
     expect(r.out.closedWindows).toBe(1);
     expect(r.out.operations.map((o: { operation: string }) => o.operation)).toContain("GET /api/customers/:id/profile");
+    expect(r.files).toContain("index.json");
+  }, 120_000);
+
+  test("a --script still waiting when the Task window closes is a clean stop, not a script error (review)", async () => {
+    const r = await capture(join(work, "closed-wait-skill"), ["--script", join(work, "closed-wait.ts")], "/popup");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(r.out.stoppedBy).toBe("task window closed");
     expect(r.files).toContain("index.json");
   }, 120_000);
 
