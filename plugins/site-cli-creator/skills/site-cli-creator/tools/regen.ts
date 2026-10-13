@@ -17,15 +17,12 @@ import {
   helpCommands,
   isCommandExport,
   moduleFiles,
-  misfitConstants,
-  misfitConstantWarning,
-  neverCheckedWarning,
   registrySource,
   replaceCommandsBlock,
   setNeedsChrome,
   SHARED_CODE_HOME,
-  unsuppliedVariables,
 } from "./lib/regen";
+import { neverCheckable, neverCheckedWarning } from "../starter/skill/cli/src/runtime/needs";
 import { parseJson } from "./lib/shape";
 
 const USAGE = "bun tools/regen.ts --skill-dir <dir>";
@@ -112,10 +109,9 @@ await runTool(async () => {
     const op = await defaultExport(join(paths.operations, file));
     if (op.effect !== "read" && op.effect !== "write") fail(`operations/${file}: effect must be "read" or "write"`);
     operations.push({ name: String(op.name), effect: op.effect });
-    const unsupplied = op.effect === "read" ? unsuppliedVariables(op) : [];
-    if (unsupplied.length) warnings.push(neverCheckedWarning(String(op.name), unsupplied));
-    const misfits = op.effect === "read" ? misfitConstants(op) : [];
-    if (misfits.length) warnings.push(misfitConstantWarning(String(op.name), misfits));
+    // The same rule and text as the Starter's `check` (runtime/needs.ts).
+    const never = op.effect === "read" ? neverCheckable(op) : undefined;
+    if (never) warnings.push(neverCheckedWarning(String(op.name), never));
   }
   for (const w of warnings) progress(`warning: ${w}`);
   const needsChrome = site.auth === "login" || operations.some((o) => o.effect === "write");

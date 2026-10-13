@@ -213,8 +213,8 @@ describe("regen.ts", () => {
     const r = regen(skill);
     expect(r.code, r.stderr).toBe(0);
     expect(r.out.warnings).toEqual([
-      'GET /api/search/stores is never checked: the needs entry for limit does not fit variables. Change each constant to fit the variable\'s schema (a REST query variable drafted as z.string() takes { value: "1" }, not { value: 1 }) (reference/contracts.md).',
-      'GET /api/search/suppliers is never checked: no needs entry for limit. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } that fits the variable\'s schema (reference/contracts.md).',
+      'GET /api/search/stores is never checked: the needs entry for limit does not fit variables (expected number). Change each constant to fit the variable\'s schema (a REST query variable drafted as z.string() takes { value: "1" }, not { value: 1 }).',
+      'GET /api/search/suppliers is never checked: no needs entry for limit. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } that fits the variable\'s schema.',
     ]);
     expect(r.stderr).toContain("GET /api/search/suppliers is never checked");
   });
