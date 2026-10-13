@@ -68,10 +68,30 @@ export function describeQuery(
   return { type: "query", name: null }; // shorthand `{ … }` is a query
 }
 
-function fromObject(body: Record<string, unknown>): GraphqlCall | null {
-  const query = typeof body.query === "string" ? body.query : null;
+/** A path that names a GraphQL endpoint: a segment such as `graphql`, `gql` or `graphql-gateway`. */
+export function isGraphqlPath(path: string): boolean {
+  return path.split("/").some((seg) => /^gql$|graphql/i.test(seg));
+}
+
+/**
+ * Whether text is a GraphQL document: the `{ … }` shorthand, or definitions starting with
+ * `query`, `mutation`, `subscription` or `fragment` and a selection set. A search word
+ * (`?query=pizza`) is not, so it stays an ordinary value.
+ */
+export function isGraphqlDocument(text: string): boolean {
+  const code = stripNoise(text).trim();
+  return /^(?:\{|(?:query|mutation|subscription|fragment)\b[^{}]*\{)/.test(code) && code.endsWith("}");
+}
+
+/** Where a request goes: on a GraphQL path any `query` is a document; elsewhere it must look like one. */
+export type GraphqlContext = { graphqlPath?: boolean };
+
+function fromObject(body: Record<string, unknown>, ctx: GraphqlContext = {}): GraphqlCall | null {
+  const text = typeof body.query === "string" ? body.query : null;
+  const query = text !== null && (ctx.graphqlPath || isGraphqlDocument(text)) ? text : null;
   const extensions = body.extensions as { persistedQuery?: unknown } | undefined;
-  const persisted = !query && typeof extensions === "object" && extensions !== null && "persistedQuery" in extensions;
+  const persisted =
+    !query && typeof extensions === "object" && extensions !== null && typeof extensions.persistedQuery === "object" && extensions.persistedQuery !== null;
   if (!query && !persisted) return null;
   const requested = typeof body.operationName === "string" ? body.operationName : null;
   const described = query ? describeQuery(query, requested) : { type: "query" as const, name: null };
@@ -89,22 +109,28 @@ function fromObject(body: Record<string, unknown>): GraphqlCall | null {
   };
 }
 
-/** GraphQL calls in a POST body: one object, or a batch array. */
-export function graphqlFromBody(json: unknown): GraphqlCall[] | null {
+/**
+ * GraphQL calls in a POST body: one object, or a batch array. Only a body carrying a GraphQL
+ * document or `extensions.persistedQuery` counts, unless the request goes to a GraphQL path.
+ */
+export function graphqlFromBody(json: unknown, ctx: GraphqlContext = {}): GraphqlCall[] | null {
   const items = Array.isArray(json) ? json : [json];
   if (items.length === 0) return null;
   const calls: GraphqlCall[] = [];
   for (const item of items) {
     if (typeof item !== "object" || item === null) return null;
-    const call = fromObject(item as Record<string, unknown>);
+    const call = fromObject(item as Record<string, unknown>, ctx);
     if (!call) return null;
     calls.push(call);
   }
   return calls;
 }
 
-/** GraphQL over GET: `?query=…&operationName=…&variables=…`. */
-export function graphqlFromSearch(search: URLSearchParams): GraphqlCall[] | null {
+/**
+ * GraphQL over GET: `?query=…&operationName=…&variables=…`. A `query` parameter on a REST path
+ * that holds no GraphQL document (a search word) is an ordinary query field, so this returns null.
+ */
+export function graphqlFromSearch(search: URLSearchParams, ctx: GraphqlContext = {}): GraphqlCall[] | null {
   if (!search.has("query") && !search.has("extensions")) return null;
   const extensions = search.get("extensions");
   const parsedExt = extensions ? parseJson(extensions) : { ok: false as const };
@@ -113,6 +139,6 @@ export function graphqlFromSearch(search: URLSearchParams): GraphqlCall[] | null
     operationName: search.get("operationName") ?? undefined,
     variables: search.get("variables") ?? undefined,
     extensions: parsedExt.ok ? parsedExt.value : undefined,
-  });
+  }, ctx);
   return call ? [call] : null;
 }

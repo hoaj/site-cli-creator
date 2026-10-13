@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { describeQuery, graphqlFromBody, graphqlFromSearch, NUMBERS_REDACTED, redactQuery } from "../tools/lib/graphql";
+import { describeQuery, graphqlFromBody, graphqlFromSearch, isGraphqlPath, NUMBERS_REDACTED, redactQuery } from "../tools/lib/graphql";
 import { bearerClaims, CaptureRecorder, isLoginFlow, isSignInStep, setCookieNames, shapeFileNames, type RequestInfo } from "../tools/lib/recorder";
 import { bodyShape, isIdLike, isValueLikeKey, mergeShapes, redactPath, shapeOf } from "../tools/lib/shape";
 
@@ -190,6 +190,23 @@ query getCustomer($id: ID!, $id2: ID) {
     expect(get?.[0]?.operationName).toBe("q");
     assertNoSecrets(JSON.stringify(get));
   });
+
+  test("GraphQL only on a GraphQL path or with a GraphQL document: a REST `query` parameter is not (#33)", () => {
+    // A search word in `?query=` is a value, not a document.
+    expect(graphqlFromSearch(new URLSearchParams({ query: "Fjordkaffe", limit: "25" }))).toBeNull();
+    expect(graphqlFromSearch(new URLSearchParams({ query: "query" }))).toBeNull();
+    expect(graphqlFromBody({ query: "Fjordkaffe", limit: 25 })).toBeNull();
+    expect(graphqlFromSearch(new URLSearchParams({ query: "{ me { id } }" }))?.[0]).toMatchObject({ operationType: "query" });
+    expect(graphqlFromBody({ query: "query Search($q: String) { search(q: $q) { id } }" })?.[0]?.operationName).toBe("Search");
+    expect(graphqlFromBody({ query: "fragment F on X { id } query Q { x { ...F } }" })?.[0]?.operationName).toBe("Q");
+    expect(graphqlFromBody({ extensions: { persistedQuery: { sha256Hash: "ab" } } })?.[0]).toMatchObject({ persisted: true });
+    // On a GraphQL path, `query` is the document whatever it looks like.
+    expect(graphqlFromSearch(new URLSearchParams({ query: "me" }), { graphqlPath: true })).not.toBeNull();
+    expect(isGraphqlPath("/graphql")).toBe(true);
+    expect(isGraphqlPath("/api/graphql/v2")).toBe(true);
+    expect(isGraphqlPath("/gql")).toBe(true);
+    expect(isGraphqlPath("/api/search/suppliers")).toBe(false);
+  });
 });
 
 function req(partial: Partial<RequestInfo> & { url: string }): RequestInfo {
@@ -210,6 +227,20 @@ describe("CaptureRecorder", () => {
     expect(r.inScope("https://evilshop.example/a")).toBe(false);
     expect(r.inScope("https://www.google-analytics.com/collect")).toBe(false);
     expect(r.inScope("data:text/plain,hi")).toBe(false);
+  });
+
+  test("a REST GET with ?query=<word> is one REST Operation whose query shape lists `query` as a type (#33)", () => {
+    const r = new CaptureRecorder({ origin });
+    const plan = r.plan(req({ url: `${origin}/api/search/suppliers?query=Fjordkaffe&limit=25&sortBy=BestMatch` }))!;
+    r.record(plan, { response: { status: 200, headers: { "content-type": "application/json" }, body: json({ items: [] }) } });
+    const ops = r.operations();
+    expect(ops.map((o) => [o.kind, o.operation])).toEqual([["rest", "GET /api/search/suppliers"]]);
+    expect(ops[0]!.request.query).toEqual({ type: "object", fields: { query: { type: "string" }, limit: { type: "string" }, sortBy: { type: "string" } } });
+    expect(JSON.stringify(ops)).not.toContain("Fjordkaffe");
+    const post = r.plan(req({ url: `${origin}/api/search`, method: "POST", postData: json({ query: "Fjordkaffe" }), headers: { "content-type": "application/json" } }))!;
+    expect(post.calls[0]!.shape.kind).toBe("rest");
+    const gql = r.plan(req({ url: `${origin}/graphql?query=${encodeURIComponent("{ me { id } }")}` }))!;
+    expect(gql.calls[0]!.shape.kind).toBe("graphql");
   });
 
   test("static assets are skipped, fetches recorded", () => {

@@ -81,6 +81,12 @@ document.getElementById("save").onclick = () =>
 load();
 </script></body></html>`;
 
+// A REST search whose URL parameter is called `query` (#33): the typed word is a value.
+const SEARCH_WORD = "Fjordkaffe";
+const SEARCH_PAGE = `<!doctype html><html><body><script>
+fetch("/api/search/suppliers?query=${SEARCH_WORD}&limit=25&sortBy=BestMatch").then(() => (window.loaded = true));
+</script></body></html>`;
+
 function json(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -112,6 +118,8 @@ beforeAll(() => {
       const url = new URL(req.url);
       if (url.pathname === "/") return new Response(PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/signed-in") return new Response(SIGNED_IN_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/search") return new Response(SEARCH_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/api/search/suppliers") return json({ items: [{ name: `${SEARCH_WORD} ApS`, id: CUSTOMER_ID }] });
       if (url.pathname === "/side-effect") return new Response(SIDE_EFFECT_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/api/settings" && req.method === "POST") {
         writesReceived.push("POST /api/settings");
@@ -303,6 +311,22 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(writesReceived).toEqual(["cancelSubscription"]);
     const op = (r.out.operations as { operation: string }[]).find((o) => o.operation === "cancelSubscription");
     expect(op).toMatchObject({ allowedRead: true, aborted: 0 });
+  }, 120_000);
+
+  test("a REST GET with ?query=<word>: one REST Operation, the word in no file, and draft-contract keeps `query` (#33)", async () => {
+    const r = await capture(join(work, "search-skill"), ["--script", join(work, "loaded.ts")], "/search");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(r.everything).not.toContain(SEARCH_WORD);
+    expect(r.out.operations.map((o: { operation: string }) => o.operation)).toEqual(["GET /search", "GET /api/search/suppliers"]);
+    const kinds = r.files.filter((f) => f.endsWith(".shape.json")).map((f) => JSON.parse(readFileSync(join(r.dir, f), "utf8")).kind);
+    expect(kinds).not.toContain("graphql");
+    const shape = join(r.dir, "GET-api-search-suppliers.shape.json");
+    expect(JSON.parse(readFileSync(shape, "utf8")).request.query.fields).toEqual({ query: { type: "string" }, limit: { type: "string" }, sortBy: { type: "string" } });
+    const draft = Bun.spawnSync([process.execPath, join(SKILL_ROOT, "tools", "draft-contract.ts"), shape], { stdout: "pipe", stderr: "pipe" });
+    const source = JSON.parse(draft.stdout.toString()).source as string;
+    expect(source).toContain('query: (v) => ({ query: v["query"], limit: v["limit"], sortBy: v["sortBy"] })');
+    expect(source).toContain("    query: z.string(),");
+    expect(source).not.toContain(SEARCH_WORD);
   }, 120_000);
 
   test("nothing recorded: an error, and the previous Capture is left alone", async () => {

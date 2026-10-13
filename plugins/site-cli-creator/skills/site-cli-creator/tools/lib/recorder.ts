@@ -5,7 +5,7 @@
 // Values are held in memory only, to recognise them when they reappear in a
 // URL path (a username, a search term), and are never written anywhere.
 
-import { graphqlFromBody, graphqlFromSearch, type GraphqlCall } from "./graphql";
+import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
 import {
   bodyShape,
   mediaType,
@@ -329,18 +329,21 @@ export class CaptureRecorder {
     for (const v of url.searchParams.values()) this.remember(v);
     const where = [`${host}${path}`, `${host}${url.pathname}`];
 
+    // GraphQL only on a GraphQL path or with a GraphQL document (or persisted query): a REST
+    // `?query=<word>` is an ordinary query field, recorded as a type like any other.
+    const graphqlPath = isGraphqlPath(url.pathname);
     let gql: GraphqlCall[] | null = null;
     if (req.postData && req.postData.length > 0) {
       const text = req.postData.toString("utf8");
       const parsed = parseJson(text);
       if (parsed.ok) {
-        gql = graphqlFromBody(parsed.value);
+        gql = graphqlFromBody(parsed.value, { graphqlPath });
         collectStrings(parsed.value, (s) => this.remember(s));
       } else if (mediaType(contentType) === "application/x-www-form-urlencoded") {
         for (const v of new URLSearchParams(text).values()) this.remember(v);
       }
     } else if (method === "GET") {
-      gql = graphqlFromSearch(url.searchParams);
+      gql = graphqlFromSearch(url.searchParams, { graphqlPath });
     }
 
     const base = { resourceType: req.resourceType, host, method, path };
