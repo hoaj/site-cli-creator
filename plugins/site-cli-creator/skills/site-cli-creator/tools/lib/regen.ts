@@ -184,6 +184,26 @@ export function unsuppliedVariables(op: { variables?: unknown; needs?: unknown }
     .map(([key]) => key);
 }
 
+/**
+ * The `needs` constants ({ value }) of an Operation that its variable's schema rejects: `check`
+ * could never call it with them. A REST query variable is a string, so `{ value: 1 }` misses `z.string()`.
+ */
+export function misfitConstants(op: { variables?: unknown; needs?: unknown }): string[] {
+  const shape = (op.variables as SchemaLike | undefined)?.shape;
+  if (!shape || typeof shape !== "object") return [];
+  const needs = typeof op.needs === "object" && op.needs !== null ? (op.needs as Record<string, unknown>) : {};
+  return Object.entries(needs)
+    .filter(([key, need]) => {
+      const field = shape[key];
+      return typeof need === "object" && need !== null && "value" in need && typeof field?.safeParse === "function" && !field.safeParse((need as { value: unknown }).value).success;
+    })
+    .map(([key]) => key);
+}
+
 export function neverCheckedWarning(name: string, keys: string[]): string {
-  return `${name} is never checked: nothing in needs supplies ${keys.join(", ")}. Give each a \`needs\` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } (reference/contracts.md).`;
+  return `${name} is never checked: no needs entry for ${keys.join(", ")}. Give each a \`needs\` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } that fits the variable's schema (reference/contracts.md).`;
+}
+
+export function misfitConstantWarning(name: string, keys: string[]): string {
+  return `${name} is never checked: ${keys.map((k) => `the needs entry for ${k} does not fit variables`).join("; ")}. Change each constant to fit the variable's schema (a REST query variable drafted as z.string() takes { value: "1" }, not { value: 1 }) (reference/contracts.md).`;
 }

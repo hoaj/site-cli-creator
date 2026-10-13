@@ -202,16 +202,19 @@ describe("regen.ts", () => {
     expect(regen(login).out.needsChrome).toBe(true);
   });
 
-  test("a read Operation with a required variable nothing in needs supplies is a warning (#35)", () => {
+  test("a read Operation with a required variable no needs entry supplies, or a constant that does not fit, is a warning (#35, cold read)", () => {
     const skill = fakeSkill("never-checked", "none", { getAccount: "read" });
     const opFile = (name: string, needs: string) =>
       `import { z } from "zod";\nexport default { name: ${JSON.stringify(name)}, effect: "read", variables: z.object({ limit: z.number(), sortBy: z.string().default("BestMatch"), q: z.string().optional() }), response: z.unknown()${needs} };\n`;
     write(join(skill, "cli/src/operations/searchSuppliers.ts"), opFile("GET /api/search/suppliers", ""));
     write(join(skill, "cli/src/operations/searchShops.ts"), opFile("GET /api/search/shops", ", needs: { limit: { value: 1 } }"));
+    // A constant that does not fit its variable (a string for z.number()) is never checked either, with its own fix.
+    write(join(skill, "cli/src/operations/searchStores.ts"), opFile("GET /api/search/stores", ', needs: { limit: { value: "1" } }'));
     const r = regen(skill);
     expect(r.code, r.stderr).toBe(0);
     expect(r.out.warnings).toEqual([
-      'GET /api/search/suppliers is never checked: nothing in needs supplies limit. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } (reference/contracts.md).',
+      'GET /api/search/stores is never checked: the needs entry for limit does not fit variables. Change each constant to fit the variable\'s schema (a REST query variable drafted as z.string() takes { value: "1" }, not { value: 1 }) (reference/contracts.md).',
+      'GET /api/search/suppliers is never checked: no needs entry for limit. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } that fits the variable\'s schema (reference/contracts.md).',
     ]);
     expect(r.stderr).toContain("GET /api/search/suppliers is never checked");
   });

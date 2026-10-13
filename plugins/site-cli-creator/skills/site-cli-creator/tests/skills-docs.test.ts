@@ -228,6 +228,14 @@ describe("SPEC behaviours in the skills", () => {
     expect(line.indexOf("re-capture")).toBeLessThan(line.indexOf("login --from-profile"));
   });
 
+  test("contracts.md's needs constants fit the variables draft-contract drafts (REST query values are strings) (cold read)", () => {
+    const contracts = read(join(GEN, "reference/contracts.md"));
+    expect(contracts).toContain('limit: { value: "1" }');
+    expect(contracts).not.toMatch(/^needs: .*\{ value: \d/m);
+    expect(contracts).toContain("A constant must fit its variable's schema");
+    for (const s of ["no needs entry for", "does not fit variables"]) expect(contracts).toContain(s);
+  });
+
   test("session row says auth none never exits 4", () => {
     expect(read(join(GEN, "starter/skill/SKILL.md"))).toMatch(/\| 4 \| session \|.*only skills with `login`/);
   });
