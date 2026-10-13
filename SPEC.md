@@ -129,7 +129,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 
   There is no `last-error.json`. The Feedback skill works from the error JSON the CLI just printed (§10).
 - **`login`** launches headed Chrome via `launchPersistentContext(profile, {channel: "chrome"})`. It waits up to 10 minutes for the request named by `site.tokenRequest`, sniffs its `authorization` header and the cookies, then runs the site's **post-login step**.
-- **`login --from-profile <dir>`** lets the maintainer sign in once: right after the first Capture, it reads the Capture profile's cookies for the site's hosts (the origin's domain and its subdomains, as the Capture records them) and its login hosts, in memory only, and runs the same sign-in headless with them. Nothing is written but `session.json`, and no cookie value is logged.
+- **`login --from-profile <dir>`** lets the maintainer sign in once: right after the first Capture, it reads the Capture profile's cookies for the site's hosts (the origin's domain and its subdomains, as the Capture records them) and its login hosts, in memory only, and runs the same sign-in headless with them in a Chrome context that keeps nothing on disk (not the CLI's `profile/`). Nothing is written but `session.json`, and no cookie value is logged.
 - **Post-login step** (`site.ts`): site-specific, written by the agent from the Capture. It derives the chain-root ids and keeps nothing else. For YouSee:
   1. Decode `ciam_id` and `individual_id` from the access token.
   2. `POST /shop/api/session-management/post-login` with `{ciamId, individualId}`, sending both the bearer and the cookie.

@@ -1,10 +1,11 @@
 // Real Chrome against a local site: sign-in capture and check --writes interception.
 // Skipped where Google Chrome is not installed (or SITE_CLI_SKIP_BROWSER=1).
 import { afterAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { basename, join } from "node:path";
 import { z } from "zod";
 import { chromeWriteChecker } from "../src/runtime/check";
-import { findChrome } from "../src/runtime/chrome";
+import { chromeLaunchOptions, findChrome } from "../src/runtime/chrome";
 import { chromeLogin } from "../src/runtime/login";
 import { defineOperation } from "../src/runtime/operation";
 import { selftest } from "../src/runtime/selftest";
@@ -115,6 +116,26 @@ describe.skipIf(skip)("Chrome", () => {
     const headers = await chromeLogin(site(), { headless: false, env: { SITE_CLI_TEST: "1", SITE_CLI_HOME: home.dir } });
     expect(headers).toEqual({ authorization: "Bearer tok-1", cookie: "sid=abc" });
     expect(existsSync(profileDir(home.dir))).toBe(true);
+  }, 60_000);
+
+  test("login --from-profile writes no cookie into the CLI's own profile: nothing but session.json (review)", async () => {
+    const source = tempHome();
+    const fresh = tempHome();
+    try {
+      const { chromium } = await import("playwright-core");
+      const seeded = await chromium.launchPersistentContext(source.dir, { ...chromeLaunchOptions(findChrome()), headless: true });
+      await seeded.addCookies([{ name: "seeded_sid", value: "seeded-value", url: server.url.origin, expires: Math.floor(Date.now() / 1000) + 3600 }]);
+      await seeded.close();
+      const headers = await chromeLogin(site(), { headless: true, fromProfile: source.dir, env: { SITE_CLI_HOME: fresh.dir } });
+      expect(headers?.cookie).toContain("seeded_sid=seeded-value");
+      const files = (dir: string): string[] =>
+        existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)])) : [];
+      const holding = files(profileDir(fresh.dir)).filter((f) => basename(f).startsWith("Cookies") && readFileSync(f).includes("seeded_sid"));
+      expect(holding).toEqual([]);
+    } finally {
+      source.cleanup();
+      fresh.cleanup();
+    }
   }, 60_000);
 
   test("headless refresh that lands on a login host returns null (logged out)", async () => {
