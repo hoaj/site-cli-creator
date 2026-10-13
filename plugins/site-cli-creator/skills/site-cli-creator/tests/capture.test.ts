@@ -92,6 +92,18 @@ const POPUP_PAGE = `<!doctype html><html><body><a id="shop" href="http://localho
 fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
 </script></body></html>`;
 
+// A Next.js App Router page (#36): a server action (POST to the page with `next-action`) and an RSC
+// stream (`?_rsc=`, text/x-component), next to the plain JSON route that holds the data.
+const NEXT_PAGE = `<!doctype html><html><body><script>
+async function load() {
+  await fetch("/partner/4711?_rsc=1x2y3", { headers: { rsc: "1" } });
+  await fetch("/partner/4711", { method: "POST", headers: { "next-action": "7f3a9c", accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: '["4711"]' }).catch(() => {});
+  await fetch("/api/partners/4711");
+  window.loaded = true;
+}
+load();
+</script></body></html>`;
+
 function json(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -127,6 +139,13 @@ beforeAll(() => {
       if (url.pathname === "/signed-in") return new Response(SIGNED_IN_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/popup") return new Response(POPUP_PAGE.replace("PORT", String(server.port)), { headers: { "content-type": "text/html" } });
       if (url.pathname === "/shop") return new Response("<!doctype html><title>shop</title>", { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/next") return new Response(NEXT_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/partner/4711" && req.method === "POST") {
+        writesReceived.push("server action");
+        return new Response('0:["$@1"]', { headers: { "content-type": "text/x-component" } });
+      }
+      if (url.pathname === "/partner/4711") return new Response('0:{"P":null}', { headers: { "content-type": "text/x-component" } });
+      if (url.pathname === "/api/partners/4711") return json({ id: "4711", name: "Shop" });
       if (url.pathname === "/search") return new Response(SEARCH_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/api/search/suppliers") return json({ items: [{ name: `${SEARCH_WORD} ApS`, id: CUSTOMER_ID }] });
       if (url.pathname === "/side-effect") return new Response(SIDE_EFFECT_PAGE, { headers: { "content-type": "text/html" } });
@@ -378,6 +397,22 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     const out = JSON.parse(stdout);
     expect(out.stoppedBy).toBe("SIGTERM");
     expect(existsSync(join(skill, "captures", "profile-show", "index.json"))).toBe(true);
+  }, 120_000);
+
+  test("Next.js: a server action is aborted with an immediate hint and flagged; the RSC stream is marked rsc (#36)", async () => {
+    writesReceived = [];
+    const r = await capture(join(work, "next-skill"), ["--script", join(work, "loaded.ts")], "/next");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(writesReceived).toEqual([]);
+    expect(r.stderr).toContain("server action aborted (POST /partner/:id): if the page breaks, capture again with --allow-read /partner/:id");
+    const byName = Object.fromEntries((r.out.operations as { operation: string }[]).map((o) => [o.operation, o]));
+    expect(byName["POST /partner/:id"]).toMatchObject({ effect: "write", effectUnknown: true, serverAction: true, aborted: 1 });
+    expect(byName["GET /partner/:id"]).toMatchObject({ effect: "read", rsc: true });
+    expect(byName["GET /api/partners/:id"]).not.toHaveProperty("rsc");
+    const index = JSON.parse(readFileSync(join(r.dir, "index.json"), "utf8"));
+    expect(index.operations.find((o: { operation: string }) => o.operation === "POST /partner/:id")).toMatchObject({ serverAction: true, effectUnknown: true });
+    expect(index.operations.find((o: { operation: string }) => o.operation === "GET /partner/:id")).toMatchObject({ rsc: true });
+    expect(r.out.hints.join(" ")).toContain("Next.js");
   }, 120_000);
 
   test("nothing recorded: an error, and the previous Capture is left alone", async () => {

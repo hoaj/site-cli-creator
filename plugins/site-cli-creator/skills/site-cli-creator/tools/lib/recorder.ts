@@ -69,6 +69,10 @@ export type OperationShape = {
   navigation?: true;
   /** Let through because --allow-read named it. */
   allowedRead?: true;
+  /** A Next.js server action (a POST with a `next-action` header): an RPC into the page's server code, never an Operation. */
+  serverAction?: true;
+  /** A React Server Component stream (`text/x-component`, `?_rsc=`, an `rsc: 1` header): no JSON, so no Zod Contract can parse it. */
+  rsc?: true;
   resourceType: string;
   host: string;
   method: string;
@@ -97,6 +101,8 @@ export type Planned = {
   loginFlow: boolean;
   /** Named by --allow-read: never aborted. */
   allowedRead: boolean;
+  /** A Next.js server action (`next-action` header). */
+  serverAction?: boolean;
   method: string;
   /** `host/path` as sent and with the path redacted, for --allow-read and --write-op matching. In memory only. */
   where: string[];
@@ -388,6 +394,10 @@ export class CaptureRecorder {
     }
 
     const effect: Effect = READ_METHODS.has(method) ? "read" : "write";
+    // Next.js: a server action POSTs to the page itself with a `next-action` header; nothing shows
+    // whether it writes. An RSC stream is the page's render, not data.
+    const serverAction = effect === "write" && header(req.headers, "next-action") !== undefined;
+    const rsc = url.searchParams.has("_rsc") || header(req.headers, "rsc") === "1";
     const query = queryShape(url.searchParams);
     const body = req.postData && req.postData.length > 0 ? bodyShape(req.postData, contentType) : undefined;
     const allowedRead = effect === "write" && this.allowRead.some((p) => where.some((w) => w.includes(p)));
@@ -405,11 +415,13 @@ export class CaptureRecorder {
       ...(loginFlow ? { loginFlow: true as const } : {}),
       ...(navigation ? { navigation: true as const } : {}),
       ...(allowedRead ? { allowedRead: true as const } : {}),
+      ...(serverAction ? { effectUnknown: true as const, serverAction: true as const } : {}),
+      ...(rsc ? { rsc: true as const } : {}),
       ...base,
       request: request({ ...(query ? { query } : {}), ...(body ? { body } : {}) }),
       ...outcome(),
     };
-    return { seq: this.seq++, calls: [{ key: `rest ${host} ${method} ${path}`, shape }], effect, loginFlow, allowedRead, method, where };
+    return { seq: this.seq++, calls: [{ key: `rest ${host} ${method} ${path}`, shape }], effect, loginFlow, allowedRead, serverAction, method, where };
   }
 
   /**
@@ -472,6 +484,7 @@ export class CaptureRecorder {
       }
       shape.seen = 1;
       shape.aborted = aborted ? 1 : 0;
+      if (contentType === "text/x-component") shape.rsc = true;
       if (response) {
         const body: BodyShape =
           splitBodies && call.responseIndex !== undefined
@@ -580,7 +593,7 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
   const variables = mergeMaybe(a.request.variables, b.request.variables);
   const bearer = mergeMaybe(a.request.bearerClaims, b.request.bearerClaims);
   const body = a.request.body && b.request.body ? mergeBodies(a.request.body, b.request.body) : (a.request.body ?? b.request.body);
-  const flag = (k: "loginFlow" | "navigation" | "allowedRead" | "effectUnknown") => (a[k] || b[k] ? { [k]: true as const } : {});
+  const flag = (k: "loginFlow" | "navigation" | "allowedRead" | "effectUnknown" | "serverAction" | "rsc") => (a[k] || b[k] ? { [k]: true as const } : {});
   return {
     ...a,
     effect: a.effect === "write" || b.effect === "write" ? "write" : "read",
@@ -588,6 +601,8 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
     ...flag("loginFlow"),
     ...flag("navigation"),
     ...flag("allowedRead"),
+    ...flag("serverAction"),
+    ...flag("rsc"),
     graphql: a.graphql && !a.graphql.query && b.graphql?.query ? b.graphql : a.graphql,
     request: {
       headers: mergeHeaders(a.request.headers, b.request.headers),

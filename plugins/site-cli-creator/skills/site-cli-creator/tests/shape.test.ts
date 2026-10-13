@@ -243,6 +243,29 @@ describe("CaptureRecorder", () => {
     expect(gql.calls[0]!.shape.kind).toBe("graphql");
   });
 
+  test("Next.js: a server action is flagged serverAction + effectUnknown; RSC streams are marked rsc (#36)", () => {
+    const r = new CaptureRecorder({ origin });
+    const action = r.plan(
+      req({
+        url: `${origin}/partner/4711`,
+        method: "POST",
+        headers: { "next-action": "7f3a9c", accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" },
+        postData: Buffer.from('["4711"]'),
+      }),
+    )!;
+    expect(action.calls[0]!.shape).toMatchObject({ effect: "write", effectUnknown: true, serverAction: true });
+    expect(action.serverAction).toBe(true);
+    expect(r.shouldAbort(action)).toBe(true);
+    r.record(action, { aborted: true });
+    const rsc = r.plan(req({ url: `${origin}/partner/4711?_rsc=1x2y3`, headers: { rsc: "1" } }))!;
+    expect(rsc.calls[0]!.shape.rsc).toBe(true);
+    const plain = r.plan(req({ url: `${origin}/api/partners` }))!;
+    r.record(plain, { response: { status: 200, headers: { "content-type": "text/x-component" }, body: Buffer.from("0:[]") } });
+    const ops = r.operations();
+    expect(ops.find((o) => o.operation === "GET /api/partners")?.rsc).toBe(true);
+    expect(ops.find((o) => o.operation.startsWith("POST"))).toMatchObject({ serverAction: true, effectUnknown: true });
+  });
+
   test("static assets are skipped, fetches recorded", () => {
     const r = new CaptureRecorder({ origin });
     expect(r.plan(req({ url: `${origin}/app.js`, resourceType: "script" }))).toBeNull();

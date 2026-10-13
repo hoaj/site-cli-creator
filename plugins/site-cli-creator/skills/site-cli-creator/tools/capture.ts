@@ -203,6 +203,8 @@ await runTool(async () => {
   const context = await launch(profile, values.headless);
 
   const plans = new WeakMap<Request, Planned | null>();
+  /** Paths of server actions already explained on stderr. */
+  const hintedActions = new Set<string>();
   const aborted = new WeakSet<Request>();
   const pending = new Set<Promise<void>>();
   /** In-scope requests sent but not yet finished or failed. */
@@ -266,7 +268,14 @@ await runTool(async () => {
       abort = true;
     } else if (plan && recorder.shouldAbort(plan)) {
       aborted.add(req);
-      progress(`aborted write: ${plan.calls.map((c) => c.shape.operation).join(", ")}`);
+      const names = plan.calls.map((c) => c.shape.operation).join(", ");
+      progress(`aborted write: ${names}`);
+      // A read Task aborts Next.js server actions too, and the page may show an error: say why at once.
+      const path = plan.calls[0]?.shape.path;
+      if (plan.serverAction && path && !hintedActions.has(path)) {
+        hintedActions.add(path);
+        progress(`server action aborted (${names}): if the page breaks, capture again with --allow-read ${path}`);
+      }
       abort = true;
     } else if (plan?.effect === "write") {
       const what = plan.loginFlow ? "let sign-in step through" : plan.allowedRead ? "let --allow-read request through" : "let write through";
@@ -365,6 +374,8 @@ await runTool(async () => {
       ...(op.loginFlow ? { loginFlow: true } : {}),
       ...(op.navigation ? { navigation: true } : {}),
       ...(op.allowedRead ? { allowedRead: true } : {}),
+      ...(op.serverAction ? { serverAction: true } : {}),
+      ...(op.rsc ? { rsc: true } : {}),
       method: op.method,
       host: op.host,
       path: op.path,
@@ -385,8 +396,13 @@ await runTool(async () => {
         ". Check the aborted writes below and capture again (with --write-op <operation> to name the Task's write).",
     );
   }
-  if (operations.some((op) => op.effectUnknown)) {
+  if (operations.some((op) => op.effectUnknown && !op.serverAction)) {
     hints.push("effectUnknown: a persisted GraphQL query (hash only) was treated as a write and aborted. If it only reads, capture again with --allow-read <operationName>.");
+  }
+  if (operations.some((op) => op.serverAction || op.rsc)) {
+    hints.push(
+      "Next.js: serverAction (a POST with a next-action header) and rsc (a text/x-component stream) are never Operations. If an aborted server action broke the page, capture again with --allow-read <its path>. Look for the JSON /api route the page also calls (reference/add-task.md, Next.js sites).",
+    );
   }
   if (blockedElsewhere.length > 0) {
     hints.push("Writes to hosts outside the recorded scope were aborted (blockedElsewhere). A sign-in host among them: add --login-host <host>. The site's own API: pass --origin <url>.");
@@ -397,13 +413,15 @@ await runTool(async () => {
     stoppedBy,
     ...(closedWindows ? { closedWindows } : {}),
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
-    operations: index.operations.map(({ operation, effect, effectUnknown, loginFlow, navigation, allowedRead, file, aborted: n }) => ({
+    operations: index.operations.map(({ operation, effect, effectUnknown, loginFlow, navigation, allowedRead, serverAction, rsc, file, aborted: n }) => ({
       operation,
       effect,
       ...(effectUnknown ? { effectUnknown } : {}),
       ...(loginFlow ? { loginFlow } : {}),
       ...(navigation ? { navigation } : {}),
       ...(allowedRead ? { allowedRead } : {}),
+      ...(serverAction ? { serverAction } : {}),
+      ...(rsc ? { rsc } : {}),
       file,
       aborted: n,
     })),
