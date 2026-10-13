@@ -184,6 +184,11 @@ describe("SPEC behaviours in the skills", () => {
     expect(md).toContain("exactly the title");
     for (const s of ["open issue", "closed, `fixed-in` newer", "closed, no `fixed-in` label", "links the closed one", "| none | create an issue"]) expect(md).toContain(s);
     expect(md).toContain("--label feature");
+    // Drift and bugs carry their own labels, so the queue filters with one click; dedup stays by title.
+    expect(md).toMatch(/\| drift \| the Fingerprint, exactly \| `drift` \|/);
+    expect(md).toMatch(/\| bug \| `bug: <bug key>` \| `bug` \|/);
+    expect(md).toContain("--label <label>");
+    expect(md).toContain("labels=<label>");
     expect(md).toContain("one issue per entry");
     expect(md).not.toMatch(/version and OS from `<skill> version`/);
   });
@@ -193,6 +198,8 @@ describe("SPEC behaviours in the skills", () => {
     for (const s of ["unverified", "needs-account", "check --op", "## Maintainer handover", "generated.json", "ADMIN"]) expect(md).toContain(s);
     const fix = read(join(GEN, "reference/fix.md"));
     for (const s of ["--label unverified", "gh pr checks", "gh pr merge", "Fixes #<n>", "site-cli-creator-feedback"]) expect(fix).toContain(s);
+    for (const s of ["gh issue list --repo <owner/name> --state open --label drift", "gh issue list --repo <owner/name> --state open --label bug"]) expect(fix).toContain(s);
+    for (const s of ["`drift`", "`bug`"]) expect(read(join(GEN, "reference/new.md"))).toContain(s);
   });
 
   test("the guidance documents what dogfooding agents had to read source for", () => {

@@ -25,7 +25,7 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/
 
 | Mode | Trigger | Does |
 |---|---|---|
-| `new` | a new site | copies the Starter code (§5) into a new plugin, writes `generated.json`, creates the repo labels the loop uses (`feature`, `unverified`, `needs-account`; `fixed-in:*` labels are made by `release.yml`), then runs **add-skill** for the first CLI skill |
+| `new` | a new site | copies the Starter code (§5) into a new plugin, writes `generated.json`, creates the repo labels the loop uses (`feature`, `drift`, `bug`, `unverified`, `needs-account`; `fixed-in:*` labels are made by `release.yml`), then runs **add-skill** for the first CLI skill |
 | `add-skill` | a new site or login in an existing plugin | creates `skills/<skill>/`, asks whether the site needs a login and confirms it from the Capture (`auth`, §7), sets up login or `bootstrap`, then runs **add-task** for each Task |
 | `add-task` | a feature request filed by the Feedback skill, or the maintainer | runs the Task loop (§3) once, reusing existing Operations, then opens a PR that the maintainer merges. If the maintainer's account can't perform the Task, the issue is closed with an explanation and the label `needs-account` (§13) |
 | `fix` | a Drift or bug issue | **Drift:** re-captures only the affected Task, updates the Contract, runs `check`, opens a PR that auto-merges when green. If the maintainer's account can't reach the Task, see §13. **Bug:** fixes it in the plugin's own code, wherever it sits, and opens a PR. If the bug came from the Starter code, it also offers an issue through `site-cli-creator-feedback`, so new plugins get the fix (§5) |
@@ -267,7 +267,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/skil
   5. Otherwise, create an issue that links any closed match.
 - **Bug key**, decided in [Dedup key for bug reports](https://github.com/hoaj/skills/issues/28): `plugin:skill:bug:<command>:<ErrorName>:<frame>`. `<frame>` is the first stack frame inside the plugin's own `src/`, written as its path relative to `src/` plus the function name, with no line or column, so a rebuild doesn't change the key. For example, `yousee:yousee:bug:subscription-show:TypeError:commands/subscription-show.ts#render`. The CLI computes it and puts it in the envelope's `fingerprint` field, so the Feedback skill deduplicates bugs exactly like Drift.
 - **Feature requests** have no key. The skill lists open issues with the label `feature`, and if one looks like the same Task, it asks the user whether to +1 it instead of filing a new one.
-- **Titles:** the Fingerprint for Drift, `bug: <bug key>` for a bug, and `feature: <skill>: <Task in plain words>` with the label `feature` for a feature request. The body holds the diff or stack trace and never values.
+- **Titles:** the Fingerprint for Drift with the label `drift`, `bug: <bug key>` for a bug with the label `bug`, and `feature: <skill>: <Task in plain words>` with the label `feature` for a feature request. Labels only filter the queue (`fix` lists it with `--label drift` and `--label bug`); dedup goes by the exact title. The body holds the diff or stack trace and never values.
 - **Without `gh`, or without permission to file:** the skill gives the user a pre-filled `/issues/new` link, titled as above. Duplicates are caught by `fix` through that Fingerprint.
 - **What the user sees:** a short message with the issue link. On Drift the agent stops the task.
 

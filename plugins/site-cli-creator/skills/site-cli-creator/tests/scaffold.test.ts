@@ -157,17 +157,17 @@ describe("new.ts", () => {
     expect(run(NEW, newArgs(join(work, "x"), ["--no-labels"]), { STARTER_DIR: join(work, "missing") }).out.error.message).toContain("starter/plugin");
   });
 
-  test("creates the three labels with gh; a gh failure is an error that keeps the files and says how to retry", () => {
+  test("creates the five labels with gh (feature, drift, bug, unverified, needs-account); a gh failure is an error that keeps the files and says how to retry", () => {
     const bin = join(work, "gh-bin");
     const log = join(work, "gh.log");
     write(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${log}"\n[ -n "$GH_FAIL" ] && { echo "HTTP 403" >&2; exit 1; }\nexit 0\n`, 0o755);
     const env = { PATH: `${bin}:${process.env.PATH}` };
     const ok = run(NEW, newArgs(join(work, "plugin-labels")), env);
     expect(ok.code).toBe(0);
-    expect(ok.out.labels).toEqual({ created: ["feature", "unverified", "needs-account"] });
+    expect(ok.out.labels).toEqual({ created: ["feature", "drift", "bug", "unverified", "needs-account"] });
     const calls = readFileSync(log, "utf8").trim().split("\n");
-    expect(calls).toHaveLength(3);
-    for (const [i, name] of ["feature", "unverified", "needs-account"].entries()) {
+    expect(calls).toHaveLength(5);
+    for (const [i, name] of ["feature", "drift", "bug", "unverified", "needs-account"].entries()) {
       expect(calls[i]).toStartWith(`label create ${name} --repo acme/shop-plugin --force`);
     }
     const failed = run(NEW, newArgs(join(work, "plugin-labels-fail")), { ...env, GH_FAIL: "1" });
@@ -175,7 +175,7 @@ describe("new.ts", () => {
     expect(failed.out.error.labels.created).toEqual([]);
     expect(failed.out.error.labels.failed).toContain("HTTP 403");
     expect(failed.out.error.message).toContain("files were written");
-    expect(failed.out.error.retry).toHaveLength(3);
+    expect(failed.out.error.retry).toHaveLength(5);
     expect(failed.out.error.retry[0]).toStartWith("gh label create feature --repo acme/shop-plugin --force");
     expect(failed.out.error.retry[0]).toContain("--description 'A Task the plugin");
     expect(failed.out.error.next).toContain("add-skill.ts --dir");
@@ -188,7 +188,7 @@ describe("new.ts", () => {
     expect(missing.code).toBe(1);
     expect(missing.out.error.labels.created).toEqual([]);
     expect(missing.out.error.labels.failed).toContain("gh label create feature");
-    expect(missing.out.error.retry.map((c: string) => c.split(" ")[3])).toEqual(["feature", "unverified", "needs-account"]);
+    expect(missing.out.error.retry.map((c: string) => c.split(" ")[3])).toEqual(["feature", "drift", "bug", "unverified", "needs-account"]);
     expect(existsSync(join(work, "plugin-no-gh", "generated.json"))).toBe(true);
   });
 });

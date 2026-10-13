@@ -7,6 +7,13 @@ Fixes one issue filed by a plugin's Feedback skill. The title says which kind:
 | `plugin:skill:operation:breakType:path:code` | Drift | `yousee:yousee:listFtpdProducts:zod:data.listFtpdProducts[].status:invalid_type` |
 | `bug: plugin:skill:bug:command:ErrorName:frame` | bug | `bug: yousee:yousee:bug:subscription-show:TypeError:commands/subscription-show.ts#render` |
 
+The queue, by kind (the Feedback skill labels each issue; one filed through the pre-filled link may lack the label, but its title still says the kind):
+
+```sh
+gh issue list --repo <owner/name> --state open --label drift
+gh issue list --repo <owner/name> --state open --label bug
+```
+
 Done when the PR is open with a patch bump and `Fixes #<n>`, `check --writes` passed (or the PR is labelled `unverified`), and a Drift PR without `unverified` is merged after green checks.
 
 ## 1. Read the issue
