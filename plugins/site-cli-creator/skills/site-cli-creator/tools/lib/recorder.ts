@@ -283,6 +283,11 @@ export class CaptureRecorder {
   wrote?: string;
   /** Writes aborted on hosts outside the recorded scope (`METHOD host/path`, path redacted). */
   readonly blockedElsewhere = new Set<string>();
+  /**
+   * Hosts other than the origin's that sign-in steps went to (host names only): what site.ts
+   * `login.hosts` must list. A sign-in step there, or a page on a host named like a sign-in host.
+   */
+  readonly signInHosts = new Set<string>();
 
   constructor(opts: RecorderOptions) {
     this.originHost = new URL(opts.origin).hostname;
@@ -295,6 +300,17 @@ export class CaptureRecorder {
 
   isLoginHost(host: string): boolean {
     return this.loginHosts.has(host.toLowerCase());
+  }
+
+  /** Login hosts site.ts or --login-host named. */
+  get declaredLoginHosts(): string[] {
+    return [...this.loginHosts];
+  }
+
+  /** A sign-in step went to `host`: remember it unless it is the origin's own host. */
+  private noteSignInHost(host: string): void {
+    const h = host.toLowerCase();
+    if (h !== this.originHost.toLowerCase()) this.signInHosts.add(h);
   }
 
   /** The site origin's host, its parent domain and its subdomains, plus the login hosts. */
@@ -389,6 +405,7 @@ export class CaptureRecorder {
           declaredLoginHost ? !namesChange(c.shape.operation) : c.shape.operation !== "anonymous" && isSignInStep(method, c.shape.operation),
         );
       if (loginFlow) for (const c of writes) c.shape.loginFlow = true;
+      if (loginFlow && (declaredLoginHost || guessedLoginHost)) this.noteSignInHost(host);
       if (allowedRead) for (const c of writes) c.shape.allowedRead = true;
       return { seq: this.seq++, calls, effect, loginFlow, allowedRead, method, where };
     }
@@ -408,6 +425,10 @@ export class CaptureRecorder {
         : effect === "write" &&
           (isSignInStep(method, path) || (guessedLoginHost && req.resourceType === "document" && isSignInForm(method, path))));
     const navigation = req.resourceType === "document" && effect === "read";
+    // A sign-in page or form on another host: a token request on the site's own API host is not one.
+    if ((loginFlow && (declaredLoginHost || guessedLoginHost || req.resourceType === "document")) || (navigation && (declaredLoginHost || guessedLoginHost))) {
+      this.noteSignInHost(host);
+    }
     const shape: OperationShape = {
       operation: `${method} ${path}`,
       kind: "rest",
@@ -433,12 +454,18 @@ export class CaptureRecorder {
   allowElsewhere(req: Pick<RequestInfo, "method" | "url" | "resourceType">): boolean {
     const method = req.method.toUpperCase();
     const host = httpHost(req.url);
-    if (!host || READ_METHODS.has(method)) return true;
+    if (!host) return true;
+    if (READ_METHODS.has(method)) {
+      if (req.resourceType === "document" && isLoginHostName(host)) this.noteSignInHost(host);
+      return true;
+    }
     const raw = new URL(req.url).pathname;
     const path = redactPath(raw);
     if (this.allowRead.some((p) => `${host}${path}`.includes(p) || `${host}${raw}`.includes(p))) return true;
-    if (isSignInStep(method, path)) return true;
-    if (isLoginHostName(host) && req.resourceType === "document" && isSignInForm(method, path)) return true;
+    if (isSignInStep(method, path) || (isLoginHostName(host) && req.resourceType === "document" && isSignInForm(method, path))) {
+      this.noteSignInHost(host);
+      return true;
+    }
     this.blockedElsewhere.add(`${method} ${host}${path}`);
     return false;
   }

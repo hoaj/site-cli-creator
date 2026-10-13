@@ -104,6 +104,16 @@ async function load() {
 load();
 </script></body></html>`;
 
+// A site that hands sign-in to another host (an SSO host): the start page redirects there, the
+// user posts the sign-in form there, and it redirects back. login.hosts is still empty.
+const SSO_PASSWORD = "Hemmelig-Kode-77";
+const SSO_LOGIN_PAGE = `<!doctype html><html><body><form method="post" action="/u/login">
+<input name="username" id="username"><input name="password" id="password" type="password"><button id="go">sign in</button>
+</form></body></html>`;
+const SSO_HOME_PAGE = `<!doctype html><html><body><script>
+fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
+</script></body></html>`;
+
 function json(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -127,6 +137,10 @@ beforeAll(() => {
   writeFileSync(join(work, "signed-in.ts"), "export default async (page) => {\n  await page.waitForFunction(() => !!window.loaded);\n  const state = await page.evaluate(() => window.loaded);\n  if (state !== 'yes') throw new Error('page did not load: ' + state);\n};\n");
   // Opens the shop in a second window, closes the Task window, then never finishes on its own.
   writeFileSync(join(work, "popup.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  const popup = page.context().waitForEvent('page');\n  await page.click('#shop');\n  await (await popup).waitForLoadState();\n  await page.close();\n  await new Promise(() => {});\n};\n");
+  writeFileSync(
+    join(work, "sso.ts"),
+    `export default async (page) => {\n  await page.fill("#username", "jens.hansen@example.dk");\n  await page.fill("#password", "${SSO_PASSWORD}");\n  await page.click("#go");\n  await page.waitForFunction(() => window.loaded === true);\n};\n`,
+  );
   writeFileSync(join(work, "noop.ts"), "export default async () => {};\n");
   writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
   writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
@@ -138,6 +152,10 @@ beforeAll(() => {
       if (url.pathname === "/") return new Response(PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/signed-in") return new Response(SIGNED_IN_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/popup") return new Response(POPUP_PAGE.replace("PORT", String(server.port)), { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/sso" && url.hostname === "127.0.0.1") return Response.redirect(`http://localhost:${server.port}/u/login`, 302);
+      if (url.pathname === "/u/login" && req.method === "GET") return new Response(SSO_LOGIN_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/u/login" && req.method === "POST") return Response.redirect(`http://127.0.0.1:${server.port}/sso-home`, 302);
+      if (url.pathname === "/sso-home") return new Response(SSO_HOME_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/shop") return new Response("<!doctype html><title>shop</title>", { headers: { "content-type": "text/html" } });
       if (url.pathname === "/next") return new Response(NEXT_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/partner/4711" && req.method === "POST") {
@@ -316,6 +334,24 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     // postLogin needs the bearer's claim names; the Capture has them, never their values.
     const profile = JSON.parse(readFileSync(join(r.dir, "GET-api-customers-id-profile.shape.json"), "utf8"));
     expect(profile.request.headers.authorization).toBeNull();
+  }, 120_000);
+
+  test("a sign-in on another host: the output names that host (loginHosts) and says to add it to site.ts login.hosts, no values", async () => {
+    const r = await capture(join(work, "sso-skill"), ["--script", join(work, "sso.ts")], "/sso");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    assertNoValues(r.everything);
+    expect(r.everything).not.toContain(SSO_PASSWORD);
+    expect(r.out.loginHosts).toEqual(["localhost"]);
+    expect(r.out.hints.join(" ")).toContain("login.hosts");
+    expect(r.out.hints.join(" ")).toContain("localhost");
+    const index = JSON.parse(readFileSync(join(r.dir, "index.json"), "utf8"));
+    expect(index.loginHosts).toEqual(["localhost"]);
+
+    // Once site.ts names the host (here --login-host), it is still listed but no longer hinted.
+    const again = await capture(join(work, "sso-skill-2"), ["--script", join(work, "sso.ts"), "--login-host", "localhost"], "/sso");
+    expect(again.code, JSON.stringify(again.out) + again.stderr).toBe(0);
+    expect(again.out.loginHosts).toEqual(["localhost"]);
+    expect((again.out.hints ?? []).join(" ")).not.toContain("login.hosts");
   }, 120_000);
 
   test("--write: writes the page fires while loading, a persisted mutation and a write to another host are aborted; the user's click goes through", async () => {

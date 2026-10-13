@@ -361,11 +361,14 @@ await runTool(async () => {
   mkdirSync(dir, { recursive: true });
   clearPreviousCapture(dir);
   operations.forEach((op, i) => writeFileSync(join(dir, files[i] as string), `${JSON.stringify(op, null, 2)}\n`));
+  // Host names only: where the sign-in went, so site.ts login.hosts can list them.
+  const signInHosts = [...recorder.signInHosts].sort();
   const index = {
     task,
     startPath: recorder.redactValues(redactPath(new URL(startUrl).pathname)),
     write: values.write,
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
+    ...(signInHosts.length ? { loginHosts: signInHosts } : {}),
     operations: operations.map((op, i) => ({
       operation: op.operation,
       kind: op.kind,
@@ -404,6 +407,13 @@ await runTool(async () => {
       "Next.js: serverAction (a POST with a next-action header) and rsc (a text/x-component stream) are never Operations. If an aborted server action broke the page, capture again with --allow-read <its path>. Look for the JSON /api route the page also calls (reference/add-task.md, Next.js sites).",
     );
   }
+  const declared = new Set(recorder.declaredLoginHosts);
+  const undeclared = signInHosts.filter((h) => !declared.has(h));
+  if (undeclared.length > 0) {
+    hints.push(
+      `Sign-in went through ${undeclared.join(", ")} (loginHosts): add ${undeclared.length === 1 ? "it" : "them"} to site.ts login.hosts (host names, no port), or pass --login-host until then. Leave out a host that only served a token to the site's own pages.`,
+    );
+  }
   if (blockedElsewhere.length > 0) {
     hints.push("Writes to hosts outside the recorded scope were aborted (blockedElsewhere). A sign-in host among them: add --login-host <host>. The site's own API: pass --origin <url>.");
   }
@@ -425,6 +435,7 @@ await runTool(async () => {
       file,
       aborted: n,
     })),
+    ...(signInHosts.length ? { loginHosts: signInHosts } : {}),
     ...(blockedElsewhere.length ? { blockedElsewhere } : {}),
     ...(hints.length ? { hints } : {}),
   };
