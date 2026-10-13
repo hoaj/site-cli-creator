@@ -92,6 +92,14 @@ const POPUP_PAGE = `<!doctype html><html><body><a id="shop" href="http://localho
 fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
 </script></body></html>`;
 
+// A Task that goes on in a tab the site opens on its own origin: closing the first tab must not end it.
+const TAB_PAGE = `<!doctype html><html><body><a id="tab" href="/tab-two" target="_blank">details</a><script>
+fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
+</script></body></html>`;
+const TAB_TWO_PAGE = `<!doctype html><html><body><button id="more">more</button><script>
+document.getElementById("more").onclick = () => fetch("/api/partners/4711").then(() => (window.more = true));
+</script></body></html>`;
+
 // A Next.js App Router page (#36): a server action (POST to the page with `next-action`) and an RSC
 // stream (`?_rsc=`, text/x-component), next to the plain JSON route that holds the data.
 const NEXT_PAGE = `<!doctype html><html><body><script>
@@ -144,6 +152,8 @@ beforeAll(() => {
   // A wait that fails when the Task window closes (as a pending page.waitForSelector does): it rejects
   // on the same close event that stops the Capture.
   writeFileSync(join(work, "closed-wait.ts"), "export default (page) => new Promise((resolve, reject) => {\n  page.once('close', () => reject(new Error('page.waitForSelector: Target page, context or browser has been closed')));\n  setTimeout(() => page.close().catch(() => {}), 500);\n});\n");
+  // Opens the site's own second tab, closes the first one, and goes on in the second.
+  writeFileSync(join(work, "tab.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  const opened = page.context().waitForEvent('page');\n  await page.click('#tab');\n  const tab = await opened;\n  await tab.waitForLoadState();\n  await page.close();\n  await tab.click('#more');\n  await tab.waitForFunction(() => window.more === true);\n};\n");
   writeFileSync(join(work, "noop.ts"), "export default async () => {};\n");
   writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
   writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
@@ -160,6 +170,8 @@ beforeAll(() => {
       if (url.pathname === "/u/login" && req.method === "POST") return Response.redirect(`http://127.0.0.1:${server.port}/sso-home`, 302);
       if (url.pathname === "/sso-home") return new Response(SSO_HOME_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/shop") return new Response("<!doctype html><title>shop</title>", { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/tab") return new Response(TAB_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/tab-two") return new Response(TAB_TWO_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/next") return new Response(NEXT_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/partner/4711" && req.method === "POST") {
         writesReceived.push("server action");
@@ -403,6 +415,14 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(r.out.closedWindows).toBe(1);
     expect(r.out.operations.map((o: { operation: string }) => o.operation)).toContain("GET /api/customers/:id/profile");
     expect(r.files).toContain("index.json");
+  }, 120_000);
+
+  test("closing the first tab does not end the Capture while the Task goes on in another tab on the site (review)", async () => {
+    const r = await capture(join(work, "tab-skill"), ["--script", join(work, "tab.ts")], "/tab");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(r.out.stoppedBy).toBe("script finished");
+    expect(r.out.closedWindows).toBeUndefined();
+    expect(r.out.operations.map((o: { operation: string }) => o.operation)).toContain("GET /api/partners/:id");
   }, 120_000);
 
   test("a --script still waiting when the Task window closes is a clean stop, not a script error (review)", async () => {
