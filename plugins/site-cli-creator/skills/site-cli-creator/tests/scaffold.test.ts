@@ -438,8 +438,9 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     // The root run already covers every skill's tests; one cli on its own proves they also pass from there.
     for (const cwd of [dir, join(dir, "skills", "shop-login", "cli")]) {
       const tested = sh([process.execPath, "test"], cwd);
-      expect(tested.out, cwd).toMatch(/ 0 fail/);
-      expect(tested.out, cwd).not.toMatch(/ [1-9]\d* fail/);
+      // The summary lines only: under CI, bun also prints every passing test's name ("a non-JSON 200 fails …").
+      expect(tested.out, cwd).toMatch(/^ 0 fail$/m);
+      expect(tested.out, cwd).not.toMatch(/^ [1-9]\d* fail$/m);
       expect(tested.code, `${cwd}\n${tested.out}`).toBe(0);
     }
   }, 900_000);
