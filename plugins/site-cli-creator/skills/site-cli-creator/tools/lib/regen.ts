@@ -13,6 +13,18 @@ export function moduleFiles(dir: string): string[] {
     .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
+/** A command file's name: `<noun>-<verb>.ts`, kebab-case (`subscription-show.ts`, `invoice-list-all.ts`). */
+export const COMMAND_FILE = /^[a-z0-9]+(?:-[a-z0-9]+)+\.ts$/;
+
+/** Whether a module's default export is a command (runtime/command.ts): a name, the Operations it uses, a run function. */
+export function isCommandExport(value: unknown): boolean {
+  if (typeof value !== "object" || value === null) return false;
+  const c = value as Record<string, unknown>;
+  return typeof c.name === "string" && Array.isArray(c.uses) && typeof c.run === "function";
+}
+
+export const SHARED_CODE_HOME = "Shared code for commands goes in cli/src/lib/.";
+
 function camel(name: string): string {
   const words = name.split(/[^A-Za-z0-9]+/).filter(Boolean);
   const id = words.map((w, i) => (i === 0 ? w[0]!.toLowerCase() + w.slice(1) : w[0]!.toUpperCase() + w.slice(1))).join("");

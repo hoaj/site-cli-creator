@@ -1,7 +1,8 @@
 #!/usr/bin/env bun
 // bun tools/regen.ts --skill-dir <dir>
 // Rewrites cli/src/registry.ts, sets needsChrome in site.ts, and rewrites the
-// SKILL.md command table from the CLI's own `help` (SPEC §3 step 5).
+// SKILL.md command table from the CLI's own `help` (SPEC §3 step 5). Only
+// commands/<noun>-<verb>.ts files that default-export a command are registered.
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -11,13 +12,16 @@ import { parseFlags } from "./lib/args";
 import { fail, progress, runTool } from "./lib/output";
 import {
   cliPaths,
+  COMMAND_FILE,
   commandsTable,
   helpCommands,
+  isCommandExport,
   moduleFiles,
   neverCheckedWarning,
   registrySource,
   replaceCommandsBlock,
   setNeedsChrome,
+  SHARED_CODE_HOME,
   unsuppliedVariables,
 } from "./lib/regen";
 import { parseJson } from "./lib/shape";
@@ -33,6 +37,29 @@ async function defaultExport(file: string): Promise<Record<string, unknown>> {
   }
   if (typeof mod.default !== "object" || mod.default === null) fail(`${file} has no default export`);
   return mod.default as Record<string, unknown>;
+}
+
+/**
+ * The files in commands/ that are commands: named `<noun>-<verb>.ts` with a command as default export.
+ * Any other file (a shared helper) is left out of registry.ts with a warning, so it never becomes a command.
+ */
+async function commandModules(dir: string, files: string[], warnings: string[]): Promise<string[]> {
+  const kept: string[] = [];
+  for (const file of files) {
+    if (!COMMAND_FILE.test(file)) {
+      warnings.push(`commands/${file} is not registered: a command file is named <noun>-<verb>.ts. ${SHARED_CODE_HOME}`);
+      continue;
+    }
+    let mod: { default?: unknown };
+    try {
+      mod = await import(pathToFileURL(join(dir, file)).href);
+    } catch (error) {
+      fail(`could not import ${join(dir, file)}: ${(error as Error).message} (run bun install in the skill's cli/ first?)`);
+    }
+    if (isCommandExport(mod.default)) kept.push(file);
+    else warnings.push(`commands/${file} is not registered: its default export is no command (defineCommand). ${SHARED_CODE_HOME}`);
+  }
+  return kept;
 }
 
 function runHelp(cli: string, main: string): unknown {
@@ -67,15 +94,15 @@ await runTool(async () => {
   for (const required of [paths.site, paths.main, paths.skillMd]) {
     if (!existsSync(required)) fail(`not a CLI skill: missing ${required}`);
   }
+  const warnings: string[] = [];
   const operationFiles = moduleFiles(paths.operations);
-  const commandFiles = moduleFiles(paths.commands);
+  const commandFiles = await commandModules(paths.commands, moduleFiles(paths.commands), warnings);
   writeFileSync(paths.registry, registrySource(operationFiles, commandFiles));
   progress(`registry.ts: ${operationFiles.length} operations, ${commandFiles.length} commands`);
 
   const site = await defaultExport(paths.site);
   if (site.auth !== "login" && site.auth !== "none") fail(`site.ts auth must be "login" or "none"`);
   const operations: { name: string; effect: string }[] = [];
-  const warnings: string[] = [];
   for (const file of operationFiles) {
     const op = await defaultExport(join(paths.operations, file));
     if (op.effect !== "read" && op.effect !== "write") fail(`operations/${file}: effect must be "read" or "write"`);

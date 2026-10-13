@@ -82,6 +82,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
       src/registry.ts                       GENERATED  static imports, so `bun build --compile` sees them
       src/operations/<name>.ts              AGENT      one Contract per Operation
       src/commands/<noun>-<verb>.ts         AGENT      one per Task
+      src/lib/*.ts                          AGENT      code shared between commands, never registered
 ```
 
 There is no CLI framework. Routing and flag parsing are about 30 lines in `main.ts`. Maintainer-only tooling never ships inside `skills/`, because agents load every skill folder they find.
