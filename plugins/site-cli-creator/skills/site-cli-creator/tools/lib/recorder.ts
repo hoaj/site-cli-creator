@@ -5,7 +5,8 @@
 // Values are held in memory only, to recognise them when they reappear in a
 // URL path (a username, a search term), and are never written anywhere.
 
-import { graphqlFromBody, graphqlFromSearch, type GraphqlCall } from "./graphql";
+import { onSiteDomain, siteDomain } from "../../starter/skill/cli/src/runtime/site";
+import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
 import {
   bodyShape,
   mediaType,
@@ -69,6 +70,10 @@ export type OperationShape = {
   navigation?: true;
   /** Let through because --allow-read named it. */
   allowedRead?: true;
+  /** A Next.js server action (a POST with a `next-action` header): an RPC into the page's server code, never an Operation. */
+  serverAction?: true;
+  /** A React Server Component stream (`text/x-component`, `?_rsc=`, an `rsc: 1` header): no JSON, so no Zod Contract can parse it. */
+  rsc?: true;
   resourceType: string;
   host: string;
   method: string;
@@ -97,14 +102,12 @@ export type Planned = {
   loginFlow: boolean;
   /** Named by --allow-read: never aborted. */
   allowedRead: boolean;
+  /** A Next.js server action (`next-action` header). */
+  serverAction?: boolean;
   method: string;
   /** `host/path` as sent and with the path redacted, for --allow-read and --write-op matching. In memory only. */
   where: string[];
 };
-
-function baseDomain(host: string): string {
-  return host.replace(/^www\./, "");
-}
 
 // ---- sign-in steps ----
 //
@@ -277,10 +280,15 @@ export class CaptureRecorder {
   wrote?: string;
   /** Writes aborted on hosts outside the recorded scope (`METHOD host/path`, path redacted). */
   readonly blockedElsewhere = new Set<string>();
+  /**
+   * Hosts other than the origin's that sign-in steps went to (host names only): what site.ts
+   * `login.hosts` must list. A sign-in step there, or a page on a host named like a sign-in host.
+   */
+  readonly signInHosts = new Set<string>();
 
   constructor(opts: RecorderOptions) {
     this.originHost = new URL(opts.origin).hostname;
-    this.domain = baseDomain(this.originHost);
+    this.domain = siteDomain(opts.origin);
     this.loginHosts = new Set((opts.loginHosts ?? []).map((h) => h.toLowerCase()));
     this.allowWrite = opts.allowWrite ?? false;
     this.writeOp = opts.writeOp?.trim() || undefined;
@@ -291,11 +299,22 @@ export class CaptureRecorder {
     return this.loginHosts.has(host.toLowerCase());
   }
 
+  /** Login hosts site.ts or --login-host named. */
+  get declaredLoginHosts(): string[] {
+    return [...this.loginHosts];
+  }
+
+  /** A sign-in step went to `host`: remember it unless it is the origin's own host. */
+  private noteSignInHost(host: string): void {
+    const h = host.toLowerCase();
+    if (h !== this.originHost.toLowerCase()) this.signInHosts.add(h);
+  }
+
   /** The site origin's host, its parent domain and its subdomains, plus the login hosts. */
   inScope(url: string): boolean {
     const host = httpHost(url);
     if (!host) return false;
-    return host === this.domain || host.endsWith(`.${this.domain}`) || this.isLoginHost(host);
+    return onSiteDomain(this.domain, host) || this.isLoginHost(host);
   }
 
   /** A trusted click, key press or form submit in a page (capture.ts reports them). */
@@ -329,18 +348,21 @@ export class CaptureRecorder {
     for (const v of url.searchParams.values()) this.remember(v);
     const where = [`${host}${path}`, `${host}${url.pathname}`];
 
+    // GraphQL only on a GraphQL path or with a GraphQL document (or persisted query): a REST
+    // `?query=<word>` is an ordinary query field, recorded as a type like any other.
+    const graphqlPath = isGraphqlPath(url.pathname);
     let gql: GraphqlCall[] | null = null;
     if (req.postData && req.postData.length > 0) {
       const text = req.postData.toString("utf8");
       const parsed = parseJson(text);
       if (parsed.ok) {
-        gql = graphqlFromBody(parsed.value);
+        gql = graphqlFromBody(parsed.value, { graphqlPath });
         collectStrings(parsed.value, (s) => this.remember(s));
       } else if (mediaType(contentType) === "application/x-www-form-urlencoded") {
         for (const v of new URLSearchParams(text).values()) this.remember(v);
       }
     } else if (method === "GET") {
-      gql = graphqlFromSearch(url.searchParams);
+      gql = graphqlFromSearch(url.searchParams, { graphqlPath });
     }
 
     const base = { resourceType: req.resourceType, host, method, path };
@@ -380,11 +402,16 @@ export class CaptureRecorder {
           declaredLoginHost ? !namesChange(c.shape.operation) : c.shape.operation !== "anonymous" && isSignInStep(method, c.shape.operation),
         );
       if (loginFlow) for (const c of writes) c.shape.loginFlow = true;
+      if (loginFlow && (declaredLoginHost || guessedLoginHost)) this.noteSignInHost(host);
       if (allowedRead) for (const c of writes) c.shape.allowedRead = true;
       return { seq: this.seq++, calls, effect, loginFlow, allowedRead, method, where };
     }
 
     const effect: Effect = READ_METHODS.has(method) ? "read" : "write";
+    // Next.js: a server action POSTs to the page itself with a `next-action` header; nothing shows
+    // whether it writes. An RSC stream is the page's render, not data.
+    const serverAction = effect === "write" && header(req.headers, "next-action") !== undefined;
+    const rsc = url.searchParams.has("_rsc") || header(req.headers, "rsc") === "1";
     const query = queryShape(url.searchParams);
     const body = req.postData && req.postData.length > 0 ? bodyShape(req.postData, contentType) : undefined;
     const allowedRead = effect === "write" && this.allowRead.some((p) => where.some((w) => w.includes(p)));
@@ -395,6 +422,10 @@ export class CaptureRecorder {
         : effect === "write" &&
           (isSignInStep(method, path) || (guessedLoginHost && req.resourceType === "document" && isSignInForm(method, path))));
     const navigation = req.resourceType === "document" && effect === "read";
+    // A sign-in page or form on another host: a token request on the site's own API host is not one.
+    if ((loginFlow && (declaredLoginHost || guessedLoginHost || req.resourceType === "document")) || (navigation && (declaredLoginHost || guessedLoginHost))) {
+      this.noteSignInHost(host);
+    }
     const shape: OperationShape = {
       operation: `${method} ${path}`,
       kind: "rest",
@@ -402,11 +433,13 @@ export class CaptureRecorder {
       ...(loginFlow ? { loginFlow: true as const } : {}),
       ...(navigation ? { navigation: true as const } : {}),
       ...(allowedRead ? { allowedRead: true as const } : {}),
+      ...(serverAction ? { effectUnknown: true as const, serverAction: true as const } : {}),
+      ...(rsc ? { rsc: true as const } : {}),
       ...base,
       request: request({ ...(query ? { query } : {}), ...(body ? { body } : {}) }),
       ...outcome(),
     };
-    return { seq: this.seq++, calls: [{ key: `rest ${host} ${method} ${path}`, shape }], effect, loginFlow, allowedRead, method, where };
+    return { seq: this.seq++, calls: [{ key: `rest ${host} ${method} ${path}`, shape }], effect, loginFlow, allowedRead, serverAction, method, where };
   }
 
   /**
@@ -418,12 +451,18 @@ export class CaptureRecorder {
   allowElsewhere(req: Pick<RequestInfo, "method" | "url" | "resourceType">): boolean {
     const method = req.method.toUpperCase();
     const host = httpHost(req.url);
-    if (!host || READ_METHODS.has(method)) return true;
+    if (!host) return true;
+    if (READ_METHODS.has(method)) {
+      if (req.resourceType === "document" && isLoginHostName(host)) this.noteSignInHost(host);
+      return true;
+    }
     const raw = new URL(req.url).pathname;
     const path = redactPath(raw);
     if (this.allowRead.some((p) => `${host}${path}`.includes(p) || `${host}${raw}`.includes(p))) return true;
-    if (isSignInStep(method, path)) return true;
-    if (isLoginHostName(host) && req.resourceType === "document" && isSignInForm(method, path)) return true;
+    if (isSignInStep(method, path) || (isLoginHostName(host) && req.resourceType === "document" && isSignInForm(method, path))) {
+      this.noteSignInHost(host);
+      return true;
+    }
     this.blockedElsewhere.add(`${method} ${host}${path}`);
     return false;
   }
@@ -469,6 +508,7 @@ export class CaptureRecorder {
       }
       shape.seen = 1;
       shape.aborted = aborted ? 1 : 0;
+      if (contentType === "text/x-component") shape.rsc = true;
       if (response) {
         const body: BodyShape =
           splitBodies && call.responseIndex !== undefined
@@ -577,7 +617,7 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
   const variables = mergeMaybe(a.request.variables, b.request.variables);
   const bearer = mergeMaybe(a.request.bearerClaims, b.request.bearerClaims);
   const body = a.request.body && b.request.body ? mergeBodies(a.request.body, b.request.body) : (a.request.body ?? b.request.body);
-  const flag = (k: "loginFlow" | "navigation" | "allowedRead" | "effectUnknown") => (a[k] || b[k] ? { [k]: true as const } : {});
+  const flag = (k: "loginFlow" | "navigation" | "allowedRead" | "effectUnknown" | "serverAction" | "rsc") => (a[k] || b[k] ? { [k]: true as const } : {});
   return {
     ...a,
     effect: a.effect === "write" || b.effect === "write" ? "write" : "read",
@@ -585,6 +625,8 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
     ...flag("loginFlow"),
     ...flag("navigation"),
     ...flag("allowedRead"),
+    ...flag("serverAction"),
+    ...flag("rsc"),
     graphql: a.graphql && !a.graphql.query && b.graphql?.query ? b.graphql : a.graphql,
     request: {
       headers: mergeHeaders(a.request.headers, b.request.headers),

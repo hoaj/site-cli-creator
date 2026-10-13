@@ -81,6 +81,47 @@ document.getElementById("save").onclick = () =>
 load();
 </script></body></html>`;
 
+// A REST search whose URL parameter is called `query` (#33): the typed word is a value.
+const SEARCH_WORD = "Fjordkaffe";
+const SEARCH_PAGE = `<!doctype html><html><body><script>
+fetch("/api/search/suppliers?query=${SEARCH_WORD}&limit=25&sortBy=BestMatch").then(() => (window.loaded = true));
+</script></body></html>`;
+
+// A Task whose button opens another site in a new window (#34): closing the Task window must end the Capture.
+const POPUP_PAGE = `<!doctype html><html><body><a id="shop" href="http://localhost:PORT/shop" target="_blank">shop</a><script>
+fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
+</script></body></html>`;
+
+// A Task that goes on in a tab the site opens on its own origin: closing the first tab must not end it.
+const TAB_PAGE = `<!doctype html><html><body><a id="tab" href="/tab-two" target="_blank">details</a><script>
+fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
+</script></body></html>`;
+const TAB_TWO_PAGE = `<!doctype html><html><body><button id="more">more</button><script>
+document.getElementById("more").onclick = () => fetch("/api/partners/4711").then(() => (window.more = true));
+</script></body></html>`;
+
+// A Next.js App Router page (#36): a server action (POST to the page with `next-action`) and an RSC
+// stream (`?_rsc=`, text/x-component), next to the plain JSON route that holds the data.
+const NEXT_PAGE = `<!doctype html><html><body><script>
+async function load() {
+  await fetch("/partner/4711?_rsc=1x2y3", { headers: { rsc: "1" } });
+  await fetch("/partner/4711", { method: "POST", headers: { "next-action": "7f3a9c", accept: "text/x-component", "content-type": "text/plain;charset=UTF-8" }, body: '["4711"]' }).catch(() => {});
+  await fetch("/api/partners/4711");
+  window.loaded = true;
+}
+load();
+</script></body></html>`;
+
+// A site that hands sign-in to another host (an SSO host): the start page redirects there, the
+// user posts the sign-in form there, and it redirects back. login.hosts is still empty.
+const SSO_PASSWORD = "Hemmelig-Kode-77";
+const SSO_LOGIN_PAGE = `<!doctype html><html><body><form method="post" action="/u/login">
+<input name="username" id="username"><input name="password" id="password" type="password"><button id="go">sign in</button>
+</form></body></html>`;
+const SSO_HOME_PAGE = `<!doctype html><html><body><script>
+fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
+</script></body></html>`;
+
 function json(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -102,6 +143,17 @@ beforeAll(() => {
   writeFileSync(join(work, "script.ts"), SCRIPT);
   writeFileSync(join(work, "broken.ts"), "export default async () => { throw new Error('nope'); };\n");
   writeFileSync(join(work, "signed-in.ts"), "export default async (page) => {\n  await page.waitForFunction(() => !!window.loaded);\n  const state = await page.evaluate(() => window.loaded);\n  if (state !== 'yes') throw new Error('page did not load: ' + state);\n};\n");
+  // Opens the shop in a second window, closes the Task window, then never finishes on its own.
+  writeFileSync(join(work, "popup.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  const popup = page.context().waitForEvent('page');\n  await page.click('#shop');\n  await (await popup).waitForLoadState();\n  await page.close();\n  await new Promise(() => {});\n};\n");
+  writeFileSync(
+    join(work, "sso.ts"),
+    `export default async (page) => {\n  await page.fill("#username", "jens.hansen@example.dk");\n  await page.fill("#password", "${SSO_PASSWORD}");\n  await page.click("#go");\n  await page.waitForFunction(() => window.loaded === true);\n};\n`,
+  );
+  // A wait that fails when the Task window closes (as a pending page.waitForSelector does): it rejects
+  // on the same close event that stops the Capture.
+  writeFileSync(join(work, "closed-wait.ts"), "export default (page) => new Promise((resolve, reject) => {\n  page.once('close', () => reject(new Error('page.waitForSelector: Target page, context or browser has been closed')));\n  setTimeout(() => page.close().catch(() => {}), 500);\n});\n");
+  // Opens the site's own second tab, closes the first one, and goes on in the second.
+  writeFileSync(join(work, "tab.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  const opened = page.context().waitForEvent('page');\n  await page.click('#tab');\n  const tab = await opened;\n  await tab.waitForLoadState();\n  await page.close();\n  await tab.click('#more');\n  await tab.waitForFunction(() => window.more === true);\n};\n");
   writeFileSync(join(work, "noop.ts"), "export default async () => {};\n");
   writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
   writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
@@ -112,6 +164,23 @@ beforeAll(() => {
       const url = new URL(req.url);
       if (url.pathname === "/") return new Response(PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/signed-in") return new Response(SIGNED_IN_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/popup") return new Response(POPUP_PAGE.replace("PORT", String(server.port)), { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/sso" && url.hostname === "127.0.0.1") return Response.redirect(`http://localhost:${server.port}/u/login`, 302);
+      if (url.pathname === "/u/login" && req.method === "GET") return new Response(SSO_LOGIN_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/u/login" && req.method === "POST") return Response.redirect(`http://127.0.0.1:${server.port}/sso-home`, 302);
+      if (url.pathname === "/sso-home") return new Response(SSO_HOME_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/shop") return new Response("<!doctype html><title>shop</title>", { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/tab") return new Response(TAB_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/tab-two") return new Response(TAB_TWO_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/next") return new Response(NEXT_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/partner/4711" && req.method === "POST") {
+        writesReceived.push("server action");
+        return new Response('0:["$@1"]', { headers: { "content-type": "text/x-component" } });
+      }
+      if (url.pathname === "/partner/4711") return new Response('0:{"P":null}', { headers: { "content-type": "text/x-component" } });
+      if (url.pathname === "/api/partners/4711") return json({ id: "4711", name: "Shop" });
+      if (url.pathname === "/search") return new Response(SEARCH_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/api/search/suppliers") return json({ items: [{ name: `${SEARCH_WORD} ApS`, id: CUSTOMER_ID }] });
       if (url.pathname === "/side-effect") return new Response(SIDE_EFFECT_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/api/settings" && req.method === "POST") {
         writesReceived.push("POST /api/settings");
@@ -282,6 +351,24 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(profile.request.headers.authorization).toBeNull();
   }, 120_000);
 
+  test("a sign-in on another host: the output names that host (loginHosts) and says to add it to site.ts login.hosts, no values", async () => {
+    const r = await capture(join(work, "sso-skill"), ["--script", join(work, "sso.ts")], "/sso");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    assertNoValues(r.everything);
+    expect(r.everything).not.toContain(SSO_PASSWORD);
+    expect(r.out.loginHosts).toEqual(["localhost"]);
+    expect(r.out.hints.join(" ")).toContain("login.hosts");
+    expect(r.out.hints.join(" ")).toContain("localhost");
+    const index = JSON.parse(readFileSync(join(r.dir, "index.json"), "utf8"));
+    expect(index.loginHosts).toEqual(["localhost"]);
+
+    // Once site.ts names the host (here --login-host), it is still listed but no longer hinted.
+    const again = await capture(join(work, "sso-skill-2"), ["--script", join(work, "sso.ts"), "--login-host", "localhost"], "/sso");
+    expect(again.code, JSON.stringify(again.out) + again.stderr).toBe(0);
+    expect(again.out.loginHosts).toEqual(["localhost"]);
+    expect((again.out.hints ?? []).join(" ")).not.toContain("login.hosts");
+  }, 120_000);
+
   test("--write: writes the page fires while loading, a persisted mutation and a write to another host are aborted; the user's click goes through", async () => {
     writesReceived = [];
     const r = await capture(join(work, "side-effect-skill"), ["--script", join(work, "side-effect.ts"), "--write"], "/side-effect");
@@ -303,6 +390,95 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(writesReceived).toEqual(["cancelSubscription"]);
     const op = (r.out.operations as { operation: string }[]).find((o) => o.operation === "cancelSubscription");
     expect(op).toMatchObject({ allowedRead: true, aborted: 0 });
+  }, 120_000);
+
+  test("a REST GET with ?query=<word>: one REST Operation, the word in no file, and draft-contract keeps `query` (#33)", async () => {
+    const r = await capture(join(work, "search-skill"), ["--script", join(work, "loaded.ts")], "/search");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(r.everything).not.toContain(SEARCH_WORD);
+    expect(r.out.operations.map((o: { operation: string }) => o.operation)).toEqual(["GET /search", "GET /api/search/suppliers"]);
+    const kinds = r.files.filter((f) => f.endsWith(".shape.json")).map((f) => JSON.parse(readFileSync(join(r.dir, f), "utf8")).kind);
+    expect(kinds).not.toContain("graphql");
+    const shape = join(r.dir, "GET-api-search-suppliers.shape.json");
+    expect(JSON.parse(readFileSync(shape, "utf8")).request.query.fields).toEqual({ query: { type: "string" }, limit: { type: "string" }, sortBy: { type: "string" } });
+    const draft = Bun.spawnSync([process.execPath, join(SKILL_ROOT, "tools", "draft-contract.ts"), shape], { stdout: "pipe", stderr: "pipe" });
+    const source = JSON.parse(draft.stdout.toString()).source as string;
+    expect(source).toContain('query: (v) => ({ query: v["query"], limit: v["limit"], sortBy: v["sortBy"] })');
+    expect(source).toContain("    query: z.string(),");
+    expect(source).not.toContain(SEARCH_WORD);
+  }, 120_000);
+
+  test("closing the Task window ends the Capture although a popup on another origin is still open (#34)", async () => {
+    const r = await capture(join(work, "popup-skill"), ["--script", join(work, "popup.ts")], "/popup");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(r.out.stoppedBy).toBe("task window closed");
+    expect(r.out.closedWindows).toBe(1);
+    expect(r.out.operations.map((o: { operation: string }) => o.operation)).toContain("GET /api/customers/:id/profile");
+    expect(r.files).toContain("index.json");
+  }, 120_000);
+
+  test("closing the first tab does not end the Capture while the Task goes on in another tab on the site (review)", async () => {
+    const r = await capture(join(work, "tab-skill"), ["--script", join(work, "tab.ts")], "/tab");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(r.out.stoppedBy).toBe("script finished");
+    expect(r.out.closedWindows).toBeUndefined();
+    expect(r.out.operations.map((o: { operation: string }) => o.operation)).toContain("GET /api/partners/:id");
+  }, 120_000);
+
+  test("a --script still waiting when the Task window closes is a clean stop, not a script error (review)", async () => {
+    const r = await capture(join(work, "closed-wait-skill"), ["--script", join(work, "closed-wait.ts")], "/popup");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(r.out.stoppedBy).toBe("task window closed");
+    expect(r.files).toContain("index.json");
+  }, 120_000);
+
+  test("SIGTERM is a clean stop that still writes the Capture, with a periodic hint while waiting (#34)", async () => {
+    const skill = join(work, "signal-skill");
+    mkdirSync(skill, { recursive: true });
+    const proc = Bun.spawn(
+      [process.execPath, CAPTURE, "--skill-dir", skill, "--task", "profile-show", "--url", `http://127.0.0.1:${server.port}/popup`, "--profile", join(work, "profile"), "--headless"],
+      {
+        env: { ...process.env, SITE_CLI_CAPTURE_HINT_MS: "300", ...(existsSync(CHROME) ? { SITE_CLI_CHROME: CHROME } : {}) },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 90_000,
+      },
+    );
+    const stderrChunks: string[] = [];
+    const reader = (async () => {
+      const stream = proc.stderr.getReader();
+      for (let chunk = await stream.read(); !chunk.done; chunk = await stream.read()) stderrChunks.push(new TextDecoder().decode(chunk.value));
+    })();
+    const deadline = Date.now() + 60_000;
+    while (!stderrChunks.join("").includes("still recording") && Date.now() < deadline) await Bun.sleep(100);
+    proc.kill("SIGTERM");
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+    await reader;
+    const stderr = stderrChunks.join("");
+    expect(proc.exitCode, stdout + stderr).toBe(0);
+    expect(stderr).toContain("still recording: 1 window open");
+    expect(stderr).toContain(`kill -INT ${proc.pid}`);
+    const out = JSON.parse(stdout);
+    expect(out.stoppedBy).toBe("SIGTERM");
+    expect(existsSync(join(skill, "captures", "profile-show", "index.json"))).toBe(true);
+  }, 120_000);
+
+  test("Next.js: a server action is aborted with an immediate hint and flagged; the RSC stream is marked rsc (#36)", async () => {
+    writesReceived = [];
+    const r = await capture(join(work, "next-skill"), ["--script", join(work, "loaded.ts")], "/next");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(writesReceived).toEqual([]);
+    expect(r.stderr).toContain("server action aborted (POST /partner/:id): if the page breaks, capture again with --allow-read /partner/:id");
+    const byName = Object.fromEntries((r.out.operations as { operation: string }[]).map((o) => [o.operation, o]));
+    expect(byName["POST /partner/:id"]).toMatchObject({ effect: "write", effectUnknown: true, serverAction: true, aborted: 1 });
+    expect(byName["GET /partner/:id"]).toMatchObject({ effect: "read", rsc: true });
+    expect(byName["GET /api/partners/:id"]).not.toHaveProperty("rsc");
+    const index = JSON.parse(readFileSync(join(r.dir, "index.json"), "utf8"));
+    expect(index.operations.find((o: { operation: string }) => o.operation === "POST /partner/:id")).toMatchObject({ serverAction: true, effectUnknown: true });
+    expect(index.operations.find((o: { operation: string }) => o.operation === "GET /partner/:id")).toMatchObject({ rsc: true });
+    expect(r.out.hints.join(" ")).toContain("Next.js");
   }, 120_000);
 
   test("nothing recorded: an error, and the previous Capture is left alone", async () => {

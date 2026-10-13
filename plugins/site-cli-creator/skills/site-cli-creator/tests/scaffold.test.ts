@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { copyExpected } from "../fixtures/expected/copy";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 import { chromePaths, unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
 import { findTokens } from "../tools/lib/template";
@@ -157,17 +158,17 @@ describe("new.ts", () => {
     expect(run(NEW, newArgs(join(work, "x"), ["--no-labels"]), { STARTER_DIR: join(work, "missing") }).out.error.message).toContain("starter/plugin");
   });
 
-  test("creates the three labels with gh; a gh failure is an error that keeps the files and says how to retry", () => {
+  test("creates the five labels with gh (feature, drift, bug, unverified, needs-account); a gh failure is an error that keeps the files and says how to retry", () => {
     const bin = join(work, "gh-bin");
     const log = join(work, "gh.log");
     write(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${log}"\n[ -n "$GH_FAIL" ] && { echo "HTTP 403" >&2; exit 1; }\nexit 0\n`, 0o755);
     const env = { PATH: `${bin}:${process.env.PATH}` };
     const ok = run(NEW, newArgs(join(work, "plugin-labels")), env);
     expect(ok.code).toBe(0);
-    expect(ok.out.labels).toEqual({ created: ["feature", "unverified", "needs-account"] });
+    expect(ok.out.labels).toEqual({ created: ["feature", "drift", "bug", "unverified", "needs-account"] });
     const calls = readFileSync(log, "utf8").trim().split("\n");
-    expect(calls).toHaveLength(3);
-    for (const [i, name] of ["feature", "unverified", "needs-account"].entries()) {
+    expect(calls).toHaveLength(5);
+    for (const [i, name] of ["feature", "drift", "bug", "unverified", "needs-account"].entries()) {
       expect(calls[i]).toStartWith(`label create ${name} --repo acme/shop-plugin --force`);
     }
     const failed = run(NEW, newArgs(join(work, "plugin-labels-fail")), { ...env, GH_FAIL: "1" });
@@ -175,7 +176,7 @@ describe("new.ts", () => {
     expect(failed.out.error.labels.created).toEqual([]);
     expect(failed.out.error.labels.failed).toContain("HTTP 403");
     expect(failed.out.error.message).toContain("files were written");
-    expect(failed.out.error.retry).toHaveLength(3);
+    expect(failed.out.error.retry).toHaveLength(5);
     expect(failed.out.error.retry[0]).toStartWith("gh label create feature --repo acme/shop-plugin --force");
     expect(failed.out.error.retry[0]).toContain("--description 'A Task the plugin");
     expect(failed.out.error.next).toContain("add-skill.ts --dir");
@@ -188,7 +189,7 @@ describe("new.ts", () => {
     expect(missing.code).toBe(1);
     expect(missing.out.error.labels.created).toEqual([]);
     expect(missing.out.error.labels.failed).toContain("gh label create feature");
-    expect(missing.out.error.retry.map((c: string) => c.split(" ")[3])).toEqual(["feature", "unverified", "needs-account"]);
+    expect(missing.out.error.retry.map((c: string) => c.split(" ")[3])).toEqual(["feature", "drift", "bug", "unverified", "needs-account"]);
     expect(existsSync(join(work, "plugin-no-gh", "generated.json"))).toBe(true);
   });
 });
@@ -409,4 +410,45 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     expect(proc.stderr.toString()).toContain(" 0 fail");
     expect(proc.exitCode).toBe(0);
   });
+
+  // A generated plugin's own CI runs `bun test` at the plugin root. Its Starter tests must hold
+  // for any generator version and any generated.json, not only the ones the generator had when
+  // the test was written (cold read of 0.2.0: doctor.test.ts expected generatedWith "0.1.0").
+  test("a generated plugin's full bun test passes at the plugin root and in each skill's cli (both auth modes)", () => {
+    const dir = join(work, "full");
+    const env = { STARTER_DIR: REAL_STARTER };
+    expect(run(NEW, newArgs(dir, ["--no-labels"]), env).code).toBe(0);
+    const sh = (cmd: string[], cwd: string) => {
+      const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: cleanEnv() });
+      return { code: p.exitCode, out: (p.stdout.toString() + p.stderr.toString()).replace(/\x1b\[[0-9;]*m/g, "") };
+    };
+    for (const auth of ["none", "login"] as const) {
+      const skill = `shop-${auth}`;
+      const origin = "http://127.0.0.1:9";
+      expect(run(ADD_SKILL, ["--dir", dir, "--skill", skill, "--origin", origin, "--auth", auth], env).code).toBe(0);
+      const cli = join(dir, "skills", skill, "cli");
+      copyExpected(auth, join(cli, "src"), { plugin: "shop", skill, repo: "acme/shop-plugin", generatorVersion: generatorVersion(), origin });
+      const install = sh([process.execPath, "install"], cli);
+      expect(install.code, install.out).toBe(0);
+      const regen = run(join(SKILL_ROOT, "tools", "regen.ts"), ["--skill-dir", join(dir, "skills", skill)], env);
+      expect(regen.code, JSON.stringify(regen.out)).toBe(0);
+    }
+    const install = sh([process.execPath, "install"], dir);
+    expect(install.code, install.out).toBe(0);
+    // The root run already covers every skill's tests; one cli on its own proves they also pass from there.
+    for (const cwd of [dir, join(dir, "skills", "shop-login", "cli")]) {
+      const tested = sh([process.execPath, "test"], cwd);
+      // The summary lines only: under CI, bun also prints every passing test's name ("a non-JSON 200 fails …").
+      expect(tested.out, cwd).toMatch(/^ 0 fail$/m);
+      expect(tested.out, cwd).not.toMatch(/^ [1-9]\d* fail$/m);
+      expect(tested.code, `${cwd}\n${tested.out}`).toBe(0);
+    }
+  }, 900_000);
 });
+
+/** The environment without anything a developer's shell may have set for site CLIs. */
+function cleanEnv(): Record<string, string> {
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith("SITE_CLI_") && k !== "STARTER_DIR") env[k] = v;
+  return env;
+}

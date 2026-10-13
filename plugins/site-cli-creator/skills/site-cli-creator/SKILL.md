@@ -98,7 +98,7 @@ Every mode that opens a PR bumps in that PR with `bun run bump`: `fix` patch, `a
 
 ## Fix mode
 
-- Drift: sign in (`login`) first, re-capture only the affected Task with the maintainer's account, correct the Contract, `check --writes`, patch bump, PR, merge when checks are green and the PR's version is still above `main`'s.
+- Drift: re-capture only the affected Task first (the Capture signs in), then `login --from-profile ~/.site-cli-creator/profile` so the maintainer signs in once, correct the Contract, `check --writes`, patch bump, PR, merge when checks are green and the PR's version is still above `main`'s.
 - The maintainer's account can't reach the Task: correct the Contract from the issue's diff (field path and type), label the PR `unverified`, leave it for the maintainer to merge, and after the release ask the reporter on the issue to run `check --op <name>`.
 - Bug: fix it in the plugin's own code and add a test that fails without the fix. If the code came from the Starter code, offer the user an issue through `site-cli-creator-feedback` so new plugins get the fix.
 - `add-task` for a Task the maintainer's account can't perform: close the issue with an explanation and the label `needs-account`.

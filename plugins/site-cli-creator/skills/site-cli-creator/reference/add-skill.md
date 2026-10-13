@@ -43,15 +43,16 @@ mv /tmp/<skill>-captures <plugin>/skills/<skill>/captures && cd <plugin>/skills/
 
 ## 4. Fill in `site.ts`
 
-Write `login` (with `postLogin`) or `bootstrap`, and `accounts` if one login holds several accounts, as [contracts.md](contracts.md) describes. The Capture holds what you need: `request.bearerClaims` in the shape files lists the claim names `postLogin` can decode from the bearer, `responses[].setCookies` names the cookies a response set (what `bootstrap` must fetch), and the API shapes' request headers show what every call sends back. For `tokenRequest`, pick a request every load of the start page sends: capture the first Task a second time and use one that is in both Captures.
+Write `login` (with `postLogin`) or `bootstrap`, and `accounts` if one login holds several accounts, as [contracts.md](contracts.md) describes. The Capture holds what you need: its output's `loginHosts` (also in `captures/<task>/index.json`) names the hosts the sign-in went through, which go in `login.hosts`; `request.bearerClaims` in the shape files lists the claim names `postLogin` can decode from the bearer, `responses[].setCookies` names the cookies a response set (what `bootstrap` must fetch), and the API shapes' request headers show what every call sends back. For `tokenRequest`, pick a request every load of the start page sends: compare the first Task's Capture with another Task's Capture of the same start page (capturing the same `--task` again replaces the first one) and use a request that is in both.
 
 Then check that it works:
 
 ```sh
-cd <plugin>/skills/<skill>/cli && bun src/main.ts login     # auth: login; the user signs in in Chrome
+cd <plugin>/skills/<skill>/cli && bun src/main.ts login --from-profile ~/.site-cli-creator/profile   # auth: login
 cd <plugin>/skills/<skill>/cli && bun src/main.ts check     # auth: none with bootstrap, once the first Contract exists
 ```
 
+- **Sign in once.** The user signed in during the first Capture, on the Capture tool's profile; the CLI has its own profile (`~/.<plugin>-<skill>/profile/`). `login --from-profile ~/.site-cli-creator/profile` (or the `--profile` you gave `capture.ts`) reads that profile's cookies for the site's hosts and the login hosts in memory, signs in headless with them through the normal `tokenRequest` and `postLogin` path in a Chrome context that keeps nothing on disk, and writes only `session.json` (the CLI's own profile stays as it was, and the CLI's silent refresh signs in with that profile: when the session expires, run `login --from-profile` again). No Capture may be running on that profile. If it exits 4 (the sign-in was kept outside persistent cookies, or has expired), run plain `login`, and tell the user first that Chrome opens and they must sign in again.
 - `login` passes when it exits 0 and `session.json` holds the chain-root ids. Inspect it for keys only: `bun -e 'console.log(Object.keys(JSON.parse(await Bun.file(process.env.HOME + "/.<plugin>-<skill>/session.json").text()).ids))'`.
 - `auth: none` with `bootstrap`: `check` runs `bootstrap` before the first read, so run it as soon as the first Task's Contract exists (step 5). It passes when it exits 0 and `session.json` holds only `headers` (`bun -e 'console.log(Object.keys(JSON.parse(await Bun.file(process.env.HOME + "/.<plugin>-<skill>/session.json").text()).headers))'`). Exit 3 with an `auth` Fingerprint means the API still refuses the call: `bootstrap` sends the wrong cookie or header.
 - While developing, run commands and `check` with `SITE_CLI_NONINTERACTIVE=1` so an expired login exits 4 at once instead of opening Chrome and waiting up to 10 minutes; run `login` again then.

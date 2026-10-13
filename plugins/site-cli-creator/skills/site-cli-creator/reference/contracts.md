@@ -15,7 +15,7 @@ How to write the three kinds of AGENT file in a CLI skill. Each section below ha
 | `site.ts` with login and `postLogin` | `login/site.ts` |
 | `site.ts` without login, with `bootstrap` | `none/site.ts` |
 
-The fixture's `__ORIGIN__` and other `__TOKENS__` are filled in when it is copied; your files hold real values. `registry.ts` imports every file in `operations/` and `commands/`: run `regen.ts` after adding or renaming one.
+The fixture's `__ORIGIN__` and other `__TOKENS__` are filled in when it is copied; your files hold real values. `registry.ts` imports every file in `operations/` and every command in `commands/`: run `regen.ts` after adding or renaming one.
 
 ## Runtime facts
 
@@ -88,9 +88,12 @@ Each variable says where it comes from, so `check` calls read Operations in orde
 needs: { customerId: { from: "session", key: "customerId" } }                          // an id postLogin stored
 needs: { accountId: { from: "getAccount", pick: (r) => r.data.getAccount.id } }        // another Operation's result
 needs: { id: { from: "GET /api/invoices", pick: (r) => r.invoices[0]?.id } }           // first item of a list
+needs: { limit: { value: "1" }, sortBy: { value: "BestMatch" } }                       // constants: limit is z.string(), as drafted
 ```
 
-`from` is the other Operation's `name`; `pick` gets its parsed `response`. `key: "account"` means the selected `--account`. A variable only the user can supply (free text, a choice) needs no entry; `check` then skips the Operation and says so.
+`from` is the other Operation's `name`; `pick` gets its parsed `response`. `key: "account"` means the selected `--account`. `value` is a constant (any JSON value) for a fixed parameter the command always passes (a page size, a sort order), or a harmless sample for one only the user can supply (a search word, a choice): keep the Contract's `variables` as the site wants them and put check's input here, not in Zod defaults. A constant must fit its variable's schema: `draft-contract` drafts REST query variables as `z.string()` (a query value is text), so a page size is `{ value: "1" }`, not `{ value: 1 }`. To keep a number variable instead, make it `z.coerce.number()` (or `z.number()`) with `{ value: 1 }`, and turn it into a string in `rest.query` (`limit: String(v.limit)`).
+
+Every required variable of a read Operation needs an entry that fits it, or `check` can never call it: it skips the Operation as `never checkable`, lists it in its output's `warnings` and prints `"ok": false` (still exit 0) (`no needs entry for <variable>`, or `the needs entry for <variable> does not fit variables` for a constant the schema rejects), and `regen.ts` prints the same warnings (`warnings` in its JSON). Fix each one before `check`.
 
 ### Writes and `trigger`
 
@@ -142,6 +145,13 @@ export default defineCommand({
     return { id: invoice.id, due: invoice.dueDate, amountDKK: invoice.amountDKK };
   },
 });
+```
+
+**Shared code between commands** (an output mapper, a URL builder) goes in `cli/src/lib/<name>.ts`, never in `commands/`: `regen.ts` registers only `commands/` files whose default export is a command, and warns about any other file there, and about a command file not named `<noun>-<verb>.ts` after its command (`warnings` in its JSON).
+
+```ts
+// cli/src/lib/deals.ts, imported by commands/deal-search.ts as `import { toDeal } from "../lib/deals";`
+export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.name, url: `https://shop.example/deal/${d.id}` });
 ```
 
 ## site.ts

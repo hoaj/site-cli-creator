@@ -2,7 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { GENERATOR_ROOT, SKILL_ROOT } from "../tools/lib/paths";
+import { GENERATOR_ROOT, generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 import { commandsTable, helpCommands, registrySource, replaceCommandsBlock, setNeedsChrome } from "../tools/lib/regen";
 
 const REGEN = join(SKILL_ROOT, "tools", "regen.ts");
@@ -68,12 +68,12 @@ function fakeSkill(name: string, auth: "login" | "none", ops: Record<string, str
   const imports = Object.keys(ops).map((f) => `import ${f} from "../operations/${f}";`).join("\n");
   write(
     join(src, "commands", "subscription-show.ts"),
-    `${imports}\nexport default { name: "subscription show", summary: "Your products | prices", uses: [${Object.keys(ops).filter((f) => ops[f] === "read").join(", ")}], flags: [{ name: "all", type: "boolean", description: "include ended" }] };\n`,
+    `${imports}\nexport default { name: "subscription show", summary: "Your products | prices", uses: [${Object.keys(ops).filter((f) => ops[f] === "read").join(", ")}], flags: [{ name: "all", type: "boolean", description: "include ended" }], run: async () => ({}) };\n`,
   );
   if (Object.values(ops).includes("write")) {
     write(
       join(src, "commands", "note-add.ts"),
-      `${imports}\nexport default { name: "note add", summary: "Add a note.", uses: [${Object.keys(ops).join(", ")}], flags: [{ name: "text", type: "string", required: true }] };\n`,
+      `${imports}\nexport default { name: "note add", summary: "Add a note.", uses: [${Object.keys(ops).join(", ")}], flags: [{ name: "text", type: "string", required: true }], run: async () => ({}) };\n`,
     );
   }
   symlinkSync(join(GENERATOR_ROOT, "node_modules"), join(skill, "cli", "node_modules"));
@@ -202,6 +202,59 @@ describe("regen.ts", () => {
     expect(regen(login).out.needsChrome).toBe(true);
   });
 
+  test("a read Operation with a required variable no needs entry supplies, or a constant that does not fit, is a warning (#35, cold read)", () => {
+    const skill = fakeSkill("never-checked", "none", { getAccount: "read" });
+    const opFile = (name: string, needs: string) =>
+      `import { z } from "zod";\nexport default { name: ${JSON.stringify(name)}, effect: "read", variables: z.object({ limit: z.number(), sortBy: z.string().default("BestMatch"), q: z.string().optional() }), response: z.unknown()${needs} };\n`;
+    write(join(skill, "cli/src/operations/searchSuppliers.ts"), opFile("GET /api/search/suppliers", ""));
+    write(join(skill, "cli/src/operations/searchShops.ts"), opFile("GET /api/search/shops", ", needs: { limit: { value: 1 } }"));
+    // A constant that does not fit its variable (a string for z.number()) is never checked either, with its own fix.
+    write(join(skill, "cli/src/operations/searchStores.ts"), opFile("GET /api/search/stores", ', needs: { limit: { value: "1" } }'));
+    const r = regen(skill);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.out.warnings).toEqual([
+      'GET /api/search/stores is never checked: the needs entry for limit does not fit variables (expected number). Change each constant to fit the variable\'s schema (a REST query variable drafted as z.string() takes { value: "1" }, not { value: 1 }).',
+      'GET /api/search/suppliers is never checked: no needs entry for limit. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } that fits the variable\'s schema.',
+    ]);
+    expect(r.stderr).toContain("GET /api/search/suppliers is never checked");
+  });
+
+  test("only files whose default export is a command are registered; others are warnings (#37)", () => {
+    const skill = fakeSkill("helpers", "none", { getAccount: "read" });
+    const commands = join(skill, "cli/src/commands");
+    write(join(commands, "deals.ts"), "export const toDeal = (d: { id: string }) => ({ id: d.id });\n");
+    write(join(commands, "deal-format.ts"), "export function shopUrl(id: string) { return `/shop/${id}`; }\n");
+    write(join(commands, "deal-mapper.ts"), "export default { toDeal: (d: unknown) => d };\n");
+    const r = regen(skill);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.out.commands).toEqual([{ name: "subscription show", write: false }]);
+    const registry = readFileSync(join(skill, "cli/src/registry.ts"), "utf8");
+    expect(registry).toContain("export const commands = [subscriptionShowCommand];");
+    expect(registry).not.toMatch(/deal/);
+    expect(r.out.warnings).toEqual([
+      "commands/deal-format.ts is not registered: its default export is no command (defineCommand). Shared code for commands goes in cli/src/lib/.",
+      "commands/deal-mapper.ts is not registered: its default export is no command (defineCommand). Shared code for commands goes in cli/src/lib/.",
+      "commands/deals.ts is not registered: its default export is no command (defineCommand). Shared code for commands goes in cli/src/lib/.",
+    ]);
+  });
+
+  test("a command file without a dash (a 0.1.0 plugin's commands/status.ts) stays registered; a name that does not match its command is a warning (review)", () => {
+    const skill = fakeSkill("legacy-names", "none", { getAccount: "read" });
+    const commands = join(skill, "cli/src/commands");
+    write(join(commands, "status.ts"), `export default { name: "status", summary: "Status.", uses: [], flags: [], run: async () => ({}) };\n`);
+    write(join(commands, "bills.ts"), `export default { name: "bill list", summary: "Bills.", uses: [], flags: [], run: async () => ({}) };\n`);
+    const r = regen(skill);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.out.commands).toEqual([
+      { name: "bill list", write: false },
+      { name: "status", write: false },
+      { name: "subscription show", write: false },
+    ]);
+    const registry = readFileSync(join(skill, "cli/src/registry.ts"), "utf8");
+    expect(registry).toContain("export const commands = [billsCommand, statusCommand, subscriptionShowCommand];");
+    expect(r.out.warnings).toEqual(['commands/bills.ts holds the command "bill list": name the file bill-list.ts (it is registered as it is).']);
+  });
+
   test("failures print a JSON error", () => {
     const skill = fakeSkill("help-fails", "none", { getAccount: "read" });
     const r = regen(skill, { FAIL_HELP: "1" });
@@ -238,7 +291,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code and the fixtur
         plugin: "shop",
         skill: "shop",
         repo: "acme/shop",
-        generatorVersion: "0.1.0",
+        generatorVersion: generatorVersion(),
         origin: "http://127.0.0.1:9",
       });
       const site = join(skill, "cli/src/site.ts");
