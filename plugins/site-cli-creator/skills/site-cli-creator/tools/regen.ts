@@ -30,15 +30,19 @@ import { parseJson } from "./lib/shape";
 
 const USAGE = "bun tools/regen.ts --skill-dir <dir>";
 
-async function defaultExport(file: string): Promise<Record<string, unknown>> {
-  let mod: { default?: unknown };
+/** A module's default export, whatever it is; a module that does not import is a JSON error. */
+async function importDefault(file: string): Promise<unknown> {
   try {
-    mod = await import(pathToFileURL(file).href);
+    return ((await import(pathToFileURL(file).href)) as { default?: unknown }).default;
   } catch (error) {
     fail(`could not import ${file}: ${(error as Error).message} (run bun install in the skill's cli/ first?)`);
   }
-  if (typeof mod.default !== "object" || mod.default === null) fail(`${file} has no default export`);
-  return mod.default as Record<string, unknown>;
+}
+
+async function defaultExport(file: string): Promise<Record<string, unknown>> {
+  const value = await importDefault(file);
+  if (typeof value !== "object" || value === null) fail(`${file} has no default export`);
+  return value as Record<string, unknown>;
 }
 
 /**
@@ -50,19 +54,15 @@ async function defaultExport(file: string): Promise<Record<string, unknown>> {
 async function commandModules(dir: string, files: string[], warnings: string[]): Promise<string[]> {
   const kept: string[] = [];
   for (const file of files) {
-    let mod: { default?: unknown };
-    try {
-      mod = await import(pathToFileURL(join(dir, file)).href);
-    } catch (error) {
-      fail(`could not import ${join(dir, file)}: ${(error as Error).message} (run bun install in the skill's cli/ first?)`);
-    }
-    if (!isCommandExport(mod.default)) {
+    const command = await importDefault(join(dir, file));
+    if (!isCommandExport(command)) {
       warnings.push(`commands/${file} is not registered: its default export is no command (defineCommand). ${SHARED_CODE_HOME}`);
       continue;
     }
     kept.push(file);
-    const expected = commandFileName((mod.default as { name: string }).name);
-    if (file !== expected) warnings.push(`commands/${file} holds the command "${(mod.default as { name: string }).name}": name the file ${expected} (it is registered as it is).`);
+    const { name } = command as { name: string };
+    const expected = commandFileName(name);
+    if (file !== expected) warnings.push(`commands/${file} holds the command "${name}": name the file ${expected} (it is registered as it is).`);
   }
   return kept;
 }
