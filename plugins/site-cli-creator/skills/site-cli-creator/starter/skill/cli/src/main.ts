@@ -1,6 +1,7 @@
 // Routing and flag parsing. The only file that imports ./site and ./registry; everything else
 // is a runtime module driven from here, so tests can run `run()` with a fake site and fetch.
-import { resolve } from "node:path";
+import { homedir } from "node:os";
+import { join, resolve } from "node:path";
 import site from "./site";
 import { commands, operations } from "./registry";
 import { Client, type Deps } from "./runtime/call";
@@ -26,6 +27,12 @@ export type App = {
 export type RunResult = { output: unknown; code: number };
 
 const input = (message: string) => new Failure("input", message);
+
+/** A path flag as an absolute path: a leading `~` (which the shell leaves alone in `--flag=~/x`) is the home dir. */
+export function expandPath(raw: string): string {
+  const home = /^~(?=$|[\\/])/.test(raw) ? join(homedir(), raw.slice(1)) : raw;
+  return resolve(home);
+}
 
 /** Pulls the global flags (--account <id>, --confirm) out of argv, wherever they stand. */
 export function splitGlobals(argv: string[]) {
@@ -151,7 +158,7 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
         return ok({ loggedIn: true, stateDir: client.dir, ids: Object.keys(session.ids) });
       }
       // Reuse a sign-in another Chrome profile holds (the Capture's), headless: the user signs in once.
-      const session = await client.signIn(true, { fromProfile: resolve(raw) });
+      const session = await client.signIn(true, { fromProfile: expandPath(raw) });
       if (!session) {
         throw new Failure(
           "session",
