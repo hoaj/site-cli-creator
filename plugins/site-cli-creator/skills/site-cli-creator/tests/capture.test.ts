@@ -87,6 +87,11 @@ const SEARCH_PAGE = `<!doctype html><html><body><script>
 fetch("/api/search/suppliers?query=${SEARCH_WORD}&limit=25&sortBy=BestMatch").then(() => (window.loaded = true));
 </script></body></html>`;
 
+// A Task whose button opens another site in a new window (#34): closing the Task window must end the Capture.
+const POPUP_PAGE = `<!doctype html><html><body><a id="shop" href="http://localhost:PORT/shop" target="_blank">shop</a><script>
+fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
+</script></body></html>`;
+
 function json(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -108,6 +113,8 @@ beforeAll(() => {
   writeFileSync(join(work, "script.ts"), SCRIPT);
   writeFileSync(join(work, "broken.ts"), "export default async () => { throw new Error('nope'); };\n");
   writeFileSync(join(work, "signed-in.ts"), "export default async (page) => {\n  await page.waitForFunction(() => !!window.loaded);\n  const state = await page.evaluate(() => window.loaded);\n  if (state !== 'yes') throw new Error('page did not load: ' + state);\n};\n");
+  // Opens the shop in a second window, closes the Task window, then never finishes on its own.
+  writeFileSync(join(work, "popup.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  const popup = page.context().waitForEvent('page');\n  await page.click('#shop');\n  await (await popup).waitForLoadState();\n  await page.close();\n  await new Promise(() => {});\n};\n");
   writeFileSync(join(work, "noop.ts"), "export default async () => {};\n");
   writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
   writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
@@ -118,6 +125,8 @@ beforeAll(() => {
       const url = new URL(req.url);
       if (url.pathname === "/") return new Response(PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/signed-in") return new Response(SIGNED_IN_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/popup") return new Response(POPUP_PAGE.replace("PORT", String(server.port)), { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/shop") return new Response("<!doctype html><title>shop</title>", { headers: { "content-type": "text/html" } });
       if (url.pathname === "/search") return new Response(SEARCH_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/api/search/suppliers") return json({ items: [{ name: `${SEARCH_WORD} ApS`, id: CUSTOMER_ID }] });
       if (url.pathname === "/side-effect") return new Response(SIDE_EFFECT_PAGE, { headers: { "content-type": "text/html" } });
@@ -327,6 +336,48 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(source).toContain('query: (v) => ({ query: v["query"], limit: v["limit"], sortBy: v["sortBy"] })');
     expect(source).toContain("    query: z.string(),");
     expect(source).not.toContain(SEARCH_WORD);
+  }, 120_000);
+
+  test("closing the Task window ends the Capture although a popup on another origin is still open (#34)", async () => {
+    const r = await capture(join(work, "popup-skill"), ["--script", join(work, "popup.ts")], "/popup");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(r.out.stoppedBy).toBe("task window closed");
+    expect(r.out.closedWindows).toBe(1);
+    expect(r.out.operations.map((o: { operation: string }) => o.operation)).toContain("GET /api/customers/:id/profile");
+    expect(r.files).toContain("index.json");
+  }, 120_000);
+
+  test("SIGTERM is a clean stop that still writes the Capture, with a periodic hint while waiting (#34)", async () => {
+    const skill = join(work, "signal-skill");
+    mkdirSync(skill, { recursive: true });
+    const proc = Bun.spawn(
+      [process.execPath, CAPTURE, "--skill-dir", skill, "--task", "profile-show", "--url", `http://127.0.0.1:${server.port}/popup`, "--profile", join(work, "profile"), "--headless"],
+      {
+        env: { ...process.env, SITE_CLI_CAPTURE_HINT_MS: "300", ...(existsSync(CHROME) ? { SITE_CLI_CHROME: CHROME } : {}) },
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+        timeout: 90_000,
+      },
+    );
+    const stderrChunks: string[] = [];
+    const reader = (async () => {
+      const stream = proc.stderr.getReader();
+      for (let chunk = await stream.read(); !chunk.done; chunk = await stream.read()) stderrChunks.push(new TextDecoder().decode(chunk.value));
+    })();
+    const deadline = Date.now() + 60_000;
+    while (!stderrChunks.join("").includes("still recording") && Date.now() < deadline) await Bun.sleep(100);
+    proc.kill("SIGTERM");
+    const stdout = await new Response(proc.stdout).text();
+    await proc.exited;
+    await reader;
+    const stderr = stderrChunks.join("");
+    expect(proc.exitCode, stdout + stderr).toBe(0);
+    expect(stderr).toContain("still recording: 1 window open");
+    expect(stderr).toContain(`kill -INT ${proc.pid}`);
+    const out = JSON.parse(stdout);
+    expect(out.stoppedBy).toBe("SIGTERM");
+    expect(existsSync(join(skill, "captures", "profile-show", "index.json"))).toBe(true);
   }, 120_000);
 
   test("nothing recorded: an error, and the previous Capture is left alone", async () => {
