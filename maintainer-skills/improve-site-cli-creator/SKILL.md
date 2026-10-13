@@ -16,7 +16,7 @@ This skill lives in `maintainer-skills/`, outside `plugins/`, because plugin loa
 Run once per checkout or worktree; details and commands in [references/setup.md](references/setup.md):
 
 - Bun 1.4.3 (`bun --version`), then `bun install --frozen-lockfile` in `plugins/site-cli-creator`.
-- Google Chrome. Without it, on macOS the Capture, browser and e2e tests **skip and still pass**, so a red test written for them never goes red (on Linux they fail).
+- Google Chrome. Without it the browser-driven tests (e2e, the Starter's `browser.test.ts`, and on macOS the Capture tests) **skip and the suite still passes**, so a red test written there never goes red. Check the count line for skips.
 - `actionlint` and `shellcheck`.
 
 ## Workflow
@@ -30,16 +30,16 @@ Read the issue: a bug has Intent / Where / Expected / Actual / Environment / Sug
 | Misuse the tools already guard against (any programmatic click or submit inside `page.evaluate` in a `--write` Task's `--script`: `element.click()`, `form.submit()`, `requestSubmit()`; a flag the reference docs explain) | Comment with the documented way and close; if the docs were genuinely unclear, it is a docs bug: go on |
 | Missing facts to reproduce (for a Capture issue: the `--script` or how the Task was performed, the flags, the `hints` and aborted lists) | Comment with the questions, add label `needs-info` (`gh label create needs-info --repo hoaj/skills` if missing), stop |
 | Duplicate of an open issue | Comment with the link, add `duplicate`, close |
-| A generated plugin's own code (`operations/`, `commands/`, `site.ts`) | Not this skill: it belongs on the plugin's repo, fixed with the generator's `fix` mode |
+| A generated plugin's own code (`operations/`, `commands/`, `site.ts`) | Comment that it belongs on the plugin's repo (filed with its `<plugin>-feedback` skill, fixed with the generator's `fix` mode) and close it |
 | A bug in Starter code, seen in a generated plugin | This skill: fix it in `starter/`, and list that plugin under Starter code reach (step 9) |
 | A generator tool, mode doc or feature | This skill: go on |
 
-Done when the issue is closed, waiting on `needs-info`, or pinned: one command and its wrong output (or, for a feature, one sentence naming the missing capability), plus the doc section the reporter followed.
+Done when the issue is closed, waiting on `needs-info` (step 2 leaves those out until the reporter answers), or pinned: one command and its wrong output (or, for a feature, one sentence naming the missing capability), plus the doc section the reporter followed.
 
 ### 2. Cluster
 
 ```sh
-gh issue list --repo hoaj/skills --label site-cli-creator --state open --json number,title
+gh issue list --repo hoaj/skills --label site-cli-creator --state open --search "-label:needs-info" --json number,title
 gh pr list --repo hoaj/skills --state open --search "site-cli-creator in:title" --json number,title,headRefName,files
 ```
 

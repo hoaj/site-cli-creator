@@ -38,7 +38,7 @@ Generator 0.1.0 → 0.2.0 in the three plugin manifests; marketplaces 1.2.0 → 
 
 ## 7. Cold read: what it caught
 
-The cold read was skipped before the PR opened and run afterwards, three times:
+The cold read was skipped before the PR opened and run afterwards, twice:
 
 1. **FAIL.** A freshly generated plugin's own `bun test` failed: a Starter test (`doctor.test.ts`) read the plugin's real `generated.json` and expected `generatedWith` "0.1.0", which held only while the generator was 0.1.0. The generator's 467 tests were green, because none ran a generated plugin's full suite. Fixed the test, and fixed the class with a scaffold test that generates a plugin and runs its whole `bun test`. The same read found four smaller gaps (no `loginHosts` in the Capture output, fix mode signing in twice, a `needs` constant example of the wrong type, `check` saying `ok: true` beside warnings).
 2. **PASS** after those fixes, with two one-line doc clarifications applied.
