@@ -17,6 +17,8 @@ import {
   helpCommands,
   isCommandExport,
   moduleFiles,
+  misfitConstants,
+  misfitConstantWarning,
   neverCheckedWarning,
   registrySource,
   replaceCommandsBlock,
@@ -109,6 +111,8 @@ await runTool(async () => {
     operations.push({ name: String(op.name), effect: op.effect });
     const unsupplied = op.effect === "read" ? unsuppliedVariables(op) : [];
     if (unsupplied.length) warnings.push(neverCheckedWarning(String(op.name), unsupplied));
+    const misfits = op.effect === "read" ? misfitConstants(op) : [];
+    if (misfits.length) warnings.push(misfitConstantWarning(String(op.name), misfits));
   }
   for (const w of warnings) progress(`warning: ${w}`);
   const needsChrome = site.auth === "login" || operations.some((o) => o.effect === "write");

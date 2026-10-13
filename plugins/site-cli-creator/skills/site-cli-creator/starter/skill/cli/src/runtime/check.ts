@@ -29,7 +29,8 @@ const isConstantNeed = (n: object): n is { value: unknown } => "value" in n && !
 /** A need on another Operation's result (the chain). */
 const isPickNeed = (n: object): n is { from: string; pick(result: any): unknown } => "pick" in n;
 
-const NEVER_CHECKED_FIX = 'Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> }.';
+const NO_ENTRY_FIX = 'Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } that fits the variable\'s schema.';
+const MISFIT_FIX = 'Change each constant to fit the variable\'s schema (a REST query variable drafted as z.string() takes { value: "1" }, not { value: 1 }).';
 
 /** Operations ordered so every Operation comes after the ones it `needs`; ties keep registry order. */
 export function chainOrder(ops: Operation[]): Operation[] {
@@ -126,8 +127,8 @@ export async function check(client: Client, operations: Operation[], options: Ch
       if (!parsed.success) {
         const never = neverCheckable(op, parsed.error.issues);
         if (never) {
-          skip(`never checkable: ${never}`);
-          warnings.push(`${op.name} is never checked: ${never}. ${NEVER_CHECKED_FIX}`);
+          skip(`never checkable: ${never.why}`);
+          warnings.push(`${op.name} is never checked: ${never.why}. ${never.fix}`);
         } else skip("needs input the chain does not supply");
         continue;
       }
@@ -175,20 +176,26 @@ export async function check(client: Client, operations: Operation[], options: Ch
 }
 
 /**
- * Why an Operation's variables can never be built from its `needs`, whatever the account holds:
- * a required variable with no entry, or a constant that does not fit. Undefined when the failure
- * comes from a picked or session value (the account's data), which another account may supply.
+ * Why an Operation's variables can never be built from its `needs`, whatever the account holds,
+ * and what fixes it: a required variable with no `needs` entry, or a constant that does not fit
+ * its variable's schema. Undefined when the failure comes from a picked or session value (the
+ * account's data), which another account may supply.
  */
-function neverCheckable(op: Operation, issues: { path: PropertyKey[] }[]): string | undefined {
+function neverCheckable(op: Operation, issues: { path: PropertyKey[]; expected?: unknown }[]): { why: string; fix: string } | undefined {
   const needs = op.needs ?? {};
   const keys = [...new Set(issues.map((i) => i.path[0]).filter((k): k is string => typeof k === "string"))];
   const missing = keys.filter((k) => !(k in needs));
   const constants = keys.filter((k) => k in needs && isConstantNeed(needs[k]!));
+  const expected = (k: string) => {
+    const types = [...new Set(issues.filter((i) => i.path[0] === k && typeof i.expected === "string").map((i) => i.expected as string))];
+    return types.length ? ` (expected ${types.join(" or ")})` : "";
+  };
   const why = [
-    ...(missing.length ? [`nothing supplies ${missing.join(", ")}`] : []),
-    ...(constants.length ? [`the constant for ${constants.join(", ")} does not fit variables`] : []),
+    ...(missing.length ? [`no needs entry for ${missing.join(", ")}`] : []),
+    ...constants.map((k) => `the needs entry for ${k} does not fit variables${expected(k)}`),
   ];
-  return why.length ? why.join("; ") : undefined;
+  const fix = [...(missing.length ? [NO_ENTRY_FIX] : []), ...(constants.length ? [MISFIT_FIX] : [])];
+  return why.length ? { why: why.join("; "), fix: fix.join(" ") } : undefined;
 }
 
 // ---- write checks in Chrome ----

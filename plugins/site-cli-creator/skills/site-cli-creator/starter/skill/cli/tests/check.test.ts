@@ -66,10 +66,10 @@ describe("check over reads", () => {
         { operation: "listProducts", effect: "read", status: "ok" },
         { operation: "getInvoice", effect: "read", status: "ok" },
         { operation: "PATCH /api/orders/:orderId", effect: "write", status: "skipped", reason: "run check --writes" },
-        { operation: "GET /api/orders/:orderId", effect: "read", status: "skipped", reason: "never checkable: nothing supplies orderId" },
+        { operation: "GET /api/orders/:orderId", effect: "read", status: "skipped", reason: "never checkable: no needs entry for orderId" },
       ],
       warnings: [
-        'GET /api/orders/:orderId is never checked: nothing supplies orderId. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> }.',
+        'GET /api/orders/:orderId is never checked: no needs entry for orderId. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> } that fits the variable\'s schema.',
       ],
     });
   });
@@ -90,9 +90,9 @@ describe("check over reads", () => {
     // A constant that does not fit the variables schema can never be checked either: skipped, with a warning.
     const wrong = defineOperation({ ...search, needs: { limit: { value: "one" }, sortBy: { value: "BestMatch" } } });
     const skipped = await check(client(makeSite(), makeDeps(fetch, home.dir).deps), [wrong], {});
-    expect(skipped.operations).toEqual([{ operation: "GET /api/search/suppliers", effect: "read", status: "skipped", reason: "never checkable: the constant for limit does not fit variables" }]);
+    expect(skipped.operations).toEqual([{ operation: "GET /api/search/suppliers", effect: "read", status: "skipped", reason: "never checkable: the needs entry for limit does not fit variables (expected number)" }]);
     expect(skipped.warnings).toEqual([
-      'GET /api/search/suppliers is never checked: the constant for limit does not fit variables. Give each a `needs` entry: { from: "session", key }, { from: "<operation>", pick }, or a constant { value: <json> }.',
+      'GET /api/search/suppliers is never checked: the needs entry for limit does not fit variables (expected number). Change each constant to fit the variable\'s schema (a REST query variable drafted as z.string() takes { value: "1" }, not { value: 1 }).',
     ]);
   });
 
