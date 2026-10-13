@@ -20,6 +20,9 @@ import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, type Session } from "./session";
 import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type Site, type SiteCtx } from "./site";
 
+/** `fromProfile`: seed the sign-in from another Chrome profile's cookies (`login --from-profile`). */
+export type SignInOptions = { fromProfile?: string };
+
 export type Deps = {
   fetch: Fetch;
   env: Env;
@@ -27,7 +30,7 @@ export type Deps = {
    * Opens Chrome on the login profile and returns the captured authorization + cookie headers,
    * or null when sign-in didn't complete (headless: the profile is logged out).
    */
-  login(headless: boolean): Promise<Record<string, string> | null>;
+  login(headless: boolean, options?: SignInOptions): Promise<Record<string, string> | null>;
   sleep(ms: number): Promise<void>;
   /** Delay before each retry of a network failure; its length is the retry count. */
   retryDelays: number[];
@@ -204,8 +207,8 @@ export class Client {
   }
 
   /** Signs in with Chrome, runs postLogin and saves the session. Null if sign-in didn't complete. */
-  async signIn(headless: boolean): Promise<Session | null> {
-    const headers = await this.deps.login(headless);
+  async signIn(headless: boolean, options?: SignInOptions): Promise<Session | null> {
+    const headers = await this.deps.login(headless, options);
     if (!headers) return null;
     const draft: Session = { headers, ids: {}, savedAt: new Date().toISOString() };
     const raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};

@@ -2,7 +2,7 @@
 name: logbuy-feedback
 description: Files a problem with the logbuy plugin as a GitHub issue on hoaj/logbuy-plugin, after the user approves the text. Use when a logbuy CLI exits 3 (drift) or 1 (bug), when the plugin cannot do a Task the user needs (a feature request), or when the user says "report this" about it. Not for exit 2 (input), 4 (session) or 5 (network).
 ---
-<!-- version: 0.1.0 -->
+<!-- version: 0.2.0 -->
 
 # logbuy feedback
 
@@ -64,9 +64,11 @@ With no open match and several closed ones, judge the closed rows by the most re
 
 | Kind | Title | Label |
 |---|---|---|
-| drift | the Fingerprint, exactly | none |
-| bug | `bug: <bug key>` | none |
+| drift | the Fingerprint, exactly | `drift` |
+| bug | `bug: <bug key>` | `bug` |
 | feature | `feature: <skill>: <Task in plain words>` | `feature` |
+
+The label lets the maintainer filter the queue; dedup still goes by the exact title (step 1).
 
 Body for drift and bug:
 
@@ -95,21 +97,21 @@ title=$(cat <<'EOF'
 <title>
 EOF
 )
-gh issue create --repo hoaj/logbuy-plugin --title "$title" [--label feature] --body-file - <<'EOF'
+gh issue create --repo hoaj/logbuy-plugin --title "$title" --label <label> --body-file - <<'EOF'
 <body>
 EOF
 gh issue comment <n> --repo hoaj/logbuy-plugin --body "+1 on <version>, <os>"
 ```
 
-Set the title the same byte-exact way as the key in step 1, so the next user's search finds this issue.
+Set the title the same byte-exact way as the key in step 1, so the next user's search finds this issue. `<label>` is the one from step 3; if `gh` says the label does not exist (a repo set up before it), file again without `--label`.
 
 Without `gh`, without a login, or when `gh` is refused permission: give the user a pre-filled link to open instead, with the title, body and label URL-encoded:
 
 ```
-https://github.com/hoaj/logbuy-plugin/issues/new?title=<title>&body=<body>&labels=feature
+https://github.com/hoaj/logbuy-plugin/issues/new?title=<title>&body=<body>&labels=<label>
 ```
 
-Drop `&labels=feature` for drift and bug. Duplicates filed this way are caught later by the maintainer through the Fingerprint.
+Duplicates filed this way are caught later by the maintainer through the Fingerprint.
 
 ### 5. Tell the user
 

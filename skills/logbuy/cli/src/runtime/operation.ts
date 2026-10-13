@@ -6,11 +6,14 @@ export type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 /**
  * Where `check` gets a variable: a chain-root id from the session (`key` "account" means the
- * selected --account), or an earlier Operation's parsed result.
+ * selected --account), an earlier Operation's parsed result, or a constant (`{ value: 25 }`: what a
+ * command passes for a fixed parameter such as a page size or a sort order). A required variable
+ * without an entry can never be checked: `check` skips the Operation and lists it in `warnings`.
  */
 export type Need =
   | { from: "session"; key: string }
-  | { from: string; pick(result: any): unknown };
+  | { from: string; pick(result: any): unknown }
+  | { value: unknown };
 
 export type Operation<V extends z.ZodType = z.ZodType, R extends z.ZodType = z.ZodType> = {
   /** GraphQL operationName, or "METHOD /path/:param" for REST. */

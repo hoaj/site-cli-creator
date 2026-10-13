@@ -56,7 +56,7 @@ export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   help: [],
   version: [],
   doctor: [],
-  login: [],
+  login: [flag("from-profile", "string", "reuse the sign-in another Chrome profile holds (the Capture tool's ~/.site-cli-creator/profile) instead of signing in again")],
   check: [flag("op", "string", "check one Operation and the chain it needs"), flag("writes", "boolean", "also check write Operations in headless Chrome (aborted, never sent)")],
   // Hidden: the platform smoke test in CI; not listed by help.
   selftest: [flag("url", "string", "an http(s) URL to fetch"), flag("no-chrome", "boolean", "only the fetch, no Chrome")],

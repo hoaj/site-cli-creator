@@ -21,10 +21,11 @@ export default defineOperation({
   variables: z.object({
     query: z.string().optional(),
     filters: z.string().optional(),
-    // Defaults let `check` call it with no input (a plain "best match" listing).
-    limit: z.number().int().min(1).max(200).default(1),
-    sortBy: z.string().default("BestMatch"),
+    limit: z.number().int().min(1).max(200),
+    sortBy: z.string(),
   }),
+  // What `check` calls it with: a plain "best match" listing of one deal.
+  needs: { limit: { value: 1 }, sortBy: { value: "BestMatch" } },
   response: z.object({
     results: z.object({
       items: z.array(z.object({

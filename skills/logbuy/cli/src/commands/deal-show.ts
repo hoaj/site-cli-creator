@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { defineCommand, inputFailure } from "../runtime/command";
 import searchSuppliers from "../operations/searchSuppliers";
-import { shopUrl } from "../deals";
+import { shopUrl } from "../lib/deals";
 
 export default defineCommand({
   name: "deal show",

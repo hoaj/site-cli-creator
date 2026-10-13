@@ -1,6 +1,6 @@
 // site.ts helpers: config problems, the test-only origin override, login hosts, JWT claims.
 import { describe, expect, test } from "bun:test";
-import { chromeMissing, loginTimeoutMs } from "../src/runtime/login";
+import { chromeMissing, loginTimeoutMs, siteCookie } from "../src/runtime/login";
 import { decodeJwt, effectiveOrigin, isLoginHost, rebase, siteProblems, tokenMatches } from "../src/runtime/site";
 import { loginSite, makeSite } from "./helpers";
 
@@ -95,4 +95,14 @@ test("missing Chrome: session for a login skill, input for auth none (check --wr
   expect(none.kind).toBe("input");
   expect(none.message).toContain("/nowhere/chrome");
   expect(chromeMissing(makeSite(), { SITE_CLI_CHROME: process.execPath })).toBeNull();
+});
+
+test("login --from-profile carries over the cookies of every host the site uses: its domain's hosts, login hosts and their subdomains, parent domains (review)", () => {
+  const site = loginSite({ origin: "https://www.example.test", login: { startUrl: "https://www.example.test/", hosts: ["login.idp.test", "127.0.0.1:4000"], tokenRequest: "/api/" } });
+  for (const domain of ["www.example.test", ".example.test", "example.test", "api.example.test", ".api.example.test", "login.idp.test", ".idp.test", "eu.login.idp.test", "127.0.0.1"]) {
+    expect(siteCookie(site, domain, {}), domain).toBe(true);
+  }
+  for (const domain of ["evil.test", "notexample.test", "example.test.evil.com", "other.idp.test"]) {
+    expect(siteCookie(site, domain, {}), domain).toBe(false);
+  }
 });
