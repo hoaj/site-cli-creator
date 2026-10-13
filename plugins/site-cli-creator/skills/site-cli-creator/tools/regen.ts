@@ -14,9 +14,11 @@ import {
   commandsTable,
   helpCommands,
   moduleFiles,
+  neverCheckedWarning,
   registrySource,
   replaceCommandsBlock,
   setNeedsChrome,
+  unsuppliedVariables,
 } from "./lib/regen";
 import { parseJson } from "./lib/shape";
 
@@ -73,11 +75,15 @@ await runTool(async () => {
   const site = await defaultExport(paths.site);
   if (site.auth !== "login" && site.auth !== "none") fail(`site.ts auth must be "login" or "none"`);
   const operations: { name: string; effect: string }[] = [];
+  const warnings: string[] = [];
   for (const file of operationFiles) {
     const op = await defaultExport(join(paths.operations, file));
     if (op.effect !== "read" && op.effect !== "write") fail(`operations/${file}: effect must be "read" or "write"`);
     operations.push({ name: String(op.name), effect: op.effect });
+    const unsupplied = op.effect === "read" ? unsuppliedVariables(op) : [];
+    if (unsupplied.length) warnings.push(neverCheckedWarning(String(op.name), unsupplied));
   }
+  for (const w of warnings) progress(`warning: ${w}`);
   const needsChrome = site.auth === "login" || operations.some((o) => o.effect === "write");
   writeFileSync(paths.site, setNeedsChrome(readFileSync(paths.site, "utf8"), needsChrome));
 
@@ -93,5 +99,6 @@ await runTool(async () => {
     commands: commands.map((c) => ({ name: c.name, write: c.write })),
     needsChrome,
     skillMd: paths.skillMd,
+    ...(warnings.length ? { warnings } : {}),
   };
 });

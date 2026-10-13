@@ -102,7 +102,7 @@ cd <skill>/cli && bun src/main.ts check --writes
 
 Show the user each read command's output shape against the card, not its values. Run a write with `--confirm` only when the user asks for it and agrees to the change on the site. For a command that takes a user-supplied id, also run it with a made-up id: it must exit 2 (input), not 3.
 
-`check` passes when it exits 0 with every Operation `ok`. On exit 3, the Contract is wrong for this account: fix the field (usually nullability) and rerun.
+`check` passes when it exits 0 with every Operation `ok` and no `warnings` (a read Operation `regen.ts` or `check` calls never checked needs a `needs` entry for each required variable, a constant `{ value }` included: [contracts.md](contracts.md#needs-the-chain)). On exit 3, the Contract is wrong for this account: fix the field (usually nullability) and rerun.
 
 ## 6. Bump and PR
 

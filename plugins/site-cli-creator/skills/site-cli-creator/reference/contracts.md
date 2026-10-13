@@ -88,9 +88,12 @@ Each variable says where it comes from, so `check` calls read Operations in orde
 needs: { customerId: { from: "session", key: "customerId" } }                          // an id postLogin stored
 needs: { accountId: { from: "getAccount", pick: (r) => r.data.getAccount.id } }        // another Operation's result
 needs: { id: { from: "GET /api/invoices", pick: (r) => r.invoices[0]?.id } }           // first item of a list
+needs: { limit: { value: 1 }, sortBy: { value: "BestMatch" } }                         // constants: what the command passes
 ```
 
-`from` is the other Operation's `name`; `pick` gets its parsed `response`. `key: "account"` means the selected `--account`. A variable only the user can supply (free text, a choice) needs no entry; `check` then skips the Operation and says so.
+`from` is the other Operation's `name`; `pick` gets its parsed `response`. `key: "account"` means the selected `--account`. `value` is a constant (any JSON value) for a fixed parameter the command always passes (a page size, a sort order), or a harmless sample for one only the user can supply (a search word, a choice): keep the Contract's `variables` as the site wants them and put check's input here, not in Zod defaults.
+
+Every required variable of a read Operation needs an entry, or `check` can never call it: it skips the Operation as `never checkable` and lists it in its output's `warnings`, and `regen.ts` prints the same warning (`warnings` in its JSON). Fix each one before `check`.
 
 ### Writes and `trigger`
 
