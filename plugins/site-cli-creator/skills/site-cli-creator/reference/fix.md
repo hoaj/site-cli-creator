@@ -48,7 +48,7 @@ The Fingerprint names the skill, the Operation, the break type and the field pat
 
    | breakType | Change |
    |---|---|
-   | `zod` | the field's type, nullability or presence in `response`, and the command if it reads the field (a type change: below) |
+   | `zod` | the field's type, nullability or presence in `response`, and the command if it reads the field (a type change: below). Leave the query as the new Capture's `request` shows it: the site answers it, only the response changed |
    | `graphql` | the trimmed query: a renamed or moved field, a new required argument |
    | `http` (404/405) | `rest.path` or `rest.method`, from the new Capture |
    | `input-rejected` | `variables` and how the command builds them |
