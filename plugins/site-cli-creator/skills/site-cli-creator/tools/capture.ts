@@ -22,7 +22,7 @@ const USAGE =
 
 const NOTES = [
   "--script <file.ts> must `export default async (page) => { ... }` (page is a Playwright Page). The tool has already opened --url (and followed its redirects, to a login host too) when the function is called; the Capture stops when it resolves. Drive the page with real input (page.click, page.fill, page.press, locators), not element.click() inside page.evaluate: --write counts only real clicks, key presses and submits.",
-  "Without --script, Chrome opens headed: the user performs the Task, then closes the browser or presses Enter in the terminal.",
+  "Without --script, Chrome opens headed: the user performs the Task, then closes the Task window (other windows it opened close with it) or presses Enter in the terminal. SIGINT or SIGTERM (kill -INT <pid>; stderr prints the pid) is a clean stop that still writes the Capture: use it to end a Capture you run in the background.",
   "Hosts are host names without scheme or port (login.example.com).",
   "The profile (~/.site-cli-creator/profile/ by default) keeps cookies between Captures; pass --profile <empty dir> to see a site set its cookies from scratch.",
 ];
@@ -67,23 +67,68 @@ async function launch(profile: string, headless: boolean): Promise<BrowserContex
       headless,
       viewport: headless ? undefined : null,
       serviceWorkers: "block",
+      // SIGINT and SIGTERM stop the Capture cleanly (watchStop): the browser closes after the shapes are written.
+      handleSIGINT: false,
+      handleSIGTERM: false,
     });
   } catch (error) {
     fail(`could not start Google Chrome: ${(error as Error).message.split("\n")[0]}`);
   }
 }
 
-function waitForStop(context: BrowserContext, interactive: boolean): Promise<string> {
-  return new Promise((done) => {
-    context.on("close", () => done("browser closed"));
-    if (!interactive) return;
-    process.once("SIGINT", () => done("interrupted"));
-    if (process.stdin.readable) {
-      process.stdin.on("data", (chunk) => {
-        if (chunk.toString().includes("\n")) done("enter");
-      });
-    }
-  });
+/** How often a headed Capture reminds stderr that it is still recording (SITE_CLI_CAPTURE_HINT_MS overrides). */
+const HINT_MS = Number(process.env.SITE_CLI_CAPTURE_HINT_MS) || 30_000;
+
+type Stop = { reason: Promise<string>; dispose(): void };
+
+/**
+ * What ends a Capture besides a --script finishing: the browser closing; the Task window (the first
+ * page) closing, or the last page on the recorded hosts, even while other windows (a shop the page
+ * opened) stay open: capture.ts closes those; SIGINT or SIGTERM, a clean stop that still writes the
+ * Capture (how an agent ends a Capture it runs in the background); and Enter in the terminal.
+ */
+function watchStop(context: BrowserContext, first: Page, inScope: (url: string) => boolean, interactive: boolean): Stop {
+  let done!: (reason: string) => void;
+  const reason = new Promise<string>((resolve) => (done = resolve));
+  context.on("close", () => done("browser closed"));
+  const onPageClose = (closed: Page, lastUrl: string) => {
+    const open = context.pages().filter((p) => p !== closed && !p.isClosed());
+    if (closed === first || (inScope(lastUrl) && !open.some((p) => inScope(p.url())))) done("task window closed");
+  };
+  const watch = (page: Page) => {
+    let lastUrl = page.url();
+    page.on("framenavigated", (frame) => {
+      if (frame === page.mainFrame()) lastUrl = frame.url();
+    });
+    page.on("close", () => onPageClose(page, lastUrl));
+  };
+  for (const page of context.pages()) watch(page);
+  context.on("page", watch);
+  const onSignal = (signal: NodeJS.Signals) => done(signal);
+  process.once("SIGINT", onSignal);
+  process.once("SIGTERM", onSignal);
+  const onData = (chunk: Buffer) => {
+    if (chunk.toString().includes("\n")) done("enter");
+  };
+  if (interactive && process.stdin.readable) process.stdin.on("data", onData);
+  let hint: ReturnType<typeof setInterval> | undefined;
+  if (interactive) {
+    hint = setInterval(() => {
+      const n = context.pages().filter((p) => !p.isClosed()).length;
+      progress(
+        `still recording: ${n} window${n === 1 ? "" : "s"} open; close the Task window (the others close with it), press Enter here, or run: kill -INT ${process.pid}`,
+      );
+    }, HINT_MS);
+  }
+  return {
+    reason,
+    dispose() {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      process.stdin.off("data", onData);
+      if (hint) clearInterval(hint);
+    },
+  };
 }
 
 async function loadScript(file: string): Promise<(page: Page) => Promise<void>> {
@@ -251,8 +296,8 @@ await runTool(async () => {
     }),
   );
 
-  const stop = waitForStop(context, !script);
   const page = context.pages()[0] ?? (await context.newPage());
+  const stop = watchStop(context, page, (url) => recorder.inScope(url), !script);
   let scriptError: Error | undefined;
   let stoppedBy: string;
   try {
@@ -262,18 +307,29 @@ await runTool(async () => {
     else progress(`could not open --url (${(error as Error).message.split("\n")[0]}); navigate in the browser`);
   }
   if (script && !scriptError) {
-    try {
-      await script(page);
-    } catch (error) {
-      scriptError = error as Error;
-    }
-    stoppedBy = scriptError ? "script failed" : "script finished";
+    let stopped = false;
+    const finished = script(page).then(
+      () => "script finished",
+      (error) => {
+        // A script still waiting when the Task window closed fails with it; that is no script error.
+        if (!stopped) scriptError = error as Error;
+        return "script failed";
+      },
+    );
+    stoppedBy = await Promise.race([finished, stop.reason]);
+    stopped = true;
   } else if (script) {
     stoppedBy = "script failed";
   } else {
-    progress("Perform the Task in Chrome, then close the browser or press Enter here.");
-    stoppedBy = await stop;
+    progress(
+      `Perform the Task in Chrome, then close the Task window or press Enter here. Capture pid ${process.pid}: kill -INT ${process.pid} stops it cleanly too.`,
+    );
+    stoppedBy = await stop.reason;
   }
+  stop.dispose();
+  // Windows still open when the Task window closed (a shop the page opened): closed with the browser.
+  const closedWindows = stoppedBy === "task window closed" ? context.pages().filter((p) => !p.isClosed()).length : 0;
+  if (closedWindows) progress(`closing ${closedWindows} other window${closedWindows === 1 ? "" : "s"} still open`);
 
   // fetch() resolves on headers, so a script can end before its bodies arrive.
   const deadline = Date.now() + SETTLE_MS;
@@ -339,6 +395,7 @@ await runTool(async () => {
     task,
     dir,
     stoppedBy,
+    ...(closedWindows ? { closedWindows } : {}),
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
     operations: index.operations.map(({ operation, effect, effectUnknown, loginFlow, navigation, allowedRead, file, aborted: n }) => ({
       operation,
