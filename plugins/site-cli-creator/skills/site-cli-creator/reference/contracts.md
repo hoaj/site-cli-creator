@@ -147,7 +147,7 @@ export default defineCommand({
 });
 ```
 
-**Shared code between commands** (an output mapper, a URL builder) goes in `cli/src/lib/<name>.ts`, never in `commands/`: `regen.ts` registers only `commands/<noun>-<verb>.ts` files whose default export is a command, and warns about any other file there (`warnings` in its JSON).
+**Shared code between commands** (an output mapper, a URL builder) goes in `cli/src/lib/<name>.ts`, never in `commands/`: `regen.ts` registers only `commands/` files whose default export is a command, and warns about any other file there, and about a command file not named `<noun>-<verb>.ts` after its command (`warnings` in its JSON).
 
 ```ts
 // cli/src/lib/deals.ts, imported by commands/deal-search.ts as `import { toDeal } from "../lib/deals";`

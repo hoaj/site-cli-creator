@@ -2,7 +2,7 @@
 // bun tools/regen.ts --skill-dir <dir>
 // Rewrites cli/src/registry.ts, sets needsChrome in site.ts, and rewrites the
 // SKILL.md command table from the CLI's own `help` (SPEC §3 step 5). Only
-// commands/<noun>-<verb>.ts files that default-export a command are registered.
+// commands/ files that default-export a command are registered.
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -12,7 +12,7 @@ import { parseFlags } from "./lib/args";
 import { fail, progress, runTool } from "./lib/output";
 import {
   cliPaths,
-  COMMAND_FILE,
+  commandFileName,
   commandsTable,
   helpCommands,
   isCommandExport,
@@ -42,24 +42,27 @@ async function defaultExport(file: string): Promise<Record<string, unknown>> {
 }
 
 /**
- * The files in commands/ that are commands: named `<noun>-<verb>.ts` with a command as default export.
- * Any other file (a shared helper) is left out of registry.ts with a warning, so it never becomes a command.
+ * The files in commands/ that are commands: a command (defineCommand) as default export, whatever
+ * the file's name (a 0.1.0 plugin's `status.ts` stays registered; a name that does not match the
+ * command is a warning). Any other file (a shared helper) is left out of registry.ts with a
+ * warning, so it never becomes a command.
  */
 async function commandModules(dir: string, files: string[], warnings: string[]): Promise<string[]> {
   const kept: string[] = [];
   for (const file of files) {
-    if (!COMMAND_FILE.test(file)) {
-      warnings.push(`commands/${file} is not registered: a command file is named <noun>-<verb>.ts. ${SHARED_CODE_HOME}`);
-      continue;
-    }
     let mod: { default?: unknown };
     try {
       mod = await import(pathToFileURL(join(dir, file)).href);
     } catch (error) {
       fail(`could not import ${join(dir, file)}: ${(error as Error).message} (run bun install in the skill's cli/ first?)`);
     }
-    if (isCommandExport(mod.default)) kept.push(file);
-    else warnings.push(`commands/${file} is not registered: its default export is no command (defineCommand). ${SHARED_CODE_HOME}`);
+    if (!isCommandExport(mod.default)) {
+      warnings.push(`commands/${file} is not registered: its default export is no command (defineCommand). ${SHARED_CODE_HOME}`);
+      continue;
+    }
+    kept.push(file);
+    const expected = commandFileName((mod.default as { name: string }).name);
+    if (file !== expected) warnings.push(`commands/${file} holds the command "${(mod.default as { name: string }).name}": name the file ${expected} (it is registered as it is).`);
   }
   return kept;
 }
