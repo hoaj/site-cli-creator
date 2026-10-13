@@ -64,6 +64,15 @@ Drop everything else: analytics, feature flags, page chrome, prefetches, page lo
 
 Operations marked `loginFlow: true` in `index.json` are sign-in steps (a token request, a post-login call, a login host's pages). They are never Operations: they belong in `site.ts`, as `login.tokenRequest` or inside `postLogin` ([contracts.md](contracts.md#sitets)). When the page sends such a POST (or any other non-GET that changes no data) before the Task's data appears, list it in `readOnlyRequests` so `check --writes` lets it through. An Operation marked `effectUnknown: true` is a persisted query: decide its `effect` from what it does. Reuse an existing `operations/<file>.ts` when the Operation is already there; widen its `response` only by the fields this Task reads.
 
+### Next.js sites
+
+A Next.js App Router site sends two kinds of call that can never be Operations:
+
+- **Server actions** (`serverAction: true`): a POST to the page's own path with a `next-action` header and a `text/plain` body. They call the page's server code, and nothing shows whether they write, so a read Capture aborts them and prints `server action aborted` at once. If the page then shows errors, capture again with `--allow-read <its path>`, once you are sure it only reads. Drop them either way.
+- **RSC streams** (`rsc: true`): page renders sent as `text/x-component` (`GET /partner/:id?_rsc=…`). They are not JSON, so no Zod Contract can parse them. Drop them.
+
+Keep the plain JSON routes the same page calls (usually `/api/…`). When the data only arrives through a server action or an RSC stream, read the page's JavaScript (the chunk that renders the component, in DevTools' Sources) for the API it calls, and capture a page that calls it, or tell the user the Task has no usable API.
+
 Show the result as two lists, kept and dropped, with a one-line reason per Operation.
 
 ## 4. Card

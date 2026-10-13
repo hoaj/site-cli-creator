@@ -180,6 +180,10 @@ export function draftOperation(
     lines.push(`  // No JSON response shape: ${why}.`);
     lines.push("  response: z.unknown(),");
   }
+  if (op.serverAction || op.rsc) {
+    lines.push("  // Next.js: a server action or an RSC stream is never an Operation. Use the JSON route the page also");
+    lines.push("  // calls (often /api/...) instead; see reference/add-task.md, Next.js sites.");
+  }
   if (op.navigation) {
     lines.push("  // A page load (a document request), not an API call: an Operation only if the page itself is the data.");
   }
