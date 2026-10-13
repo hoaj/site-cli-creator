@@ -111,6 +111,20 @@ export function tokenMatches(pattern: string | RegExp, url: string): boolean {
   return typeof pattern === "string" ? url.includes(pattern) : pattern.test(url);
 }
 
+/**
+ * The site's domain: the origin's host name without `www.`. It and its subdomains are the site's
+ * hosts, the ones the generator's Capture tool records (`api.example.com` for `www.example.com`).
+ */
+export function siteDomain(origin: string): string {
+  return new URL(origin).hostname.toLowerCase().replace(/^www\./, "");
+}
+
+/** Whether a host name is on the site's domain (siteDomain): the domain itself or a subdomain. */
+export function onSiteDomain(domain: string, host: string): boolean {
+  const h = host.toLowerCase();
+  return h === domain || h.endsWith(`.${domain}`);
+}
+
 export function isLoginHost(site: Site, url: string): boolean {
   try {
     const { host, hostname } = new URL(url);
