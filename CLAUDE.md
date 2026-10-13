@@ -11,3 +11,7 @@ Default canonical labels: needs-triage, needs-info, ready-for-agent, ready-for-h
 ### Domain docs
 
 Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Maintainer skills
+
+`maintainer-skills/` holds skills for changing this repo's plugins. They never ship to plugin users and load here through `.claude/skills/`. `improve-site-cli-creator` fixes and extends the site-cli-creator generator (issues labelled `site-cli-creator`).

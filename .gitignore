@@ -1,5 +1,6 @@
 docs/*
 !docs/agents/
-.claude/
+.claude/*
+!.claude/skills/improve-site-cli-creator
 .agents/
 .DS_Store
