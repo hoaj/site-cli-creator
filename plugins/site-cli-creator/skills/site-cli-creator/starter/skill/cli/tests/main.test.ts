@@ -355,6 +355,40 @@ describe("login", () => {
     expect(seen).toEqual([join(homedir(), ".site-cli-creator", "profile"), homedir()]);
   });
 
+  test("after login --from-profile the silent refresh signs in from that profile first, then the CLI's own (#46)", async () => {
+    const source = tempHome();
+    try {
+      const seen: unknown[] = [];
+      let answers: Array<Record<string, string> | null> = [{ authorization: "Bearer t1" }];
+      const { fetch } = fakeFetch((req) => (req.headers.authorization === "Bearer t1" ? json({}, 401) : happySite(req)));
+      const { deps } = makeDeps(fetch, home.dir);
+      deps.env = { ...deps.env, SITE_CLI_NONINTERACTIVE: "1" };
+      deps.login = async (headless, options) => {
+        seen.push({ headless, fromProfile: options?.fromProfile });
+        return answers.shift() ?? null;
+      };
+      expect((await run(["login", "--from-profile", source.dir], makeApp(loginSite(), deps))).code).toBe(0);
+      expect(loadSession(home.dir)!.fromProfile).toBe(source.dir);
+
+      // The bearer expires: the refresh reuses the --from-profile sign-in, so no second sign-in is needed.
+      seen.length = 0;
+      answers = [{ authorization: "Bearer t2" }];
+      expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(0);
+      expect(seen).toEqual([{ headless: true, fromProfile: source.dir }]);
+      expect(loadSession(home.dir)!.fromProfile).toBe(source.dir);
+
+      // That profile is signed out too: the CLI's own profile is tried next; its sign-in no longer names the other profile.
+      saveSession(home.dir, { headers: { authorization: "Bearer t1" }, ids: { customerId: "C-1" }, fromProfile: source.dir });
+      seen.length = 0;
+      answers = [null, { authorization: "Bearer t3" }];
+      expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(0);
+      expect(seen).toEqual([{ headless: true, fromProfile: source.dir }, { headless: true, fromProfile: undefined }]);
+      expect(loadSession(home.dir)!.fromProfile).toBeUndefined();
+    } finally {
+      source.cleanup();
+    }
+  });
+
   test("a login skill without a session signs in before running the command", async () => {
     const { deps, loginCalls } = makeDeps(fakeFetch(happySite).fetch, home.dir, [{ authorization: "Bearer t" }]);
     const { code } = await run(["products", "show"], makeApp(loginSite(), deps));

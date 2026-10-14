@@ -8,7 +8,7 @@ import type { BrowserContext, Request as PwRequest, Route } from "playwright-cor
 import type { Client } from "./call";
 import { ContractError, Failure, type DriftEntry } from "./envelope";
 import { driftFingerprint, errorName, operationSegment, zodDiff } from "./fingerprint";
-import { launch } from "./login";
+import { closeContext, launch, launchInMemory, profileState } from "./login";
 import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverCheckedWarning } from "./needs";
 import type { Operation } from "./operation";
 import { ensureStateDir, profileDir, stateDir } from "./session";
@@ -147,7 +147,7 @@ export async function check(client: Client, operations: Operation[], options: Ch
     const reads = operations.filter((op) => op.effect === "read");
     const declaredWrites = operations.filter((op) => op.effect === "write");
     try {
-      const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env))(withTrigger, reads, declaredWrites);
+      const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env, client.fromProfile()))(withTrigger, reads, declaredWrites);
       for (const op of withTrigger) {
         const d = outcome.get(op.name);
         if (d) drifts.push(d);
@@ -417,20 +417,32 @@ export function compareWrite(site: Site, op: Operation, req: Captured | undefine
 const REQUEST_WAIT_MS = 5_000;
 const ACTION_TIMEOUT_MS = 15_000;
 
-export function chromeWriteChecker(site: Site, env = process.env): WriteChecker {
+/**
+ * Runs triggers in headless Chrome: for auth "none" a temporary profile, deleted afterwards; for a
+ * login, the CLI's own profile, or with `fromProfile` (the profile `login --from-profile` used,
+ * Client.fromProfile()) a context with no profile on disk holding that profile's cookies and the
+ * origin's localStorage, as the CLI's own profile would hold them, so a sign-in carried over from a
+ * Capture needs no second sign-in and nothing is written.
+ */
+export function chromeWriteChecker(site: Site, env = process.env, fromProfile?: string): WriteChecker {
   return async (writes, reads, declaredWrites = writes) => {
     const out = new Map<string, DriftEntry | null>();
+    const seeded = site.auth === "login" && fromProfile !== undefined;
     const temp = site.auth === "none" ? mkdtempSync(join(tmpdir(), `${site.skill}-check-`)) : undefined;
     const profile = temp ?? profileDir(ensureStateDir(stateDir(site, env)));
-    if (!temp) ensureStateDir(profile);
     let context: BrowserContext | undefined;
     try {
-      context = await launch(site, profile, true, env);
+      if (seeded) context = await launchInMemory(site, true, env, await profileState(site, fromProfile, env, { localStorage: true }));
+      else {
+        if (!temp) ensureStateDir(profile);
+        context = await launch(site, profile, true, env);
+      }
       context.setDefaultTimeout(ACTION_TIMEOUT_MS);
       const origin = effectiveOrigin(site, env);
-      for (const op of writes) out.set(op.name, await checkOne(site, context, op, declaredWrites, reads, origin));
+      const signIn = seeded ? `the sign-in carried over from ${fromProfile}` : "the CLI's Chrome profile";
+      for (const op of writes) out.set(op.name, await checkOne(site, context, op, declaredWrites, reads, origin, signIn));
     } finally {
-      await context?.close().catch(() => {});
+      if (context) await closeContext(context);
       if (temp) rmSync(temp, { recursive: true, force: true });
     }
     return out;
@@ -444,6 +456,7 @@ async function checkOne(
   writes: Operation[],
   reads: Operation[],
   origin: string,
+  signIn: string,
 ): Promise<DriftEntry | null> {
   let captured: Captured | undefined;
   let signedOut = false;
@@ -470,7 +483,7 @@ async function checkOne(
   await page.close().catch(() => {});
   await context.unroute("**/*", handler);
   if (!captured && signedOut) {
-    throw new Failure("session", `The Chrome profile is signed out of ${site.origin}, so ${op.name} could not be checked.`);
+    throw new Failure("session", `${signIn[0]!.toUpperCase()}${signIn.slice(1)} is signed out of ${site.origin}, so ${op.name} could not be checked.`);
   }
   return compareWrite(site, op, captured, triggerError);
 }

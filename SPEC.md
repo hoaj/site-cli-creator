@@ -129,13 +129,13 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 
   There is no `last-error.json`. The Feedback skill works from the error JSON the CLI just printed (§10).
 - **`login`** launches headed Chrome via `launchPersistentContext(profile, {channel: "chrome"})`. It waits up to 10 minutes for the request named by `site.tokenRequest`, sniffs its `authorization` header and the cookies, then runs the site's **post-login step**.
-- **`login --from-profile <dir>`** lets the maintainer sign in once: right after the first Capture, it reads the Capture profile's cookies for the site's hosts (the origin's domain and its subdomains, as the Capture records them) and its login hosts, in memory only, and runs the same sign-in headless with them in a Chrome context that keeps nothing on disk (not the CLI's `profile/`). Nothing is written but `session.json`, and no cookie value is logged.
+- **`login --from-profile <dir>`** lets the maintainer sign in once: right after the first Capture, it reads the Capture profile's cookies for the site's hosts (the origin's domain and its subdomains, as the Capture records them) and its login hosts, in memory only, and runs the same sign-in headless with them in a Chrome context that keeps nothing on disk (not the CLI's `profile/`). Nothing is written but `session.json`, which also names that profile dir (a path, no cookie), and no cookie value is logged. Until a plain `login` replaces that sign-in, the session refresh and `check --writes` seed their Chrome from that profile the same way, in memory, so the maintainer signs in once ([login --from-profile leaves the CLI's profile signed out](https://github.com/hoaj/skills/issues/46)).
 - **Post-login step** (`site.ts`): site-specific, written by the agent from the Capture. It derives the chain-root ids and keeps nothing else. For YouSee:
   1. Decode `ciam_id` and `individual_id` from the access token.
   2. `POST /shop/api/session-management/post-login` with `{ciamId, individualId}`, sending both the bearer and the cookie.
   3. Store only `personalInfo.customerId` and `individualId`. The response also holds CPR, address, email and phone, which are never stored or logged. Repeating this call is normal frontend behavior.
 - **Commands** use plain `fetch` with the cached session. On a 401, 403 or a redirect to login, the CLI:
-  1. refreshes headless from the profile and retries;
+  1. refreshes headless from the profile (first from the `login --from-profile` profile, when that is where the sign-in came from) and retries;
   2. if still logged out, opens headed login and reruns the command;
   3. if login doesn't complete, fails with `session`.
 
