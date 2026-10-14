@@ -43,3 +43,33 @@ _Avoid_: template (nothing is kept in sync), framework, shared runtime
 **Capture**:
 A recording of the calls a site's frontend makes while the user performs one Task in the browser, kept as shapes only, with no values.
 _Avoid_: HAR, recording, trace
+
+### MCP server
+
+**MCP server**:
+A CLI skill serving its Tasks as tools to AI clients that speak MCP, instead of to an agent running its CLI. It runs the same Tasks, Contracts and Session as the CLI.
+_Avoid_: connector, MCP plugin, separate server
+
+**Local mode**:
+An MCP server running on the user's own computer, started by their AI client, with no address on the internet.
+_Avoid_: stdio mode, desktop mode
+
+**Remote mode**:
+An MCP server running as a web service on a machine its Owner controls, with an address that web and phone clients can reach.
+_Avoid_: hosted mode, cloud mode, lock-1 mode
+
+**Owner**:
+The one person a remote-mode MCP server belongs to and acts for. Nobody else can use it.
+_Avoid_: admin, user (too broad), tenant
+
+**Server sign-in**:
+The Owner proving to their own remote-mode MCP server that they may use it. It says nothing about the site.
+_Avoid_: lock 1, MCP login, OAuth (that is how, not what)
+
+**Session**:
+What signing in to a site leaves behind for a CLI skill to act as the user there, such as a cookie or a bearer token. It is the site's own login, never derived from a Server sign-in.
+_Avoid_: lock 2, credentials, token (too broad)
+
+**Setup page**:
+The Owner's page on their remote-mode MCP server where they give it a Session for its site and see whether it is still valid.
+_Avoid_: admin page, control panel, dashboard
