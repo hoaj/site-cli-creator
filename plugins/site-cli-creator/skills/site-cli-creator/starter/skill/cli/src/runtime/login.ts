@@ -3,7 +3,7 @@
 import { existsSync } from "node:fs";
 import type { BrowserContext, Cookie, Request } from "playwright-core";
 import { chromeLaunchOptions, chromeNotFound, findChrome } from "./chrome";
-import { ContractError, Failure } from "./envelope";
+import { ContractError, Failure, ProfileUnavailable } from "./envelope";
 import { ensureProfileDir } from "./session";
 import { effectiveOrigin, isLoginHost, isTest, loginHostName, onSiteDomain, rebase, siteDomain, tokenMatches, type Env, type Site } from "./site";
 
@@ -49,14 +49,14 @@ export type ProfileState = { cookies: Cookie[]; origins: { origin: string; local
  * token), read on a page whose every request is answered locally, so nothing reaches the site.
  */
 export async function profileState(site: Site, dir: string, env: Env = process.env, options: { localStorage?: boolean } = {}): Promise<ProfileState> {
-  if (!existsSync(dir)) throw new Failure("input", `--from-profile: no such Chrome profile dir: ${dir}`);
+  if (!existsSync(dir)) throw new ProfileUnavailable(`--from-profile: no such Chrome profile dir: ${dir}`);
   let context: BrowserContext;
   try {
     context = await launch(site, dir, true, env);
   } catch (error) {
     if (error instanceof Failure) throw error;
     const why = String((error as Error)?.message ?? error).split("\n")[0];
-    throw new Failure("input", `--from-profile: could not open ${dir} (${why}). If a Capture is still running on it, end it first.`);
+    throw new ProfileUnavailable(`--from-profile: could not open ${dir} (${why}). If a Capture is still running on it, end it first.`);
   }
   try {
     const cookies = (await context.cookies()).filter((c) => siteCookie(site, c.domain, env));
