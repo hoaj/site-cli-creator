@@ -1,0 +1,68 @@
+{
+  "operation": "GET /api/notifications",
+  "kind": "rest",
+  "effect": "read",
+  "resourceType": "fetch",
+  "host": "www.mylogbuy.com",
+  "method": "GET",
+  "path": "/api/notifications",
+  "request": {
+    "headers": {
+      "accept": "*/*",
+      "baggage": null,
+      "cookie": null,
+      "referer": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "user-agent": null
+    },
+    "query": {
+      "type": "object",
+      "fields": {
+        "pageNumber": {
+          "type": "string"
+        },
+        "pageSize": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "contentType": "application/json",
+      "headers": {
+        "age": null,
+        "cache-control": null,
+        "content-encoding": null,
+        "content-type": "application/json",
+        "date": null,
+        "server": null,
+        "strict-transport-security": null,
+        "vary": null,
+        "x-matched-path": null,
+        "x-vercel-cache": null,
+        "x-vercel-id": null
+      },
+      "body": {
+        "kind": "json",
+        "shape": {
+          "type": "object",
+          "fields": {
+            "items": {
+              "type": "array"
+            },
+            "totalResults": {
+              "type": "number"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "seen": 2,
+  "aborted": 0
+}
