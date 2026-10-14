@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 import { chromium, type BrowserContext, type Page, type Request } from "playwright-core";
 import { parseFlags, requireKebab } from "./lib/args";
 import { fail, progress, runTool } from "./lib/output";
-import { CaptureRecorder, shapeFileNames, type Planned } from "./lib/recorder";
+import { CaptureRecorder, markers, shapeFileNames, type Planned } from "./lib/recorder";
 import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
 import { redactPath } from "./lib/shape";
 import { loginHostName } from "../starter/skill/cli/src/runtime/site";
@@ -366,7 +366,7 @@ await runTool(async () => {
     const why = scriptError ? `--script failed: ${scriptError.message.split("\n")[0]}; ` : "";
     fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was`);
   }
-  const files = shapeFileNames(operations, recorder.originHostname);
+  const files = shapeFileNames(operations, new URL(origin).hostname);
   mkdirSync(dir, { recursive: true });
   clearPreviousCapture(dir);
   operations.forEach((op, i) => writeFileSync(join(dir, files[i] as string), `${JSON.stringify(op, null, 2)}\n`));
@@ -382,12 +382,7 @@ await runTool(async () => {
       operation: op.operation,
       kind: op.kind,
       effect: op.effect,
-      ...(op.effectUnknown ? { effectUnknown: true } : {}),
-      ...(op.loginFlow ? { loginFlow: true } : {}),
-      ...(op.navigation ? { navigation: true } : {}),
-      ...(op.allowedRead ? { allowedRead: true } : {}),
-      ...(op.serverAction ? { serverAction: true } : {}),
-      ...(op.rsc ? { rsc: true } : {}),
+      ...markers(op),
       method: op.method,
       host: op.host,
       path: op.path,
@@ -416,7 +411,7 @@ await runTool(async () => {
       "Next.js: serverAction (a POST with a next-action header) and rsc (a text/x-component stream) are never Operations. If an aborted server action broke the page, capture again with --allow-read <its path>. Look for the JSON /api route the page also calls (reference/add-task.md, Next.js sites).",
     );
   }
-  const declared = new Set(recorder.declaredLoginHosts);
+  const declared = new Set(loginHosts);
   const undeclared = signInHosts.filter((h) => !declared.has(h));
   if (undeclared.length > 0) {
     hints.push(
@@ -432,18 +427,7 @@ await runTool(async () => {
     stoppedBy,
     ...(closedWindows ? { closedWindows } : {}),
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
-    operations: index.operations.map(({ operation, effect, effectUnknown, loginFlow, navigation, allowedRead, serverAction, rsc, file, aborted: n }) => ({
-      operation,
-      effect,
-      ...(effectUnknown ? { effectUnknown } : {}),
-      ...(loginFlow ? { loginFlow } : {}),
-      ...(navigation ? { navigation } : {}),
-      ...(allowedRead ? { allowedRead } : {}),
-      ...(serverAction ? { serverAction } : {}),
-      ...(rsc ? { rsc } : {}),
-      file,
-      aborted: n,
-    })),
+    operations: index.operations.map(({ kind: _kind, method: _method, host: _host, path: _path, seen: _seen, ...op }) => op),
     ...(signInHosts.length ? { loginHosts: signInHosts } : {}),
     ...(blockedElsewhere.length ? { blockedElsewhere } : {}),
     ...(hints.length ? { hints } : {}),
