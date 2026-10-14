@@ -19,7 +19,9 @@ export const MIN_PASSWORD_LENGTH = 12;
 const SCRYPT_HASH = /^scrypt\$[A-Za-z0-9+/=]+\$[A-Za-z0-9+/=]+$/;
 const LOOPBACK = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
-const input = (message: string) => new Failure("input", message);
+/** A missing or wrong host setting: `next` says to fix the environment, not the command's flags. */
+const input = (message: string) =>
+  new Failure("input", message, { next: "Set the environment variable the message names on the host, then start `mcp --http` again." });
 
 /** The remote-mode settings from the host's environment, or an input Failure naming what is missing. */
 export function remoteConfig(env: Env, flags: { port?: number }): RemoteConfig {
@@ -35,7 +37,7 @@ export function remoteConfig(env: Env, flags: { port?: number }): RemoteConfig {
   }
 
   const raw = env.PUBLIC_URL || (env.RAILWAY_PUBLIC_DOMAIN ? `https://${env.RAILWAY_PUBLIC_DOMAIN}` : "");
-  if (!raw) throw input("remote mode needs its public address: set PUBLIC_URL (for example https://logbuy.example.com); on Railway, generate a domain");
+  if (!raw) throw input("remote mode needs the public address clients use: set PUBLIC_URL (for example https://mcp.example.com); on Railway, a generated domain (RAILWAY_PUBLIC_DOMAIN) is used when PUBLIC_URL is not set");
   let publicUrl: URL;
   try {
     publicUrl = new URL(raw);
