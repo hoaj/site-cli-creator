@@ -70,6 +70,10 @@ _Avoid_: lock 1, MCP login, OAuth (that is how, not what)
 What signing in to a site leaves behind for a CLI skill to act as the user there, such as a cookie or a bearer token. It is the site's own login, never derived from a Server sign-in.
 _Avoid_: lock 2, credentials, token (too broad)
 
+**Deploy skill**:
+A skill that ships inside a plugin and guides the Owner through running one of its CLI skills in remote mode on a host they choose. It holds one host-neutral contract and one section per supported host.
+_Avoid_: hosting skill, installer, Railway skill (that is Railway's own)
+
 **Setup page**:
 The Owner's page on their remote-mode MCP server where they give it a Session for its site and see whether it is still valid.
 _Avoid_: admin page, control panel, dashboard
