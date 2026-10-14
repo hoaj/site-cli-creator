@@ -8,6 +8,7 @@ import type { BrowserContext, Request as PwRequest, Route } from "playwright-cor
 import type { Client } from "./call";
 import { ContractError, Failure, type DriftEntry } from "./envelope";
 import { driftFingerprint, errorName, operationSegment, zodDiff } from "./fingerprint";
+import { stripNoise, topLevelDefinitions, type GraphqlType } from "./graphql";
 import { closeContext, launch, launchInMemory, profileState } from "./login";
 import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverCheckedWarning } from "./needs";
 import type { Operation } from "./operation";
@@ -197,26 +198,7 @@ export function parseCaptured(text: string | null, contentType?: string): unknow
   }
 }
 
-// ---- GraphQL documents (mirrors tools/lib/graphql.ts describeQuery; the runtime never imports tools) ----
-
-type GraphqlType = "query" | "mutation" | "subscription";
-
-/** String literals, block strings and comments removed: a mutation word inside them is no definition. */
-const stripNoise = (query: string) => query.replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|#[^\n]*/g, "");
-
-/** Every operation definition at brace depth 0 (fields named `mutation` inside a selection don't count). */
-function topLevelDefinitions(code: string): { type: GraphqlType; name: string | null }[] {
-  let depth = 0;
-  let top = "";
-  for (const ch of code) {
-    if (ch === "{" || ch === "(") {
-      if (depth === 0) top += " { ";
-      depth++;
-    } else if (ch === "}" || ch === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0) top += ch;
-  }
-  return [...top.matchAll(/(?:^|\s)(query|mutation|subscription)\b\s*([_A-Za-z][_0-9A-Za-z]*)?/g)].map((m) => ({ type: m[1] as GraphqlType, name: m[2] ?? null }));
-}
+// ---- GraphQL documents ----
 
 /**
  * The operation one GraphQL document runs: the definition its operationName selects, else its only
@@ -338,16 +320,10 @@ export function matchesOperation(site: Site, op: Operation, origin: string, req:
 }
 
 /**
- * A request every part of which is a declared read Operation (a GraphQL batch only if every
- * document in it is). Such requests pass, so pages that load data through POST still render.
+ * A REST request that is a declared read Operation. Such requests pass, so pages that load data
+ * through POST still render. (GraphQL requests never get here: graphqlReadOnly decides them.)
  */
 export function isDeclaredRead(site: Site, reads: Operation[], origin: string, req: Captured): boolean {
-  if (req.url.origin !== new URL(origin).origin) return false;
-  if (site.graphqlPath && req.method === "POST" && req.url.pathname === site.graphqlPath) {
-    const docs = Array.isArray(req.body) ? req.body : [req.body];
-    const gql = reads.filter((op) => op.graphql !== undefined);
-    return docs.length > 0 && docs.every((d) => gql.some((op) => matchesOperation(site, op, origin, { ...req, body: d })));
-  }
   return reads.some((op) => op.rest !== undefined && matchesOperation(site, op, origin, req));
 }
 
@@ -359,7 +335,7 @@ export function isDeclaredRead(site: Site, reads: Operation[], origin: string, r
  */
 export function capturedVariables(op: Operation, req: Captured): unknown {
   if (op.graphql !== undefined) {
-    const docs = Array.isArray(req.body) ? req.body : [req.body];
+    const docs = graphqlDocs(req.body);
     const doc: any = docs.find((d: any) => d?.operationName === op.name) ?? docs[0];
     return doc?.variables ?? {};
   }
