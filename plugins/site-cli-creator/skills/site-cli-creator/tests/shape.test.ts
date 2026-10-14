@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { describeQuery, graphqlFromBody, graphqlFromSearch, isGraphqlPath, NUMBERS_REDACTED, redactQuery } from "../tools/lib/graphql";
-import { bearerClaims, CaptureRecorder, isLoginFlow, isSignInStep, setCookieNames, shapeFileNames, type RequestInfo } from "../tools/lib/recorder";
+import { bearerClaims, CaptureRecorder, isSignInStep, setCookieNames, shapeFileNames, type RequestInfo } from "../tools/lib/recorder";
 import { bodyShape, isIdLike, isValueLikeKey, mergeShapes, redactPath, shapeOf } from "../tools/lib/shape";
 
 // Values that must never show up in anything the Capture produces.
@@ -292,10 +292,10 @@ describe("CaptureRecorder", () => {
 
   test("sign-in steps are recognised by path, operation name or host", () => {
     for (const yes of ["/oauth/token", "/shop/api/session-management/post-login", "/api/session/post-login", "/u/login", "/sign-in", "signIn", "loginUser", "/connect/authorize", "/saml2/acs"]) {
-      expect(isLoginFlow(yes), yes).toBe(true);
+      expect(isSignInStep("POST", yes), yes).toBe(true);
     }
     for (const no of ["/api/notes", "/api/authors", "/assortment", "addNote", "/api/quotes", "createQuote", "/api/tokenized-cards-x", "/api/payment-tokens", "revokeApiToken", "/api/user/session-preferences", "/api/password", "logoutUser", "/api/auth/logout"]) {
-      expect(isLoginFlow(no), no).toBe(false);
+      expect(isSignInStep("POST", no), no).toBe(false);
     }
     for (const yes of ["/connect/token", "/api/token", "/token/refresh", "/api/session", "refreshToken", "tokenAuth", "createSession"]) {
       expect(isSignInStep("POST", yes), yes).toBe(true);

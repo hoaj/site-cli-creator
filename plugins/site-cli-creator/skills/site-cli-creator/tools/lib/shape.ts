@@ -56,7 +56,7 @@ export function stringFormat(value: string): StringFormat | undefined {
   return undefined;
 }
 
-function safeDecode(segment: string): string {
+export function safeDecode(segment: string): string {
   try {
     return decodeURIComponent(segment);
   } catch {
@@ -88,21 +88,13 @@ export function shapeOf(value: unknown, depth = 0): Shape {
       return { type: "boolean" };
   }
   if (Array.isArray(value)) {
-    let items: Shape | undefined;
-    for (const el of value) {
-      const s = shapeOf(el, depth + 1);
-      items = items ? mergeShapes(items, s) : s;
-    }
+    const items = mergeAll(value.map((el) => shapeOf(el, depth + 1)));
     return items ? { type: "array", items } : { type: "array" };
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>);
     if (entries.some(([k]) => isValueLikeKey(k))) {
-      let values: Shape | undefined;
-      for (const [, v] of entries) {
-        const s = shapeOf(v, depth + 1);
-        values = values ? mergeShapes(values, s) : s;
-      }
+      const values = mergeAll(entries.map(([, v]) => shapeOf(v, depth + 1)));
       return values ? { type: "record", values } : { type: "record" };
     }
     const fields: Record<string, Shape> = {};
@@ -112,10 +104,14 @@ export function shapeOf(value: unknown, depth = 0): Shape {
   return { type: "null" };
 }
 
-function mergeOptional(a?: Shape, b?: Shape): Shape | undefined {
-  if (!a) return b;
-  if (!b) return a;
-  return mergeShapes(a, b);
+/** mergeShapes when both are there, else whichever is. */
+export function mergeOptional(a?: Shape, b?: Shape): Shape | undefined {
+  return a && b ? mergeShapes(a, b) : (a ?? b);
+}
+
+/** Every observation joined into one, or undefined for none. */
+function mergeAll(shapes: Shape[]): Shape | undefined {
+  return shapes.reduce<Shape | undefined>(mergeOptional, undefined);
 }
 
 function sameKind(a: Shape, b: Shape): boolean {
@@ -189,8 +185,7 @@ export function withoutFormats(shape: Shape): Shape {
 }
 
 function toRecord(o: Extract<Shape, { type: "object" }>): Shape {
-  let values: Shape | undefined;
-  for (const s of Object.values(o.fields)) values = values ? mergeShapes(values, s) : s;
+  const values = mergeAll(Object.values(o.fields));
   return values ? { type: "record", values } : { type: "record" };
 }
 
@@ -214,7 +209,8 @@ export function parseJson(text: string): { ok: true; value: unknown } | { ok: fa
   }
 }
 
-export function bodyShape(body: Buffer | string | null | undefined, contentType?: string | null): BodyShape {
+/** `parsed`: parseJson() of the same body, when the caller already ran it. */
+export function bodyShape(body: Buffer | string | null | undefined, contentType?: string | null, parsed?: ReturnType<typeof parseJson>): BodyShape {
   if (body === null || body === undefined || body.length === 0) return { kind: "empty" };
   const type = mediaType(contentType) ?? "";
   if (type.startsWith("multipart/")) return { kind: "multipart" };
@@ -225,13 +221,13 @@ export function bodyShape(body: Buffer | string | null | undefined, contentType?
   }
   const looksJson = type.includes("json") || /^\s*[[{]/.test(text);
   if (looksJson) {
-    const parsed = parseJson(text);
-    if (parsed.ok) return { kind: "json", shape: shapeOf(parsed.value) };
+    const json = parsed ?? parseJson(text);
+    if (json.ok) return { kind: "json", shape: shapeOf(json.value) };
   }
   if (type.includes("html")) return { kind: "html" };
   if (type.startsWith("text/") || type.includes("xml") || type.includes("javascript")) return { kind: "text" };
   if (typeof body !== "string" && body.subarray(0, 4000).includes(0)) return { kind: "binary" };
-  return type === "" || type.startsWith("text/") ? { kind: "text" } : { kind: "binary" };
+  return type === "" ? { kind: "text" } : { kind: "binary" };
 }
 
 export function mergeBodies(a: BodyShape, b: BodyShape): BodyShape {
