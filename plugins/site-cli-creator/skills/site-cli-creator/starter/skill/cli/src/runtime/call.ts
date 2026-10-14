@@ -45,6 +45,8 @@ export type ClientOptions = {
   session?: Session;
   /** false: an auth failure is Drift at once, with no sign-in or bootstrap rerun. */
   reauth?: boolean;
+  /** false: never open a headed sign-in; when the headless refresh fails, fail with session (the MCP server's tool calls). */
+  headed?: boolean;
 };
 
 export type Request = { method: string; url: string; headers: Record<string, string>; body?: string };
@@ -162,6 +164,7 @@ export class Client {
   fresh = false;
   private session: Session | null;
   private readonly reauthAllowed: boolean;
+  private readonly headed: boolean;
   private persisted: boolean;
   /** The account list fetched in this run, labels included. Only the ids are saved (SPEC §7). */
   private fetchedAccounts?: Account[];
@@ -173,6 +176,7 @@ export class Client {
     this.session = options.session ?? null;
     this.persisted = !options.session;
     this.reauthAllowed = options.reauth ?? true;
+    this.headed = options.headed ?? true;
     if (options.reauth === false) this.fresh = true;
   }
 
@@ -244,6 +248,9 @@ export class Client {
     this.deps.note("signing in again from the Chrome profile (headless)");
     const refreshed = await this.signIn(true);
     if (refreshed) return refreshed;
+    if (!this.headed) {
+      throw new Failure("session", `There is no valid sign-in to ${this.site.origin} (none saved, or it expired), and a tool call does not open Chrome to sign in.`);
+    }
     if (nonInteractive(this.deps.env)) {
       // An agent with no person at the keyboard: fail now instead of waiting for a headed sign-in.
       throw new Failure("session", `The saved sign-in to ${this.site.origin} has expired and SITE_CLI_NONINTERACTIVE=1 is set, so Chrome was not opened.`);

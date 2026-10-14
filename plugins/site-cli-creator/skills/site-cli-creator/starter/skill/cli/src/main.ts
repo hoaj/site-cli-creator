@@ -258,12 +258,11 @@ const MCP_CONFIRM = z.boolean().optional().describe("send the write; without it 
  * The `mcp` built-in's tools: one per Task command, plus login (auth login), check and doctor.
  * A tool call runs the same code as the CLI command, with three differences: arguments come
  * typed (JSON, not flags), `next` speaks of tools, and a command never opens a headed sign-in
- * (SITE_CLI_NONINTERACTIVE), so it fails with session and the client calls login instead.
+ * (Client `headed: false`), so it fails with session and the client calls login instead.
  */
 export function mcpServer(app: App) {
   const { site } = app;
-  const base = defaultDeps(app);
-  const deps: Deps = { ...base, env: { ...base.env, SITE_CLI_NONINTERACTIVE: "1" } };
+  const deps = defaultDeps(app);
   moveLegacyStateDir(site, deps);
 
   const tool = (name: string, description: string, schema: z.ZodObject, annotations: McpTool["annotations"], commandName: string, body: (args: any) => Promise<unknown>): McpTool => ({
@@ -291,7 +290,7 @@ export function mcpServer(app: App) {
       schema,
       write ? { title: command.summary, readOnlyHint: false, destructiveHint: true, openWorldHint: true } : { title: command.summary, readOnlyHint: true, openWorldHint: true },
       command.name,
-      ({ account, confirm, ...args }) => runTask(app, new Client(site, deps, { confirm: confirm === true }), deps, command, args, account),
+      ({ account, confirm, ...args }) => runTask(app, new Client(site, deps, { confirm: confirm === true, headed: false }), deps, command, args, account),
     );
   });
 
@@ -314,14 +313,14 @@ export function mcpServer(app: App) {
     ...tasks,
     ...login,
     tool("check", "Call every read Operation live and validate it against its Contract, to tell whether the site changed; writes: true also checks writes without sending them", checkSchema, { readOnlyHint: true, openWorldHint: true }, "check",
-      ({ op, writes, account }) => check(new Client(site, deps), app.operations, { op, writes: !!writes, account }, app.checkWrites)),
+      ({ op, writes, account }) => check(new Client(site, deps, { headed: false }), app.operations, { op, writes: !!writes, account }, app.checkWrites)),
     tool("doctor", "Versions, state dir, Chrome, gh status and binary findings, for reports", z.object({}).strict(), { readOnlyHint: true, openWorldHint: false }, "doctor",
       () => doctor(site, { env: deps.env, exec: app.exec, compiled: compiled() })),
   ];
 
   const instructions = [
     `These tools run Tasks on ${site.origin}${site.auth === "login" ? " as the signed-in user" : ""}; every result is JSON.`,
-    `A tool marked readOnlyHint false writes: call it without confirm first, show the user the dry run it returns, and call it again with confirm: true only after the user's explicit yes.`,
+    `A tool with a confirm argument writes: call it without confirm first, show the user the dry run it returns, and call it again with confirm: true only after the user's explicit yes.`,
     `A failed call returns {"error": {kind, message, next}}: do what next says. On kind drift, stop and do not work around it.`,
   ].join(" ");
   return createMcpServer({ name: site.skill === site.plugin ? site.plugin : `${site.plugin}-${site.skill}`, version: site.version, instructions }, tools);
