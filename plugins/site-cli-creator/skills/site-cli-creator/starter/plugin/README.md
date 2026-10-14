@@ -43,6 +43,16 @@ copilot plugin install __PLUGIN__@__PLUGIN__
 
 There is no setup step. The first time your agent uses a CLI skill, it runs that skill's `install.sh`, which downloads the binary matching the skill's version into the skill's `bin/` folder. Skills that need a login open Chrome once for you to sign in.
 
+### Any MCP client (Claude Desktop, Cursor, …)
+
+Every CLI skill's binary is also an MCP server: `skills/<skill>/bin/<skill> mcp` serves the same Tasks as tools over stdio, with the same login, Drift checks and dry runs for writes. Clone this repo, get the binary once with `bash skills/<skill>/install.sh`, then add it to your client:
+
+```json
+{ "mcpServers": { "<skill>": { "command": "/path/to/__PLUGIN__/skills/<skill>/bin/<skill>", "args": ["mcp"] } } }
+```
+
+Claude Code: `claude mcp add <skill> -- /path/to/__PLUGIN__/skills/<skill>/bin/<skill> mcp` (the plugin above is the better fit there: it also brings the skills' guidance). Your session stays on your machine, in the same state dir the CLI uses.
+
 ## Update
 
 Update the plugin in your agent's plugin manager (Claude Code: `/plugin update __PLUGIN__`). A new version lands in a new folder, so the agent downloads the matching binary on first use. Right after a release, the binary can take a few minutes to build; `install.sh` says so when it is not there yet.

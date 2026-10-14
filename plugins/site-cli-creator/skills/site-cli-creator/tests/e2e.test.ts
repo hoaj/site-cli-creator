@@ -215,6 +215,29 @@ for (const auth of ["none", "login"] as const) {
       return { ...r, out: oneJson(r, `${skill} ${args.join(" ")}`) };
     }
 
+    /** Runs the compiled binary's `mcp` with these messages on stdin; every stdout line must be one JSON-RPC message. */
+    async function mcp(messages: object[]) {
+      if (!built) throw new Error("the scaffold test did not produce a binary");
+      const proc = Bun.spawn([binary, "mcp"], { env: cliEnv() as Record<string, string>, stdin: "pipe", stdout: "pipe", stderr: "pipe", timeout: 120_000, killSignal: "SIGKILL" });
+      live.add(proc);
+      try {
+        proc.stdin.write(messages.map((m) => JSON.stringify(m)).join("\n") + "\n");
+        await proc.stdin.end();
+        const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+        const code = await proc.exited;
+        const docs = stdout.trim().split("\n").map((line) => {
+          try {
+            return JSON.parse(line);
+          } catch {
+            throw new Error(`${skill} mcp: a stdout line is no JSON (exit ${code})\n--- stdout\n${stdout}\n--- stderr\n${stderr}`);
+          }
+        });
+        return { code, stdout, stderr, byId: new Map<number, any>(docs.map((d) => [d.id, d])) };
+      } finally {
+        live.delete(proc);
+      }
+    }
+
     const withDrift = async <T,>(drift: Drift, body: () => Promise<T>): Promise<T> => {
       site.setDrift(drift);
       try {
@@ -614,7 +637,7 @@ for (const auth of ["none", "login"] as const) {
       ]);
       expect(help.out.exitCodes.map((e: { code: number; kind: string }) => `${e.code}:${e.kind}`)).toEqual(["0:ok", "1:bug", "2:input", "3:drift", "4:session", "5:network"]);
       const builtins = help.out.builtins.map((b: { name: string }) => b.name);
-      expect(builtins).toEqual(auth === "login" ? ["help", "login", "check", "doctor", "version"] : ["help", "check", "doctor", "version"]);
+      expect(builtins).toEqual(auth === "login" ? ["help", "login", "check", "doctor", "version", "mcp"] : ["help", "check", "doctor", "version", "mcp"]);
       expect(builtins).not.toContain("selftest");
 
       const version = await cli(["version"]);
@@ -636,6 +659,36 @@ for (const auth of ["none", "login"] as const) {
     }, 120_000);
 
     // 6. a bug ---------------------------------------------------------------------------------
+
+    test("mcp serves the same Tasks as tools over stdio: results, dry runs and Drift match the CLI, with no site values in errors", async () => {
+      const init = { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "e2e", version: "0" } } };
+      const call = (id: number, name: string, args: object = {}) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { name, arguments: args } });
+      const writes = writesSeen();
+      const r = await mcp([init, { jsonrpc: "2.0", method: "notifications/initialized" }, { jsonrpc: "2.0", id: 2, method: "tools/list" }, call(3, "subscription_show", { all: true }), call(4, "note_add", { text: "x" })]);
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.byId.get(1).result.serverInfo).toEqual({ name: skill === PLUGIN ? PLUGIN : `${PLUGIN}-${skill}`, version: "0.1.0" });
+      expect(r.byId.get(2).result.tools.map((t: { name: string }) => t.name)).toEqual([
+        "invoice_list",
+        "invoice_show",
+        "note_add",
+        "subscription_show",
+        ...(auth === "login" ? ["login"] : []),
+        "check",
+        "doctor",
+      ]);
+      const shown = r.byId.get(3).result;
+      expect(shown.isError, JSON.stringify(shown)).toBeUndefined();
+      expect(shown.structuredContent).toEqual((await cli(["subscription", "show", "--all"])).out);
+      expect(r.byId.get(4).result.structuredContent).toEqual({ dryRun: true, would: { operation: "addNote", variables: { accountId: ACCOUNT.id, text: "x" } } });
+      expect(writesSeen()).toBe(writes);
+
+      const drifted = await withDrift("type-change", () => mcp([init, call(5, "subscription_show")]));
+      const failed = drifted.byId.get(5).result;
+      expect(failed.isError).toBe(true);
+      expect(failed.structuredContent.error).toMatchObject({ kind: "drift", fingerprint: `${prefix}listSubscriptions:zod:data.listSubscriptions[].price:invalid_type` });
+      expect(failed.structuredContent.error.next).toContain(`${PLUGIN}-feedback`);
+      expect(leaks(drifted.stdout)).toEqual([]);
+    }, 120_000);
 
     test("a crashing command exits 1 with the bug key and a stack of src/-relative frames", async () => {
       const crash = join(cliDir, "src", "commands", "crash-now.ts");
