@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { copyExpected } from "../fixtures/expected/copy";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
-import { chromePaths, unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
+import { unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
 import { findTokens } from "../tools/lib/template";
 
 const NEW = join(SKILL_ROOT, "tools", "new.ts");
@@ -231,9 +231,10 @@ describe("maintainer requirements (SPEC §13)", () => {
     expect(versionAtLeast("1.10.0", "1.4.0")).toBe(true);
     expect(versionAtLeast("1.3.12", "1.4.0")).toBe(false);
     expect(versionAtLeast("2.0.0-canary.1", "1.4.0")).toBe(true);
-    expect(chromePaths("linux", {})).toEqual(["/opt/google/chrome/chrome"]);
-    expect(chromePaths("linux", { SITE_CLI_CHROME: "/x/chrome" })).toEqual(["/x/chrome"]);
-    expect(chromePaths("win32", { PROGRAMFILES: "C:\\Program Files" })).toEqual(["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"]);
+    const chromeMessage = (platform: string, env: Probe["env"]) => unmetRequirements("acme/shop-plugin", probe({ platform, env, exists: () => false }))[0]!.message;
+    expect(chromeMessage("linux", {})).toContain("(looked at /opt/google/chrome/chrome)");
+    expect(chromeMessage("linux", { SITE_CLI_CHROME: "/x/chrome" })).toContain("(looked at /x/chrome)");
+    expect(chromeMessage("win32", { PROGRAMFILES: "C:\\Program Files" })).toContain("(looked at C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe)");
   });
 
   test("new.ts checks before writing anything and fails with every unmet requirement as JSON", () => {

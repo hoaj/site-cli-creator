@@ -16,6 +16,7 @@ import { fail, progress, runTool } from "./lib/output";
 import { CaptureRecorder, shapeFileNames, type Planned } from "./lib/recorder";
 import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
 import { redactPath } from "./lib/shape";
+import { loginHostName } from "../starter/skill/cli/src/runtime/site";
 
 const USAGE =
   "bun tools/capture.ts --skill-dir <dir> --task <slug> --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]";
@@ -46,15 +47,6 @@ async function siteHints(skillDir: string): Promise<SiteHints> {
   } catch (error) {
     progress(`site.ts not loaded (${(error as Error).message}); using --url's origin`);
     return { loginHosts: [] };
-  }
-}
-
-/** `login.example.com:8443` or a URL → `login.example.com`. */
-function hostname(host: string): string {
-  try {
-    return new URL(host.includes("://") ? host : `https://${host}`).hostname.toLowerCase();
-  } catch {
-    return host.toLowerCase();
   }
 }
 
@@ -205,7 +197,7 @@ await runTool(async () => {
 
   const site = await siteHints(skillDir);
   const origin = values.origin ? parseOrigin(values.origin) : (site.origin ?? new URL(startUrl).origin);
-  const loginHosts = [...site.loginHosts, ...values["login-host"]].map(hostname);
+  const loginHosts = [...site.loginHosts, ...values["login-host"]].map(loginHostName);
   if (values["write-op"] && !values.write) fail("--write-op needs --write");
   const recorder = new CaptureRecorder({
     origin,
