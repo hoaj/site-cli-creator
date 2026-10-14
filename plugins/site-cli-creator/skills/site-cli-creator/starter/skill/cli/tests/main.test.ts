@@ -98,6 +98,38 @@ describe("routing and envelopes", () => {
     expect((await run(["--help"], app())).output).toEqual(h);
   });
 
+  test("<command> --help or -h prints that command's entry from help, and nothing runs (#47)", async () => {
+    const { fetch, calls } = fakeFetch(happySite);
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    const a = makeApp(loginSite(), deps);
+    const h = (await run(["help"], a)).output as any;
+    const cases: [string[], string][] = [
+      [["products", "show", "--help"], "products show"],
+      [["order", "rename", "-h"], "order rename"],
+      [["products", "show", "--limit", "abc", "--bogus", "--help"], "products show"],
+      [["--confirm", "order", "rename", "--order-id", "1", "--help"], "order rename"],
+      [["login", "--help"], "login"],
+      [["check", "-h"], "check"],
+      [["help", "--help"], "help"],
+    ];
+    for (const [argv, name] of cases) {
+      const { output, code } = await run(argv, a);
+      expect(code, argv.join(" ")).toBe(0);
+      const entry = [...h.commands, ...h.builtins].find((c: any) => c.name === name);
+      expect(output).toEqual({ ...entry, usage: `shop ${name} [flags]`, globalFlags: h.globalFlags });
+    }
+    expect((await run(["order", "rename", "--help"], a)).output).toMatchObject({ write: true, flags: [{ name: "--order-id" }, { name: "--name" }] });
+    expect(calls).toEqual([]);
+    expect(loginCalls).toEqual([]);
+    // An unknown command stays input, --help or not; `-h` as a flag's value is that value.
+    expect((await run(["nope", "x", "--help"], a)).code).toBe(2);
+    saveSession(home.dir, { headers: {}, ids: { customerId: "C-1" } });
+    expect((await run(["order", "rename", "--order-id", "1", "--name", "-h"], a)).output).toEqual({
+      dryRun: true,
+      would: { operation: "PATCH /api/orders/:orderId", variables: { orderId: "1", name: "-h" } },
+    });
+  });
+
   test("help lists login only for auth login", async () => {
     const { output } = await run(["help"], makeApp(loginSite(), makeDeps(fakeFetch(happySite).fetch, home.dir).deps));
     expect((output as any).builtins.map((b: any) => b.name)).toContain("login");
