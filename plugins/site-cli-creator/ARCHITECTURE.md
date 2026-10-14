@@ -221,7 +221,7 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
 
 ### built-in commands (main.ts) — SPEC §8
 
-`help` (JSON: commands with flags and write marker, built-ins, exit codes), `login [--from-profile <dir>]` (auth login only), `check [--op <name>] [--writes]`, `doctor`, `version`. Task commands are `<noun> <verb> [--flags]`. `--account <id>` and `--confirm` are global flags. Unknown command or flag → input.
+`help` (JSON: commands with flags and write marker, built-ins, exit codes), `login [--from-profile <dir>]` (auth login only), `check [--op <name>] [--writes]`, `doctor`, `version`. Task commands are `<noun> <verb> [--flags]`. `--account <id>` and `--confirm` are global flags. Unknown command or flag → input. `<command> --help` or `-h` (a Task command or a listed built-in, wherever the flag stands except as another flag's value: `wantsHelp()`) prints that command's entry from `help` plus `usage` and `globalFlags` (`commandHelp()`) and exits 0, before any flag is validated, without signing in or calling the site.
 
 Hidden built-in `selftest --url <http(s) url> [--no-chrome]` (runtime/selftest.ts, not listed by `help`): the platform smoke test of SPEC §9 / #29. It fetches the URL, launches Chrome headless with a temp profile and channel `chrome`, routes one request and aborts it (`net::ERR_FAILED`), and prints `{ok: true, fetch: <status>, chrome: true, abort: true}`; with `--no-chrome`, `{ok: true, fetch: <status>}`. A failed fetch is network (exit 5); no Chrome is input (exit 2). The generator's CI runs it on every target in `run-smoke`.
 

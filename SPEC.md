@@ -154,7 +154,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 **Commands:**
 - **Task commands:** `<noun> <verb> [flags]`, one per Task. There is no raw `op <name>` escape hatch, because it would invite working around Drift.
 - **Built-in, the same in every CLI skill:**
-  - `help`: commands, flags and exit codes, as JSON;
+  - `help`: commands, flags and exit codes, as JSON. `<command> --help` (or `-h`) prints that one command's entry and runs nothing ([Generated CLI rejects <command> --help](https://github.com/hoaj/skills/issues/47));
   - `login [--from-profile <dir>]` (only for `auth: "login"`, §7);
   - `check [--op <name>] [--writes]` (§10);
   - `doctor`: versions, `generatedWith`, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;

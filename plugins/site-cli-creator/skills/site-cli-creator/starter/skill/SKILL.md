@@ -18,7 +18,7 @@ description: Use when the user wants to read or change their own data on __ORIGI
 |---|---|---|
 <!-- commands:end -->
 
-Built-ins: `help` (commands, flags, exit codes as JSON), `check [--op <name>] [--writes]`, `doctor`, `version`, and `login` when the site needs one. Global flags: `--account <id>`, `--confirm`.
+Built-ins: `help` (commands, flags, exit codes as JSON; `<command> --help` prints one command's flags), `check [--op <name>] [--writes]`, `doctor`, `version`, and `login` when the site needs one. Global flags: `--account <id>`, `--confirm`.
 
 Run the command the user's question needs. There is no setup step; recover only on failure.
 
