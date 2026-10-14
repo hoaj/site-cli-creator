@@ -51,12 +51,17 @@ export function chainOrder(ops: Operation[]): Operation[] {
   return out;
 }
 
+/** The Operation --op names, by its name or (as the Fingerprint writes REST params) its {param} form. */
+function findOperation(ops: Operation[], name: string): Operation {
+  const target = ops.find((o) => o.name === name) ?? ops.find((o) => operationSegment(o.name) === name);
+  if (!target) throw new Failure("input", `No Operation named "${name}". Operations: ${ops.map((o) => o.name).join(", ")}.`);
+  return target;
+}
+
 /** The Operation named by --op plus every Operation its chain needs. */
 export function withChain(ops: Operation[], name: string): Operation[] {
   const byName = new Map(ops.map((o) => [o.name, o]));
-  // The Fingerprint writes REST params as {param}; accept that form too.
-  const target = byName.get(name) ?? ops.find((o) => operationSegment(o.name) === name);
-  if (!target) throw new Failure("input", `No Operation named "${name}". Operations: ${ops.map((o) => o.name).join(", ")}.`);
+  const target = findOperation(ops, name);
   const keep = new Set<string>();
   const add = (op: Operation) => {
     if (keep.has(op.name)) return;
@@ -68,7 +73,8 @@ export function withChain(ops: Operation[], name: string): Operation[] {
 }
 
 export async function check(client: Client, operations: Operation[], options: CheckOptions, checkWrites?: WriteChecker): Promise<CheckResult> {
-  const selected = chainOrder(options.op ? withChain(operations, options.op) : operations);
+  const target = options.op ? findOperation(operations, options.op) : undefined;
+  const selected = chainOrder(target ? withChain(operations, target.name) : operations);
   const rows: CheckRow[] = [];
   const warnings: string[] = [];
   const drifts: DriftEntry[] = [];
@@ -86,7 +92,7 @@ export async function check(client: Client, operations: Operation[], options: Ch
       continue;
     }
     if (op.effect === "write") {
-      if (options.writes || (options.op !== undefined && (options.op === op.name || options.op === operationSegment(op.name)))) writes.push(op);
+      if (options.writes || op === target) writes.push(op);
       else rows.push({ operation: op.name, effect: "write", status: "skipped", reason: "run check --writes" });
       continue;
     }
