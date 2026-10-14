@@ -42,6 +42,7 @@ describe("initialize", () => {
     expect(res.result.capabilities).toEqual({ tools: { listChanged: false } });
     expect(res.result.serverInfo).toEqual({ name: "acme-shop", version: "1.2.3" });
     expect(res.result.instructions).toContain("confirm");
+    expect(res.result.instructions).not.toContain("readOnlyHint");
     expect(res.result.instructions).toContain("next");
   });
 
@@ -165,6 +166,7 @@ describe("tools/call", () => {
     const { error } = textOf(result);
     expect(error.kind).toBe("session");
     expect(error.next).toContain("login tool");
+    expect(error.message).not.toContain("SITE_CLI");
     expect(loginCalls).toEqual([true]);
   });
 
