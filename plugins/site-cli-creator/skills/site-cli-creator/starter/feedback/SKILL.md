@@ -21,7 +21,7 @@ Exit 2 (input), 4 (session) and 5 (network) never come here: the CLI skill's own
 
 ## Input
 
-Work only from the error envelope the CLI just printed: `kind`, `message`, `fingerprint`, `diff`, `drifts`, `stack`, `version`, `os`. The CLI keeps site values out of it. Leave the state dir (`~/.__PLUGIN__-*`) unread, and add nothing from the conversation that names the user, their account, ids, amounts, addresses or tokens. For a feature request, write the Task in plain words with the same rule.
+Work only from the error envelope the CLI just printed: `kind`, `message`, `fingerprint`, `diff`, `drifts`, `stack`, `version`, `os`. The CLI keeps site values out of it. Leave the state dirs (`~/.__PLUGIN__/` and `~/.__PLUGIN__-*`) unread, and add nothing from the conversation that names the user, their account, ids, amounts, addresses or tokens. For a feature request, write the Task in plain words with the same rule.
 
 ## Steps
 

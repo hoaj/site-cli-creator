@@ -11,7 +11,7 @@
 // Needs Google Chrome (login, check --writes, Capture). Without it the suites are skipped.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { copyExpected, OPERATION_NAMES } from "../fixtures/expected/copy";
@@ -159,7 +159,9 @@ const REPO = "acme/shop-plugin";
 const OPS = OPERATION_NAMES;
 
 for (const auth of ["none", "login"] as const) {
-  const skill = `shop-${auth}`;
+  // The login skill is named after its plugin, as `new` names a plugin's first skill; the other
+  // is not. Between them they cover both state dir names (SPEC §7).
+  const skill = auth === "login" ? PLUGIN : `shop-${auth}`;
   const prefix = `${PLUGIN}:${skill}:`;
   const title = `e2e, auth ${auth}${HAS_CHROME ? "" : " (skipped: Google Chrome not found)"}`;
 
@@ -354,6 +356,52 @@ for (const auth of ["none", "login"] as const) {
           site.blockSignIn(false);
         }
       }, 300_000);
+
+      test("without SITE_CLI_HOME, login and login --from-profile keep state in ~/.<plugin>/; an old ~/.<plugin>-<plugin>/ moves there once (#44)", async () => {
+        const newDir = (h: string) => join(h, `.${PLUGIN}`);
+        const inHome = (h: string, extra: Record<string, string> = {}) => ({ env: { SITE_CLI_HOME: "", HOME: h, USERPROFILE: h, ...extra } });
+        const mode = (p: string) => statSync(p).mode & 0o777;
+
+        const plain = join(work, "home-login");
+        const login = await cli(["login"], inHome(plain));
+        expect(login.code, login.stderr).toBe(0);
+        expect(login.out.stateDir).toBe(newDir(plain));
+        expect(mode(newDir(plain))).toBe(0o700);
+        expect(mode(join(newDir(plain), "session.json"))).toBe(0o600);
+        expect(existsSync(join(plain, `.${PLUGIN}-${skill}`))).toBe(false);
+
+        const fromProfile = join(work, "home-from-profile");
+        const carried = await cli(["login", "--from-profile", join(work, "capture-profile")], inHome(fromProfile));
+        expect(carried.code, carried.stdout + carried.stderr).toBe(0);
+        expect(carried.out.stateDir).toBe(newDir(fromProfile));
+        expect(mode(join(newDir(fromProfile), "session.json"))).toBe(0o600);
+
+        // A user of an older build: signed in, with the state in ~/.shop-shop/.
+        const upgraded = join(work, "home-upgraded");
+        const oldDir = join(upgraded, `.${PLUGIN}-${skill}`);
+        mkdirSync(oldDir, { recursive: true, mode: 0o700 });
+        copyFileSync(join(newDir(plain), "session.json"), join(oldDir, "session.json"));
+        chmodSync(join(oldDir, "session.json"), 0o600);
+        const sub = await cli(["subscription", "show"], inHome(upgraded, { SITE_CLI_NONINTERACTIVE: "1" }));
+        expect(sub.code, sub.stderr).toBe(0); // still signed in: without a session this exits 4
+        expect(sub.stderr).toContain(newDir(upgraded));
+        expect(existsSync(oldDir)).toBe(false);
+        expect(mode(newDir(upgraded))).toBe(0o700);
+        expect(mode(join(newDir(upgraded), "session.json"))).toBe(0o600);
+        const doctor = await cli(["doctor"], inHome(upgraded));
+        expect(doctor.out.stateDir).toBe(newDir(upgraded));
+        expect(doctor.out.oldStateDir).toBeUndefined();
+
+        // Both exist (an older build ran again): the new one is used, the old one is left alone, and doctor says so.
+        mkdirSync(oldDir, { mode: 0o700 });
+        writeFileSync(join(oldDir, "kept"), "x");
+        const again = await cli(["subscription", "show"], inHome(upgraded, { SITE_CLI_NONINTERACTIVE: "1" }));
+        expect(again.code, again.stderr).toBe(0);
+        expect(readFileSync(join(oldDir, "kept"), "utf8")).toBe("x");
+        const both = await cli(["doctor"], inHome(upgraded));
+        expect(both.out.stateDir).toBe(newDir(upgraded));
+        expect(both.out.oldStateDir).toContain(oldDir);
+      }, 180_000);
     } else {
       test("there is no login command without a login", async () => {
         const r = await cli(["login"]);
@@ -556,6 +604,12 @@ for (const auth of ["none", "login"] as const) {
       expect(typeof doctor.out).toBe("object");
       expect(JSON.stringify(doctor.out)).toContain(`${skill} check`);
       expect(leaks(doctor.stdout)).toEqual([]);
+      expect(doctor.out.stateDir).toBe(home);
+
+      // Without SITE_CLI_HOME: ~/.<plugin>/ for a skill named after its plugin, else ~/.<plugin>-<skill>/ (SPEC §7).
+      const fakeHome = join(work, "home-doctor");
+      const named = await cli(["doctor"], { env: { SITE_CLI_HOME: "", HOME: fakeHome, USERPROFILE: fakeHome } });
+      expect(named.out.stateDir).toBe(join(fakeHome, skill === PLUGIN ? `.${PLUGIN}` : `.${PLUGIN}-${skill}`));
     }, 120_000);
 
     // 6. a bug ---------------------------------------------------------------------------------
