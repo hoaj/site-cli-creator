@@ -62,6 +62,16 @@ export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   selftest: [flag("url", "string", "an http(s) URL to fetch"), flag("no-chrome", "boolean", "only the fetch, no Chrome")],
 };
 
+/**
+ * `<command> --help`: that command's entry from help() (a Task command or a listed built-in) with
+ * its usage line and the global flags. Undefined when help() lists no command of that name.
+ */
+export function commandHelp(site: Site, commands: Command[], name: string) {
+  const h = help(site, commands);
+  const entry = [...h.commands, ...h.builtins].find((c) => c.name === name);
+  return entry && { ...entry, usage: `${site.skill} ${name} [flags]`, globalFlags: h.globalFlags };
+}
+
 export function help(site: Site, commands: Command[]) {
   const builtins = [
     { name: "help", summary: "Commands, flags and exit codes as JSON" },

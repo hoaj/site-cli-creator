@@ -10,7 +10,7 @@ import type { Command } from "./runtime/command";
 import { doctor, type Exec } from "./runtime/doctor";
 import { ContractError, DryRun, EXIT, Failure, emit, errorEnvelope, note } from "./runtime/envelope";
 import { bugFrame, bugKey, errorName, redactStack } from "./runtime/fingerprint";
-import { BUILTIN_FLAGS, flagSpecs, help, type FlagSpec } from "./runtime/help";
+import { BUILTIN_FLAGS, commandHelp, flagSpecs, help, type FlagSpec } from "./runtime/help";
 import { chromeLogin } from "./runtime/login";
 import { selftest } from "./runtime/selftest";
 import { legacyStateDir, migrateStateDir, stateDir } from "./runtime/session";
@@ -82,6 +82,21 @@ export function parseFlags(specs: FlagSpec[], tokens: string[]): Record<string, 
   return out;
 }
 
+/**
+ * Whether `--help` or `-h` stands where a flag would: not as the value of a flag that takes one
+ * (`--name -h`). Checked before the flags are, so `<command> --bogus --help` still prints help.
+ */
+export function wantsHelp(specs: FlagSpec[], tokens: string[]): boolean {
+  const byName = new Map(specs.map((s) => [s.name, s]));
+  for (let i = 0; i < tokens.length; i++) {
+    const t = tokens[i];
+    if (t === "--help" || t === "-h") return true;
+    const spec = byName.get(t);
+    if (spec && spec.type !== "boolean") i++;
+  }
+  return false;
+}
+
 function parseArgs(command: Command, tokens: string[]) {
   const specs = flagSpecs(command.args);
   const r = command.args.safeParse(parseFlags(specs, tokens));
@@ -133,6 +148,12 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
     if (words.length === 0 && ["--help", "-h", "--version"].includes(flags[0])) {
       builtin = flags[0] === "--version" ? "version" : "help";
       rest = flags.slice(1);
+    }
+    // `<command> --help`: that command's entry from help, and nothing runs (no sign-in, no call).
+    const asked = commandHelp(site, app.commands, words.slice(0, 2).join(" ")) ?? commandHelp(site, app.commands, words[0] ?? "");
+    if (asked && wantsHelp(asked.flags, rest)) {
+      commandName = asked.name;
+      return ok(asked);
     }
     const builtinFlags = (name: string) => {
       if (words.length > 1) throw input(`unexpected argument "${words[1]}"`);
