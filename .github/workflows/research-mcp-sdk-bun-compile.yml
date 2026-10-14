@@ -1,0 +1,80 @@
+name: research-mcp-sdk-bun-compile
+
+# Research for hoaj/skills#55: do @modelcontextprotocol/sdk (Streamable HTTP + mcpAuthRouter)
+# and Express 5 run in a `bun build --compile` binary, cross-compiled from macOS, inside a
+# Linux container? And does `bun src/main.ts` from source in a container work as the fallback?
+on:
+  push:
+    branches: [research/mcp-sdk-bun-compile]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    # Cross-compile on macOS arm64, as the maintainer would from a Mac.
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: research/mcp-sdk-bun-compile/spike
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - run: bun install --frozen-lockfile
+      - run: bun build.ts bun-linux-x64 dist/baseline-linux-x64 baseline.ts
+      - run: bun build.ts bun-linux-x64 dist/spike-linux-x64 main.ts
+      - run: ls -l dist && file dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-binaries
+          path: research/mcp-sdk-bun-compile/spike/dist/
+
+  binary-in-container:
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [debian:bookworm-slim, gcr.io/distroless/cc-debian12, ubuntu:24.04]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux-binaries
+          path: bin
+      - run: chmod +x bin/* && ls -l bin
+      - name: pw check (playwright-core registry inside the binary)
+        run: docker run --rm -v "$PWD/bin:/app" ${{ matrix.image }} /app/spike-linux-x64 pw
+      - name: start server in container
+        run: docker run -d --name spike -p 8787:8787 -v "$PWD/bin:/app" ${{ matrix.image }} /app/spike-linux-x64 serve 8787
+      - name: wait for server
+        run: for i in $(seq 1 30); do curl -sf localhost:8787/.well-known/oauth-authorization-server && exit 0; sleep 1; done; docker logs spike; exit 1
+      - name: smoke (OAuth + Streamable HTTP)
+        run: bun research/mcp-sdk-bun-compile/spike/smoke.ts http://localhost:8787
+      - run: docker stats --no-stream spike; docker logs spike
+        if: always()
+
+  source-in-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.4.3
+      - name: start `bun src/main.ts` in oven/bun container
+        run: >
+          docker run -d --name spike -p 8787:8787
+          -v "$PWD/research/mcp-sdk-bun-compile/spike:/src:ro" oven/bun:1.4.3-slim
+          sh -c "cp -r /src /app && cd /app && bun install --frozen-lockfile --production && bun src/main.ts serve 8787"
+      - name: wait for server
+        run: for i in $(seq 1 90); do curl -sf localhost:8787/.well-known/oauth-authorization-server && exit 0; sleep 1; done; docker logs spike; exit 1
+      - name: smoke (OAuth + Streamable HTTP)
+        run: bun research/mcp-sdk-bun-compile/spike/smoke.ts http://localhost:8787
+      - run: docker stats --no-stream spike; docker exec spike du -sh /app/node_modules; docker logs spike
+        if: always()
