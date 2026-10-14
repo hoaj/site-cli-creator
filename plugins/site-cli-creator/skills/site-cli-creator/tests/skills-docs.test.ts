@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.3.1, both skills exist", () => {
+  test("version 0.4.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.3.1");
+      expect(m.version).toBe("0.4.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -49,7 +49,7 @@ describe("manifests", () => {
       const mk = JSON.parse(read(join(REPO, p)));
       const entry = mk.plugins.find((x: { name: string }) => x.name === "site-cli-creator");
       expect(entry).toEqual({ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description });
-      expect(mk.metadata.version).toBe("1.6.1");
+      expect(mk.metadata.version).toBe("1.7.0");
     }
     expect(read(join(REPO, "README.md"))).toContain("[site-cli-creator](./plugins/site-cli-creator)");
   });
