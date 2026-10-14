@@ -260,6 +260,107 @@ describe("Server sign-in over HTTP", () => {
   });
 });
 
+describe("review fixes", () => {
+  test("failures from other addresses never lock out an address that has not failed", async () => {
+    const { base } = await startRemote({ env: { TRUST_PROXY: "1" } });
+    const client = await (await register(base, "http://127.0.0.1:5555/cb")).json();
+    for (let n = 0; n < 6; n++) {
+      for (let i = 0; i < 5; i++) {
+        const page = await (await authorizePage(base, client.client_id, pkce().challenge, { redirect: "http://127.0.0.1:5555/cb" })).text();
+        await fetch(`${base}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": `198.51.100.${n}` }, body: new URLSearchParams({ request: requestIdOf(page)!, password: "wrong" }) });
+      }
+    }
+    const { tokens } = await signIn(base); // from 127.0.0.1, which never failed
+    expect((await mcp(base, tokens.access_token, "tools/list")).status).toBe(200);
+  });
+
+  test("without a proxy in front, a forged X-Forwarded-For does not dodge the lockout", async () => {
+    const { base } = await startRemote();
+    const client = await (await register(base)).json();
+    for (let i = 0; i < 5; i++) {
+      const page = await (await authorizePage(base, client.client_id, pkce().challenge)).text();
+      await fetch(`${base}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", "x-forwarded-for": `203.0.113.${i}` }, body: new URLSearchParams({ request: requestIdOf(page)!, password: "wrong" }) });
+    }
+    const page = await (await authorizePage(base, client.client_id, pkce().challenge)).text();
+    expect(await (await postLogin(base, requestIdOf(page)!, PW)).text()).toMatch(/Too many attempts/);
+  });
+
+  test("open sign-in pages cannot hold every client slot: a new client still registers", async () => {
+    const store = new OAuthStore(home.dir);
+    const provider = new OwnerProvider({ store, password: { plain: PW }, mcpUrl: new URL("https://x.example/mcp"), siteName: "s", serverName: "n", allowRedirect: () => true });
+    const res: any = { status: () => res, type: () => res, set: () => res, send: () => {} };
+    for (let i = 0; i < 60; i++) {
+      const c = await provider.clientsStore.registerClient!({ redirect_uris: [CLAUDE_CB], client_name: `spam ${i}` } as any);
+      await provider.authorize(c, { redirectUri: CLAUDE_CB, codeChallenge: "c", scopes: [] } as any, res);
+    }
+    const claude = await provider.clientsStore.registerClient!({ redirect_uris: [CLAUDE_CB], client_name: "Claude" } as any);
+    expect(await provider.clientsStore.getClient(claude.client_id)).toBeDefined();
+  });
+
+  test("a client that has signed in stays registered after every client is signed out", async () => {
+    let clock = Math.floor(Date.now() / 1000);
+    const { base, server } = await startRemote({ now: () => clock });
+    const { client } = await signIn(base);
+    server.provider.revokeAll();
+    clock += 2 * 60 * 60;
+    await register(base);
+    expect(server.store.data.clients[client.client_id]).toBeDefined();
+  });
+
+  test("a redirect removed from the allowlist no longer gets codes, even for a saved client", async () => {
+    const port = freePort();
+    const extra = "https://tool.example/cb";
+    const first = await startRemote({ port, env: { EXTRA_REDIRECT_URIS: extra } });
+    const client = await (await register(first.base, extra)).json();
+    await first.server.close();
+    servers.splice(servers.indexOf(first.server), 1);
+    const again = await startRemote({ port });
+    const res = await authorizePage(again.base, client.client_id, pkce().challenge, { redirect: extra });
+    expect(res.status).toBe(400);
+    expect(requestIdOf(await res.text())).toBeUndefined();
+  });
+
+  test("a resource with a trailing slash is the same resource", async () => {
+    const { base } = await startRemote();
+    const client = await (await register(base)).json();
+    const res = await authorizePage(base, client.client_id, pkce().challenge, { resource: `${base}/mcp/` });
+    expect(res.status).toBe(200);
+    expect(requestIdOf(await res.text())).toBeDefined();
+  });
+
+  test("a refresh cannot widen the scopes it was granted", async () => {
+    const { base } = await startRemote();
+    const { client, tokens } = await signIn(base);
+    const res = await token(base, { grant_type: "refresh_token", refresh_token: tokens.refresh_token, client_id: client.client_id, scope: "admin" });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error).toBe("invalid_scope");
+  });
+
+  test("a port in use and an unreadable oauth.json are input failures, not crashes", async () => {
+    const taken = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response() });
+    try {
+      await expect(startRemote({ port: taken.port! })).rejects.toMatchObject({ kind: "input", message: expect.stringContaining(`${taken.port}`) });
+    } finally {
+      taken.stop(true);
+    }
+    await Bun.write(join(home.dir, "oauth.json"), "{ not json");
+    await expect(startRemote()).rejects.toMatchObject({ kind: "input", message: expect.stringContaining("oauth.json") });
+  });
+
+  test("`mcp --hash-password` reads the password on stdin and prints a hash remote mode accepts; a foreign hash is refused", async () => {
+    const d = makeDeps(fakeFetch(happySite).fetch, home.dir);
+    const app = { ...makeApp(makeSite(), d.deps), readStdin: async () => `${PW}\n` };
+    const { output, code } = await run(["mcp", "--hash-password"], app);
+    expect(code).toBe(0);
+    const hash = (output as any).OWNER_PASSWORD_HASH as string;
+    expect(remoteConfig({ OWNER_PASSWORD_HASH: hash, PUBLIC_URL: "https://x.example" }, {}).password.hash).toBe(hash);
+    const short = await run(["mcp", "--hash-password"], { ...app, readStdin: async () => "short\n" });
+    expect(short.code).toBe(2);
+    const foreign = `scrypt$${Buffer.alloc(8).toString("base64")}$${Buffer.alloc(32).toString("base64")}`;
+    expect(() => remoteConfig({ OWNER_PASSWORD_HASH: foreign, PUBLIC_URL: "https://x.example" }, {})).toThrow(/--hash-password/);
+  });
+});
+
 describe("Server sign-in security", () => {
   test("a wrong password is refused, and five of them lock the address out", async () => {
     const { base, notes } = await startRemote();

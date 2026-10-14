@@ -5,7 +5,7 @@
 // registration never evicts a client with live tokens, tokens are bound to this server's /mcp,
 // a reused refresh token signs its client out, a revoke drops both tokens of a pair, and the
 // password fingerprint behind the kill switch is an HMAC with a per-instance salt.
-import { createHash, createHmac, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes } from "node:crypto";
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Response } from "express";
@@ -13,9 +13,12 @@ import type { AuthorizationParams, OAuthServerProvider } from "@modelcontextprot
 import type { OAuthRegisteredClientsStore } from "@modelcontextprotocol/sdk/server/auth/clients.js";
 import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
 import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthTokens } from "@modelcontextprotocol/sdk/shared/auth.js";
-import { InvalidClientMetadataError, InvalidGrantError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
-import type { OwnerPassword } from "./remote-config";
+import { InvalidClientMetadataError, InvalidGrantError, InvalidScopeError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
+import { Failure } from "./envelope";
+import { sameResource, verifyPassword, type OwnerPassword } from "./remote-config";
 import { ensureStateDir } from "./session";
+
+export { hashPassword, verifyPassword } from "./remote-config";
 
 export const ACCESS_TTL = 60 * 60; // 1 hour
 export const REFRESH_TTL = 90 * 24 * 60 * 60; // 90 days, renewed by rotation
@@ -28,27 +31,8 @@ const GLOBAL_WINDOW = 60 * 60;
 const GLOBAL_LOCK_AFTER = 20; // failures from every address together in GLOBAL_WINDOW
 const MAX_CLIENTS = 50;
 const STALE_CLIENT = 60 * 60; // a registration that never signed in, pruned after an hour
-
-// --- password ---
-
-/** A scrypt hash for OWNER_PASSWORD_HASH: `scrypt$<salt>$<hash>`, base64. */
-export function hashPassword(password: string): string {
-  const salt = randomBytes(16);
-  return `scrypt$${salt.toString("base64")}$${scryptSync(password, salt, 64).toString("base64")}`;
-}
-
-export function verifyPassword(owner: OwnerPassword, attempt: string): boolean {
-  if (owner.hash) {
-    const [, salt, expected] = owner.hash.split("$");
-    if (!salt || !expected) return false;
-    const actual = scryptSync(attempt, Buffer.from(salt, "base64"), 64);
-    const exp = Buffer.from(expected, "base64");
-    return actual.length === exp.length && timingSafeEqual(actual, exp);
-  }
-  if (owner.plain === undefined) return false;
-  // Compare digests, so neither the content nor the length of the password leaks through timing.
-  return timingSafeEqual(createHash("sha256").update(attempt).digest(), createHash("sha256").update(owner.plain).digest());
-}
+const MAX_PENDING = 200; // open sign-in pages kept in memory
+const MAX_TRACKED = 10_000; // addresses with recent failures kept in memory
 
 const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 const secret = () => randomBytes(32).toString("base64url");
@@ -71,6 +55,8 @@ export type OAuthData = {
   tokens: Record<string, Token>;
   /** Refresh tokens already rotated away, by SHA-256: presenting one again revokes its grant. */
   rotated: Record<string, { client_id: string; grant: string; expires: number }>;
+  /** When each client first signed in: such a client stays registered after a sign-out (it reconnects with its id). */
+  seen: Record<string, number>;
 };
 
 export class OAuthStore {
@@ -79,9 +65,20 @@ export class OAuthStore {
 
   constructor(dir: string) {
     this.file = join(ensureStateDir(dir), "oauth.json");
-    this.data = existsSync(this.file) ? (JSON.parse(readFileSync(this.file, "utf8")) as OAuthData) : { version: 1, salt: secret(), clients: {}, codes: {}, tokens: {}, rotated: {} };
+    if (existsSync(this.file)) {
+      try {
+        this.data = JSON.parse(readFileSync(this.file, "utf8")) as OAuthData;
+      } catch {
+        throw new Failure("input", `${this.file} is not valid JSON, so the server cannot read its sign-ins`, {
+          next: `Move ${this.file} away and start the server again; every client then signs in again.`,
+        });
+      }
+    } else {
+      this.data = { version: 1, salt: secret(), clients: {}, codes: {}, tokens: {}, rotated: {}, seen: {} };
+      this.save();
+    }
     this.data.rotated ??= {};
-    if (!existsSync(this.file)) this.save();
+    this.data.seen ??= {};
   }
 
   update<T>(fn: (d: OAuthData) => T): T {
@@ -185,7 +182,7 @@ export class OwnerProvider implements OAuthServerProvider {
   private get store() { return this.o.store; }
   private event(message: string) { this.o.onEvent?.(message); }
 
-  /** Signs every client out: every token, code and open sign-in is dropped. Clients stay registered. */
+  /** Signs every client out: every token, code and open sign-in is dropped. Clients that signed in stay registered. */
   revokeAll(): void {
     this.pending.clear();
     this.completed.clear();
@@ -223,7 +220,7 @@ export class OwnerProvider implements OAuthServerProvider {
           const ids = Object.keys(d.clients).sort((a, b) => (d.clients[a]!.client_id_issued_at ?? 0) - (d.clients[b]!.client_id_issued_at ?? 0));
           for (const id of ids) {
             if (Object.keys(d.clients).length < MAX_CLIENTS) break;
-            if (!live.has(id)) delete d.clients[id];
+            if (!live.has(id)) this.dropClient(d, id);
           }
           if (Object.keys(d.clients).length >= MAX_CLIENTS) {
             throw new InvalidClientMetadataError("Too many clients are registered and signed in. Sign every client out on the Setup page, then connect again.");
@@ -237,10 +234,16 @@ export class OwnerProvider implements OAuthServerProvider {
 
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
     this.sweep();
-    if (params.resource && params.resource.href !== this.o.mcpUrl.href) {
+    if (params.resource && !sameResource(params.resource.href, this.o.mcpUrl.href)) {
       res.status(400).type("html").send(failedPage(`This server only grants access to ${this.o.mcpUrl.href}, not to ${params.resource.href}.`));
       return;
     }
+    // Checked again here, not only at registration: a saved client keeps no redirect the allowlist has dropped.
+    if (!this.o.allowRedirect(params.redirectUri)) {
+      res.status(400).type("html").send(failedPage(`This server no longer sends sign-ins back to ${new URL(params.redirectUri).host}.`));
+      return;
+    }
+    while (this.pending.size >= MAX_PENDING) this.pending.delete(this.pending.keys().next().value!);
     const id = secret();
     this.pending.set(id, { client, params, expires: this.now() + LOGIN_TTL, attempts: 0 });
     res.status(200).type("html").send(this.signInPageFor(id)!);
@@ -263,12 +266,18 @@ export class OwnerProvider implements OAuthServerProvider {
     });
   }
 
+  /**
+   * An address is locked after LOCK_AFTER failures in LOCK_WINDOW. Past the global cap, any address
+   * that has failed even once is locked too (slowing guesses spread over many addresses), but an
+   * address that never failed, the Owner's, is not: failures elsewhere cannot lock the Owner out.
+   */
   private locked(ip: string): boolean {
     const t = this.now();
     const mine = (this.failures.get(ip) ?? []).filter((at) => at > t - LOCK_WINDOW);
-    this.failures.set(ip, mine);
+    if (mine.length) this.failures.set(ip, mine);
+    else this.failures.delete(ip);
     this.allFailures = this.allFailures.filter((at) => at > t - GLOBAL_WINDOW);
-    return mine.length >= LOCK_AFTER || this.allFailures.length >= GLOBAL_LOCK_AFTER;
+    return mine.length >= LOCK_AFTER || (mine.length > 0 && this.allFailures.length >= GLOBAL_LOCK_AFTER);
   }
 
   /** POST /login: the password for an open sign-in page. */
@@ -286,6 +295,7 @@ export class OwnerProvider implements OAuthServerProvider {
     if (!verifyPassword(this.o.password, password)) {
       pending.attempts += 1;
       const t = this.now();
+      if (!this.failures.has(ip) && this.failures.size >= MAX_TRACKED) this.failures.delete(this.failures.keys().next().value!);
       this.failures.set(ip, [...(this.failures.get(ip) ?? []), t]);
       this.allFailures.push(t);
       if (pending.attempts >= LOCK_AFTER) this.pending.delete(requestId);
@@ -300,6 +310,7 @@ export class OwnerProvider implements OAuthServerProvider {
     const code = secret();
     this.store.update((d) => {
       this.prune(d);
+      d.seen[pending.client.client_id] ??= this.now();
       d.codes[sha256(code)] = {
         client_id: pending.client.client_id,
         grant: secret(),
@@ -327,7 +338,7 @@ export class OwnerProvider implements OAuthServerProvider {
     const c = this.store.data.codes[key];
     if (!c || c.client_id !== client.client_id || c.expires < this.now()) throw new InvalidGrantError("Invalid or expired authorization code");
     if (redirectUri && redirectUri !== c.redirect_uri) throw new InvalidGrantError("redirect_uri does not match the authorization request");
-    if (resource && resource.href !== c.resource) throw new InvalidGrantError("resource does not match the authorization request");
+    if (resource && !sameResource(resource.href, c.resource)) throw new InvalidGrantError("resource does not match the authorization request");
     return this.store.update((d) => {
       delete d.codes[key];
       return this.issue(d, client.client_id, c.grant, c.scopes, c.resource);
@@ -349,7 +360,9 @@ export class OwnerProvider implements OAuthServerProvider {
     }
     if (t.kind !== "refresh" || t.client_id !== client.client_id) throw new InvalidGrantError("Invalid refresh token");
     if (t.expires < this.now()) throw new InvalidGrantError("Refresh token expired");
-    if (resource && resource.href !== t.resource) throw new InvalidGrantError("resource does not match");
+    if (resource && !sameResource(resource.href, t.resource)) throw new InvalidGrantError("resource does not match");
+    // A refresh may narrow the granted scopes, never widen them (RFC 6749 §6).
+    if (scopes?.some((s) => !t.scopes.includes(s))) throw new InvalidScopeError("A refresh cannot ask for scopes the sign-in did not grant");
     return this.store.update((d) => {
       this.revokeGrant(d, t.grant);
       d.rotated[key] = { client_id: t.client_id, grant: t.grant, expires: t.expires };
@@ -383,24 +396,34 @@ export class OwnerProvider implements OAuthServerProvider {
     return { access_token: access, token_type: "bearer", expires_in: ACCESS_TTL, refresh_token: refresh, scope: scopes.join(" ") || undefined };
   }
 
-  /** Client ids that hold a live token or code, or have a sign-in page open. */
+  /**
+   * Client ids that hold a live token or code: only those are safe from eviction. An open sign-in
+   * page does not count, since anyone can open one without the password.
+   */
   private liveClients(d: OAuthData): Set<string> {
     const t = this.now();
     const live = new Set<string>();
     for (const v of Object.values(d.tokens)) if (v.expires >= t) live.add(v.client_id);
     for (const v of Object.values(d.codes)) if (v.expires >= t) live.add(v.client_id);
-    for (const p of this.pending.values()) live.add(p.client.client_id);
     return live;
   }
 
-  /** Drops what has expired, and registrations that never signed in within an hour. */
+  private dropClient(d: OAuthData, id: string) {
+    delete d.clients[id];
+    delete d.seen[id];
+    for (const [k, p] of this.pending) if (p.client.client_id === id) this.pending.delete(k);
+  }
+
+  /** Drops what has expired, and registrations that never signed in, an hour after they registered. */
   private prune(d: OAuthData) {
     const t = this.now();
     for (const [k, v] of Object.entries(d.tokens)) if (v.expires < t) delete d.tokens[k];
     for (const [k, v] of Object.entries(d.codes)) if (v.expires < t) delete d.codes[k];
     for (const [k, v] of Object.entries(d.rotated)) if (v.expires < t) delete d.rotated[k];
     const live = this.liveClients(d);
-    for (const [id, c] of Object.entries(d.clients)) if (!live.has(id) && (c.client_id_issued_at ?? 0) < t - STALE_CLIENT) delete d.clients[id];
+    for (const [id, c] of Object.entries(d.clients)) {
+      if (!live.has(id) && d.seen[id] === undefined && (c.client_id_issued_at ?? 0) < t - STALE_CLIENT) this.dropClient(d, id);
+    }
   }
 
   private sweep() {
