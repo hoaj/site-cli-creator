@@ -50,7 +50,10 @@ export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   help: [],
   version: [],
   doctor: [],
-  mcp: [],
+  mcp: [
+    flag("http", "boolean", "remote mode: serve over HTTP behind the Owner's sign-in, for web and phone clients (needs OWNER_PASSWORD and PUBLIC_URL); without it, local mode over stdio"),
+    flag("port", "number", "the HTTP port in remote mode (default: PORT, else 8080)"),
+  ],
   login: [flag("from-profile", "string", "reuse the sign-in another Chrome profile holds (the Capture tool's ~/.site-cli-creator/profile) instead of signing in again")],
   check: [flag("op", "string", "check one Operation and the chain it needs"), flag("writes", "boolean", "also check write Operations in headless Chrome (aborted, never sent)")],
   // Hidden: the platform smoke test in CI; not listed by help.
@@ -77,7 +80,7 @@ export function help(site: Site, commands: Command[]) {
     { name: "check", summary: "Call every read Operation live and validate it against its Contract; --writes also checks writes without sending them" },
     { name: "doctor", summary: "Versions, state dir, Chrome, gh status and binary findings, for reports" },
     { name: "version", summary: "Print the version" },
-    { name: "mcp", summary: "Serve the Task commands as MCP tools over stdio, for MCP clients such as Claude Desktop or Cursor; started by the client, not by agents" },
+    { name: "mcp", summary: "Serve the Task commands as MCP tools: over stdio for MCP clients such as Claude Desktop or Cursor (started by the client), or with --http as a remote server behind the Owner's sign-in; not for agents" },
   ].map((b) => ({ ...b, flags: BUILTIN_FLAGS[b.name] }));
   return {
     plugin: site.plugin,

@@ -12,9 +12,10 @@ import { ContractError, DryRun, EXIT, Failure, emit, errorEnvelope, note, type S
 import { bugFrame, bugKey, errorName, redactStack } from "./runtime/fingerprint";
 import { BUILTIN_FLAGS, commandHelp, flagDescription, flagSpecs, GLOBAL_FLAGS, help, isWriteCommand, type FlagSpec } from "./runtime/help";
 import { chromeLogin } from "./runtime/login";
-import { createMcpServer, serveStdio, toolName, type McpTool } from "./runtime/mcp";
+import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
+import { remoteConfig, type RemoteConfig } from "./runtime/remote-config";
 import { selftest } from "./runtime/selftest";
-import { legacyStateDir, migrateStateDir, stateDir } from "./runtime/session";
+import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir } from "./runtime/session";
 import type { Operation } from "./runtime/operation";
 import { siteProblems, type Site } from "./runtime/site";
 import { z } from "zod";
@@ -27,8 +28,11 @@ export type App = {
   checkWrites?: WriteChecker;
   exec?: Exec;
 };
-/** `serve`: the run starts a server instead of printing one document (the `mcp` built-in). */
-export type RunResult = { output: unknown; code: number; serve?: "mcp" };
+/**
+ * `serve`: the run starts a server instead of printing one document (the `mcp` built-in): local
+ * mode over stdio, or remote mode over HTTP with its checked `remote` settings.
+ */
+export type RunResult = { output: unknown; code: number; serve?: "mcp" | "mcp-http"; remote?: RemoteConfig };
 
 const input = (message: string) => new Failure("input", message);
 
@@ -172,8 +176,11 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
       if (builtin === "selftest") return ok(await selftest({ url: f.url as string | undefined, chrome: !f["no-chrome"], fetch: deps.fetch, env: deps.env }));
       if (builtin === "check") return ok(await check(client, app.operations, { op: f.op as string | undefined, writes: !!f.writes, account }, app.checkWrites));
       if (builtin === "mcp") {
-        if (account !== undefined || confirm) throw input("mcp takes no flags; account and confirm are arguments of each tool call");
-        return { output: null, code: EXIT.ok, serve: "mcp" };
+        if (account !== undefined || confirm) throw input("mcp takes no --account or --confirm; account and confirm are arguments of each tool call");
+        if (f.port !== undefined && !f.http) throw input("--port is for remote mode; pass it with --http");
+        if (!f.http) return { output: null, code: EXIT.ok, serve: "mcp" };
+        // Remote mode: the host's settings are checked here, so a missing password is one input envelope.
+        return { output: null, code: EXIT.ok, serve: "mcp-http", remote: remoteConfig(deps.env, { port: f.port as number | undefined }) };
       }
       // login
       const raw = f["from-profile"] as string | undefined;
@@ -241,9 +248,10 @@ export type McpOptions = { loginWaitMs?: number };
  * A tool call runs the same code as the CLI command, with three differences: arguments come
  * typed (JSON, not flags), messages and `next` speak of tools, and a command never opens a headed
  * sign-in (Client `surface: "mcp"`), so it fails with session and the client calls login instead.
- * run() has already moved a legacy state dir by the time main() serves.
+ * run() has already moved a legacy state dir by the time main() serves. Local mode serves them
+ * over stdio (mcpServer); remote mode over HTTP (runtime/remote.ts).
  */
-export function mcpServer(app: App, options: McpOptions = {}) {
+export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo; tools: McpTool[] } {
   const { site } = app;
   const deps = defaultDeps(app);
   const loginWaitMs = options.loginWaitMs ?? 20_000;
@@ -341,7 +349,13 @@ export function mcpServer(app: App, options: McpOptions = {}) {
     `A tool with a confirm argument writes: call it without confirm first, show the user the dry run it returns, and call it again with confirm: true only after the user's explicit yes.`,
     `A failed call returns {"error": {kind, message, next}}: do what next says. On kind drift, stop and do not work around it.`,
   ].join(" ");
-  return createMcpServer({ name: site.skill === site.plugin ? site.plugin : `${site.plugin}-${site.skill}`, version: site.version, instructions }, tools);
+  return { info: { name: site.skill === site.plugin ? site.plugin : `${site.plugin}-${site.skill}`, version: site.version, instructions }, tools };
+}
+
+/** Local mode: the tools as a stdio JSON-RPC server. */
+export function mcpServer(app: App, options: McpOptions = {}) {
+  const { info, tools } = mcpTools(app, options);
+  return createMcpServer(info, tools);
 }
 
 /**
@@ -355,12 +369,29 @@ export function isEntry(path: string, main: string = Bun.main): boolean {
   return norm(path) === norm(main);
 }
 
-/** Runs argv and prints its one document, or serves MCP on stdio until stdin ends. */
+/**
+ * Runs argv and prints its one document, or serves MCP: on stdio until stdin ends (local mode), or
+ * over HTTP until the host stops it (remote mode, which prints nothing on stdout; its log is stderr).
+ */
 export async function main(argv: string[], app: App): Promise<never> {
   const result = await run(argv, app);
-  if (result.serve !== "mcp") return emit(result.output, result.code);
-  await serveStdio(mcpServer(app));
-  process.exit(EXIT.ok);
+  if (result.serve === "mcp") {
+    await serveStdio(mcpServer(app));
+    process.exit(EXIT.ok);
+  }
+  if (result.serve === "mcp-http" && result.remote) {
+    // Loaded only here, so local mode and every CLI command never load the SDK or Express.
+    const { serveHttp } = await import("./runtime/remote");
+    const deps = defaultDeps(app);
+    const server = await serveHttp({ ...mcpTools(app), site: app.site, config: result.remote, dir: ensureStateDir(stateDir(app.site, deps.env)), note });
+    await new Promise<void>((resolve) => {
+      process.once("SIGTERM", resolve);
+      process.once("SIGINT", resolve);
+    });
+    await server.close();
+    process.exit(EXIT.ok);
+  }
+  return emit(result.output, result.code);
 }
 
 if (import.meta.main || isEntry(import.meta.path)) {
