@@ -13,6 +13,7 @@
 // | other non-2xx                                          | drift http                           |
 // | response fails Zod                                     | drift zod (path, Zod issue code)     |
 // | anything else thrown                                   | bug (caught in main)                 |
+import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, type Account, type DiffEntry } from "./envelope";
 import { driftFingerprint, fieldPath, zodDiff, type BreakType } from "./fingerprint";
@@ -214,13 +215,32 @@ export class Client {
     const raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
     const ids: Record<string, string> = {};
     for (const [k, v] of Object.entries(raw ?? {})) if (v !== undefined && v !== null) ids[k] = String(v);
-    this.session = saveSession(this.dir, { headers, ids });
+    this.session = saveSession(this.dir, { headers, ids, ...(options?.fromProfile && { fromProfile: options.fromProfile }) });
     this.persisted = true;
     this.fresh = true;
     return this.session;
   }
 
+  /**
+   * The Chrome profile the current sign-in came from with `login --from-profile`, while it still
+   * exists; undefined when the CLI's own profile holds the sign-in.
+   */
+  fromProfile(): string | undefined {
+    const dir = this.peek()?.fromProfile;
+    return dir && existsSync(dir) ? dir : undefined;
+  }
+
   private async signInOrFail(): Promise<Session> {
+    const from = this.fromProfile();
+    if (from) {
+      // login --from-profile left the CLI's own profile signed out: refresh from the profile it used.
+      this.deps.note(`signing in again from ${from}, the profile login --from-profile used (headless, in memory)`);
+      const seeded = await this.signIn(true, { fromProfile: from }).catch((e) => {
+        if (e instanceof Failure && e.kind === "input") return null; // that profile is busy (a Capture runs on it)
+        throw e;
+      });
+      if (seeded) return seeded;
+    }
     this.deps.note("signing in again from the Chrome profile (headless)");
     const refreshed = await this.signIn(true);
     if (refreshed) return refreshed;
