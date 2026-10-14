@@ -1,8 +1,10 @@
-// bun scripts/fixed-in.ts <tag> [--repo <owner/name>] [--branch main]
-// Run by release.yml after the release and its binaries are published. For every PR merged
+// bun scripts/fixed-in.ts <tag> [--repo <owner/name>] [--branch main] [--dir <plugin dir in the repo>]
+// Run by logbuy-release.yml after the release and its binaries are published. For every PR merged
 // into the branch between the previous release tag and <tag>, it finds "Fixes #n" / "Closes #n"
 // in the PR text and gives each issue the label fixed-in:<tag> plus a short comment, so the
 // Feedback skill can tell users which version fixed their report. Safe to rerun.
+// The repo holds other plugins, so tags carry the plugin's prefix (logbuy-v0.3.1): the previous
+// tag is the one with the same prefix, and with --dir only commits that changed the plugin count.
 import { compareVersions } from "./versions";
 
 export type Run = (cmd: string[]) => Promise<string>;
@@ -13,11 +15,19 @@ export function issueRefs(text: string): number[] {
   return [...new Set([...text.matchAll(KEYWORD_REF)].map((m) => Number(m[1])))];
 }
 
-/** The highest v-tag below `tag`, or null for the first release. */
+/** The prefix of a `<prefix>vX.Y.Z` tag: "" for v0.3.1, "logbuy-" for logbuy-v0.3.1. */
+export function tagPrefix(tag: string): string {
+  const m = /^(.*?)v\d+\.\d+\.\d+$/.exec(tag);
+  if (!m) throw new Error(`not a vX.Y.Z tag: ${tag}`);
+  return m[1]!;
+}
+
+/** The highest tag with the same prefix below `tag`, or null for the first release. */
 export function previousTag(tags: string[], tag: string): string | null {
-  const version = (t: string) => (/^v\d+\.\d+\.\d+$/.test(t) ? t.slice(1) : null);
-  const current = version(tag);
-  if (!current) throw new Error(`not a vX.Y.Z tag: ${tag}`);
+  const prefix = tagPrefix(tag);
+  const version = (t: string) =>
+    t.startsWith(prefix) && /^v\d+\.\d+\.\d+$/.test(t.slice(prefix.length)) ? t.slice(prefix.length + 1) : null;
+  const current = version(tag)!;
   const older = tags
     .map((t) => ({ t, v: version(t) }))
     .filter((x): x is { t: string; v: string } => x.v !== null && compareVersions(x.v, current) < 0)
@@ -28,15 +38,16 @@ export function previousTag(tags: string[], tag: string): string | null {
 type Pull = { number: number; title: string; body: string | null; merged_at: string | null; base: { ref: string } };
 
 export async function labelFixedIssues(
-  opts: { tag: string; repo: string; branch: string },
+  opts: { tag: string; repo: string; branch: string; dir?: string },
   run: Run,
   log: (line: string) => void = console.error,
 ): Promise<number[]> {
-  const { tag, repo, branch } = opts;
-  const tags = (await run(["git", "tag", "--list", "v*"])).split("\n").filter(Boolean);
+  const { tag, repo, branch, dir } = opts;
+  const tags = (await run(["git", "tag", "--list", `${tagPrefix(tag)}v*`])).split("\n").filter(Boolean);
   const prev = previousTag(tags, tag);
   const range = prev ? `${prev}..${tag}` : tag;
-  const commits = (await run(["git", "rev-list", "--first-parent", range])).split("\n").filter(Boolean);
+  const paths = dir ? ["--", dir] : [];
+  const commits = (await run(["git", "rev-list", "--first-parent", range, ...paths])).split("\n").filter(Boolean);
 
   const pulls = new Map<number, Pull>();
   for (const sha of commits) {
@@ -98,11 +109,11 @@ if (import.meta.main) {
   const tag = argv[0];
   const repo = flag(argv, "--repo") ?? process.env.GITHUB_REPOSITORY;
   if (!tag || !repo) {
-    console.error("usage: bun scripts/fixed-in.ts <vX.Y.Z> [--repo <owner/name>] [--branch main]");
+    console.error("usage: bun scripts/fixed-in.ts <[prefix]vX.Y.Z> [--repo <owner/name>] [--branch main] [--dir <plugin dir in the repo>]");
     process.exit(2);
   }
   try {
-    await labelFixedIssues({ tag, repo, branch: flag(argv, "--branch") ?? "main" }, spawn);
+    await labelFixedIssues({ tag, repo, branch: flag(argv, "--branch") ?? "main", dir: flag(argv, "--dir") }, spawn);
   } catch (err) {
     console.error((err as Error).message);
     process.exit(1);

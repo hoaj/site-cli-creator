@@ -1,12 +1,12 @@
 {
   "name": "logbuy",
   "description": "Find deals on Visma LogBuy (mylogbuy.com): search products, show a deal, browse categories.",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "author": {
     "name": "hoaj"
   },
-  "homepage": "https://github.com/hoaj/logbuy-plugin",
-  "repository": "https://github.com/hoaj/logbuy-plugin",
+  "homepage": "https://github.com/hoaj/skills/tree/main/plugins/logbuy",
+  "repository": "https://github.com/hoaj/skills",
   "keywords": [
     "logbuy"
   ],

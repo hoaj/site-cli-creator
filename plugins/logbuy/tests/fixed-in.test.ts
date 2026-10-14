@@ -21,8 +21,16 @@ describe("previousTag", () => {
   test("is null for the first release", () => {
     expect(previousTag(["v0.1.0"], "v0.1.0")).toBeNull();
   });
+  test("with a prefix, is the highest tag below it with the same prefix", () => {
+    const mixed = ["v0.9.0", "logbuy-v0.2.0", "logbuy-v0.10.0", "other-v0.9.9", "logbuy-v0.9.1", "logbuy-latest"];
+    expect(previousTag(mixed, "logbuy-v0.11.0")).toBe("logbuy-v0.10.0");
+    expect(previousTag(mixed, "logbuy-v0.10.0")).toBe("logbuy-v0.9.1");
+    expect(previousTag(mixed, "logbuy-v0.2.0")).toBeNull();
+    expect(previousTag(mixed, "v1.0.0")).toBe("v0.9.0");
+  });
   test("rejects a non-version tag", () => {
     expect(() => previousTag(tags, "latest")).toThrow("not a vX.Y.Z tag");
+    expect(() => previousTag(tags, "logbuy-latest")).toThrow("not a vX.Y.Z tag");
   });
 });
 
@@ -116,5 +124,18 @@ describe("labelFixedIssues", () => {
     expect(await labelFixedIssues({ tag: "v0.1.0", repo: "acme/demo", branch: "main" }, run, () => {})).toEqual([]);
     expect(calls).toContainEqual(["git", "rev-list", "--first-parent", "v0.1.0"]);
     expect(calls.some((c) => c[1] === "label")).toBe(false);
+  });
+
+  test("a plugin in a folder of a shared repo: its own prefixed tags, only commits that changed the folder", async () => {
+    const { run, calls } = fakeGh({
+      tags: "logbuy-v0.3.1\nlogbuy-v0.4.0\n",
+      commits: { aaa: [pr(20, "Fixes #9")] },
+      issues: { 9: { labels: [] } },
+    });
+    const opts = { tag: "logbuy-v0.4.0", repo: "acme/skills", branch: "main", dir: "plugins/logbuy" };
+    expect(await labelFixedIssues(opts, run, () => {})).toEqual([9]);
+    expect(calls).toContainEqual(["git", "tag", "--list", "logbuy-v*"]);
+    expect(calls).toContainEqual(["git", "rev-list", "--first-parent", "logbuy-v0.3.1..logbuy-v0.4.0", "--", "plugins/logbuy"]);
+    expect(calls).toContainEqual(["gh", "issue", "edit", "9", "--repo", "acme/skills", "--add-label", "fixed-in:logbuy-v0.4.0"]);
   });
 });

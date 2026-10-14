@@ -7,7 +7,7 @@
 #   2. gh logged in
 #   3. Google Chrome present, when this skill needs it
 #   4. this platform has a release binary
-#   5. gh release download v<version> --pattern logbuy-<target>[.exe]
+#   5. gh release download logbuy-v<version> --pattern logbuy-<target>[.exe]
 #   6. macOS: strip quarantine, ad-hoc sign if the signature is invalid.
 #      Windows: Unblock-File. Both ignore errors.
 #
@@ -21,7 +21,9 @@
 set -euo pipefail
 
 SKILL="logbuy"
-REPO="hoaj/logbuy-plugin"
+REPO="hoaj/skills"
+# The repo holds other plugins, so its release tags carry the plugin's name: logbuy-v<version>.
+TAG_PREFIX="logbuy-v"
 OWNER="hoaj"
 SUPPORTED="darwin-arm64 darwin-x64 linux-x64 linux-arm64 windows-x64"
 
@@ -145,20 +147,21 @@ version="$(first_match "$SKILL_DIR/SKILL.md" '^<!-- version: ([0-9]+\.[0-9]+\.[0
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/dl"
-if ! gh release download "v$version" --repo "$REPO" --pattern "$asset" --dir "$tmp/dl" 2>"$tmp/err"; then
+tag="$TAG_PREFIX$version"
+if ! gh release download "$tag" --repo "$REPO" --pattern "$asset" --dir "$tmp/dl" 2>"$tmp/err"; then
   err="$(<"$tmp/err")"
   case "$err" in
     *"not found"* | *"Not Found"* | *404* | *"no assets match"* | *"Could not resolve"*)
       if gh api "repos/$REPO" --silent >/dev/null 2>&1; then
-        die "release v$version of $REPO is still being built: try again in a few minutes"
+        die "release $tag of $REPO is still being built: try again in a few minutes"
       fi
       die "cannot see $REPO: ask $OWNER for access to $REPO"
       ;;
   esac
-  die "gh release download v$version failed: $err"
+  die "gh release download $tag failed: $err"
 fi
 binary="$tmp/dl/$asset"
-[ -f "$binary" ] || die "gh release download v$version did not produce $asset"
+[ -f "$binary" ] || die "gh release download $tag did not produce $asset"
 chmod 0755 "$binary"
 
 # 6. Unblock. gh sets no quarantine attribute today, so the xattr step is defensive. Bun's
