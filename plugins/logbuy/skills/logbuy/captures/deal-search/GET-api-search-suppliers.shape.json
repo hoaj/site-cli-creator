@@ -1,0 +1,696 @@
+{
+  "operation": "GET /api/search/suppliers",
+  "kind": "rest",
+  "effect": "read",
+  "resourceType": "fetch",
+  "host": "www.mylogbuy.com",
+  "method": "GET",
+  "path": "/api/search/suppliers",
+  "request": {
+    "headers": {
+      "accept": "*/*",
+      "baggage": null,
+      "content-type": "application/json",
+      "cookie": null,
+      "referer": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "user-agent": null
+    },
+    "query": {
+      "type": "object",
+      "fields": {
+        "limit": {
+          "type": "string"
+        },
+        "sortBy": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "contentType": "application/json",
+      "headers": {
+        "age": null,
+        "cache-control": null,
+        "content-encoding": null,
+        "content-type": "application/json",
+        "date": null,
+        "server": null,
+        "strict-transport-security": null,
+        "vary": null,
+        "x-matched-path": null,
+        "x-vercel-cache": null,
+        "x-vercel-id": null
+      },
+      "body": {
+        "kind": "json",
+        "shape": {
+          "type": "object",
+          "fields": {
+            "results": {
+              "type": "object",
+              "fields": {
+                "items": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "listItemKind": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "discount": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "specialOffer": {
+                        "type": "union",
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "object",
+                            "fields": {
+                              "punchline": {
+                                "type": "string"
+                              },
+                              "detail": {
+                                "type": "string"
+                              },
+                              "imageUrl": {
+                                "type": "string"
+                              },
+                              "discount": {
+                                "type": "string"
+                              },
+                              "timeLeft": {
+                                "type": "string"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "supplierId": {
+                        "type": "number"
+                      },
+                      "isFavorite": {
+                        "type": "boolean"
+                      },
+                      "about": {
+                        "type": "string"
+                      },
+                      "imageUrl": {
+                        "type": "string"
+                      },
+                      "supplierImage": {
+                        "type": "string"
+                      },
+                      "discountInfo": {
+                        "type": "object",
+                        "fields": {
+                          "info": {
+                            "type": "string"
+                          },
+                          "minPercent": {
+                            "type": "union",
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "maxPercent": {
+                            "type": "union",
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "minAmount": {
+                            "type": "null"
+                          },
+                          "maxAmount": {
+                            "type": "null"
+                          },
+                          "text": {
+                            "type": "union",
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "string"
+                              }
+                            ]
+                          },
+                          "currency": {
+                            "type": "null"
+                          }
+                        }
+                      },
+                      "address": {
+                        "type": "union",
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "object",
+                            "fields": {
+                              "addressId": {
+                                "type": "number"
+                              },
+                              "detail": {
+                                "type": "string"
+                              },
+                              "latitude": {
+                                "type": "number"
+                              },
+                              "longitude": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "numberOfAddresses": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                "ads": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "listItemKind": {
+                        "type": "string"
+                      },
+                      "title": {
+                        "type": "string"
+                      },
+                      "discount": {
+                        "type": "string"
+                      },
+                      "description": {
+                        "type": "string"
+                      },
+                      "specialOffer": {
+                        "type": "null"
+                      },
+                      "supplierId": {
+                        "type": "number"
+                      },
+                      "isFavorite": {
+                        "type": "boolean"
+                      },
+                      "about": {
+                        "type": "string"
+                      },
+                      "imageUrl": {
+                        "type": "string"
+                      },
+                      "supplierImage": {
+                        "type": "string"
+                      },
+                      "discountInfo": {
+                        "type": "object",
+                        "fields": {
+                          "info": {
+                            "type": "string"
+                          },
+                          "minPercent": {
+                            "type": "number"
+                          },
+                          "maxPercent": {
+                            "type": "number"
+                          },
+                          "minAmount": {
+                            "type": "null"
+                          },
+                          "maxAmount": {
+                            "type": "null"
+                          },
+                          "text": {
+                            "type": "null"
+                          },
+                          "currency": {
+                            "type": "null"
+                          }
+                        }
+                      },
+                      "address": {
+                        "type": "union",
+                        "anyOf": [
+                          {
+                            "type": "null"
+                          },
+                          {
+                            "type": "object",
+                            "fields": {
+                              "addressId": {
+                                "type": "number"
+                              },
+                              "detail": {
+                                "type": "string"
+                              },
+                              "latitude": {
+                                "type": "number"
+                              },
+                              "longitude": {
+                                "type": "number"
+                              }
+                            }
+                          }
+                        ]
+                      },
+                      "numberOfAddresses": {
+                        "type": "number"
+                      }
+                    }
+                  }
+                },
+                "facets": {
+                  "type": "object",
+                  "fields": {
+                    "brands": {
+                      "type": "array"
+                    },
+                    "categories": {
+                      "type": "array"
+                    },
+                    "dealTypes": {
+                      "type": "array"
+                    },
+                    "departments": {
+                      "type": "array"
+                    },
+                    "subCategories": {
+                      "type": "array"
+                    },
+                    "themes": {
+                      "type": "array"
+                    }
+                  }
+                },
+                "raw": {
+                  "type": "object",
+                  "fields": {
+                    "ads": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "fields": {
+                          "supplierId": {
+                            "type": "number"
+                          },
+                          "isFavorite": {
+                            "type": "boolean"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "about": {
+                            "type": "string"
+                          },
+                          "teaser": {
+                            "type": "string"
+                          },
+                          "imageUrl": {
+                            "type": "string"
+                          },
+                          "supplierImage": {
+                            "type": "string"
+                          },
+                          "specialOfferInfo": {
+                            "type": "null"
+                          },
+                          "discountInfo": {
+                            "type": "object",
+                            "fields": {
+                              "info": {
+                                "type": "string"
+                              },
+                              "minPercent": {
+                                "type": "number"
+                              },
+                              "maxPercent": {
+                                "type": "number"
+                              },
+                              "minAmount": {
+                                "type": "null"
+                              },
+                              "maxAmount": {
+                                "type": "null"
+                              },
+                              "text": {
+                                "type": "null"
+                              },
+                              "currency": {
+                                "type": "null"
+                              }
+                            }
+                          },
+                          "address": {
+                            "type": "union",
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "fields": {
+                                  "addressId": {
+                                    "type": "number"
+                                  },
+                                  "detail": {
+                                    "type": "string"
+                                  },
+                                  "latitude": {
+                                    "type": "number"
+                                  },
+                                  "longitude": {
+                                    "type": "number"
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "numberOfAddresses": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "searchItems": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "fields": {
+                          "supplierId": {
+                            "type": "number"
+                          },
+                          "isFavorite": {
+                            "type": "boolean"
+                          },
+                          "name": {
+                            "type": "string"
+                          },
+                          "about": {
+                            "type": "string"
+                          },
+                          "teaser": {
+                            "type": "string"
+                          },
+                          "imageUrl": {
+                            "type": "string"
+                          },
+                          "supplierImage": {
+                            "type": "string"
+                          },
+                          "specialOfferInfo": {
+                            "type": "union",
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "fields": {
+                                  "info": {
+                                    "type": "string"
+                                  },
+                                  "endDateTimeUTC": {
+                                    "type": "string",
+                                    "format": "datetime"
+                                  },
+                                  "timeLeft": {
+                                    "type": "string"
+                                  },
+                                  "campaignImageUrl": {
+                                    "type": "string"
+                                  },
+                                  "discountInfo": {
+                                    "type": "object",
+                                    "fields": {
+                                      "info": {
+                                        "type": "string"
+                                      },
+                                      "minPercent": {
+                                        "type": "null"
+                                      },
+                                      "maxPercent": {
+                                        "type": "null"
+                                      },
+                                      "minAmount": {
+                                        "type": "null"
+                                      },
+                                      "maxAmount": {
+                                        "type": "null"
+                                      },
+                                      "text": {
+                                        "type": "string"
+                                      },
+                                      "currency": {
+                                        "type": "null"
+                                      }
+                                    }
+                                  },
+                                  "dealTitle": {
+                                    "type": "string"
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "discountInfo": {
+                            "type": "object",
+                            "fields": {
+                              "info": {
+                                "type": "string"
+                              },
+                              "minPercent": {
+                                "type": "union",
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "maxPercent": {
+                                "type": "union",
+                                "anyOf": [
+                                  {
+                                    "type": "number"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "minAmount": {
+                                "type": "null"
+                              },
+                              "maxAmount": {
+                                "type": "null"
+                              },
+                              "text": {
+                                "type": "union",
+                                "anyOf": [
+                                  {
+                                    "type": "null"
+                                  },
+                                  {
+                                    "type": "string"
+                                  }
+                                ]
+                              },
+                              "currency": {
+                                "type": "null"
+                              }
+                            }
+                          },
+                          "address": {
+                            "type": "union",
+                            "anyOf": [
+                              {
+                                "type": "null"
+                              },
+                              {
+                                "type": "object",
+                                "fields": {
+                                  "addressId": {
+                                    "type": "number"
+                                  },
+                                  "detail": {
+                                    "type": "string"
+                                  },
+                                  "latitude": {
+                                    "type": "number"
+                                  },
+                                  "longitude": {
+                                    "type": "number"
+                                  }
+                                }
+                              }
+                            ]
+                          },
+                          "numberOfAddresses": {
+                            "type": "number"
+                          }
+                        }
+                      }
+                    },
+                    "facets": {
+                      "type": "object",
+                      "fields": {
+                        "brands": {
+                          "type": "array"
+                        },
+                        "categories": {
+                          "type": "array"
+                        },
+                        "dealTypes": {
+                          "type": "array"
+                        },
+                        "departments": {
+                          "type": "array"
+                        },
+                        "subCategories": {
+                          "type": "array"
+                        },
+                        "themes": {
+                          "type": "array"
+                        }
+                      }
+                    },
+                    "totalResults": {
+                      "type": "number"
+                    }
+                  }
+                }
+              }
+            },
+            "availableFilters": {
+              "type": "object",
+              "fields": {
+                "categories": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "count": {
+                        "type": "number"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "selected": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "dealTypes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "count": {
+                        "type": "number"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "selected": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "departments": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "count": {
+                        "type": "number"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "selected": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "subCategories": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "count": {
+                        "type": "number"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "selected": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                },
+                "themes": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "fields": {
+                      "count": {
+                        "type": "number"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "selected": {
+                        "type": "boolean"
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "contextualFilters": {
+              "type": "null"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "seen": 1,
+  "aborted": 0
+}

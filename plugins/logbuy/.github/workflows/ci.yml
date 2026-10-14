@@ -1,0 +1,63 @@
+# Pull requests: run every test (version sync, runtime) and require the PR's plugin version to
+# be above main's, so two merges never release the same number. A push to main re-checks every
+# open PR against the new main: a PR whose version no longer is above it goes red (a failing
+# "version above main" status), so a stale green result never lets it merge (SPEC §9).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - name: Install dependencies
+        run: |
+          for dir in . skills/*/cli; do
+            [ -f "$dir/package.json" ] || continue
+            echo "bun install in $dir"
+            if [ -f "$dir/bun.lock" ]; then
+              (cd "$dir" && bun install --frozen-lockfile)
+            else
+              (cd "$dir" && bun install)
+            fi
+          done
+      - name: Test
+        run: bun test
+      - name: Version above the base branch
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bun scripts/version-check.ts "origin/$BASE_REF"
+
+  stale-prs:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      statuses: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - name: Mark open PRs whose version is no longer above main's
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bun scripts/stale-prs.ts --repo "$GITHUB_REPOSITORY" --base main
