@@ -91,7 +91,7 @@ describe("routing and envelopes", () => {
       ["crash now", false],
     ]);
     expect(h.commands[0].flags.map((f: any) => f.name)).toEqual(["--all", "--limit"]);
-    expect(h.builtins.map((b: any) => b.name)).toEqual(["help", "check", "doctor", "version"]);
+    expect(h.builtins.map((b: any) => b.name)).toEqual(["help", "check", "doctor", "version", "mcp"]);
     expect(h.globalFlags.map((f: any) => f.name)).toEqual(["--account", "--confirm"]);
     expect(h.exitCodes.map((e: any) => [e.code, e.kind])).toEqual([[0, "ok"], [1, "bug"], [2, "input"], [3, "drift"], [4, "session"], [5, "network"]]);
     expect((await run([], app())).output).toEqual(h);
