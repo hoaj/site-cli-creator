@@ -159,7 +159,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   - `check [--op <name>] [--writes]` (§10);
   - `doctor`: versions, `generatedWith`, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;
   - `version`;
-  - `mcp`: serves the same CLI skill as an MCP server on stdio, for MCP clients (see **MCP server** below). Agents running the CLI never call it.
+  - `mcp [--http [--port <n>]]`: serves the same CLI skill as an MCP server, in local mode on stdio or, with `--http`, in remote mode (see **MCP server** below). Agents running the CLI never call it.
 
 **Output:** stdout is always exactly one JSON document, and stderr carries progress. A failure prints:
 
@@ -189,7 +189,12 @@ The envelope is everything the Feedback skill needs, and the CLI is responsible 
 - **Writes:** a write tool without `confirm: true` returns the dry run, and the server's instructions tell the client to show it and get the user's yes first, as SKILL.md does.
 - **Sign-in:** a Task tool never opens a headed sign-in and waits. With no saved sign-in it returns `session` at once, without launching Chrome; after a failed silent refresh it returns `session` too. The message names no setting the user must change, and `next` says to call the `login` tool, which opens Chrome. The `login` tool answers within about 20 s whether or not the user has finished (`signingIn: true` while the window is open), so one sign-in never holds the server past a client's request timeout; meanwhile Task tools return `session` asking the user to finish in the Chrome window. A failure of the login tool itself (no Chrome) says to tell the user, never to call login again.
 - **`next` and messages:** speak of tools and arguments instead of commands and flags (the `account` argument, never `--account`). An MCP client may have no Feedback skill, so for Drift and bugs `next` offers the Feedback skill when it is there, else the plugin repo's new-issue page, and either only on the user's yes.
-- **Not yet:** no output schemas (a command declares no output schema), no remote transport and no hosting; a remote server comes later, with the session kept on the user's own instance, never on a shared host.
+- **Remote mode** (`mcp --http`, decided on the map [Wayfinder: remote mode for site-cli-creator plugins](https://github.com/hoaj/skills/issues/53)): the same binary and the same tools, served over the MCP SDK's Streamable HTTP transport on one canonical URL, `<public URL>/mcp`, behind the Owner's **Server sign-in**. The SDK v1 and Express 5 are pinned exactly and loaded only for `--http`.
+  - **One Owner per instance.** The password comes from the host, `OWNER_PASSWORD_HASH` (scrypt) or `OWNER_PASSWORD` (at least 12 characters); with neither, a short one, or no public URL (`PUBLIC_URL`, else Railway's domain), `mcp --http` is an input failure and nothing listens.
+  - **Server sign-in is OAuth 2.1** on the SDK's router, ported from BankMCP: PKCE S256; access tokens 1 h, refresh 90 d rotating, codes 10 min and single use, all stored only as hashes; a sign-in page that asks for the Owner password and names the site, the client and where it returns to. Redirects go only to claude.ai's callback and loopback, unless `EXTRA_REDIRECT_URIS` adds more.
+  - **Fixed against BankMCP:** an unknown or expired token is 401; tokens are bound to this server's `/mcp`; a reused refresh token signs its client out; a revoke drops both tokens of a pair; open registration never evicts a client with live tokens; a disallowed `Origin` on `/mcp` is 403; the password fingerprint behind the kill switch is a salted HMAC. Five wrong passwords lock an address out for 15 minutes, with a global cap; changing the password signs every client out.
+  - Tool calls run one at a time, as over stdio. The Session is the one in the CLI skill's state dir.
+- **Not yet:** no output schemas (a command declares no output schema); the Setup page for handing the remote server a Session, and the deploy files, come in the next steps of the map.
 
 **SKILL.md** (about 45–60 lines):
 1. Frontmatter with only `name` and `description`. The version goes in an HTML comment below it, because a `version:` key breaks Copilot.
