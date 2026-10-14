@@ -91,11 +91,43 @@ describe("routing and envelopes", () => {
       ["crash now", false],
     ]);
     expect(h.commands[0].flags.map((f: any) => f.name)).toEqual(["--all", "--limit"]);
-    expect(h.builtins.map((b: any) => b.name)).toEqual(["help", "check", "doctor", "version"]);
+    expect(h.builtins.map((b: any) => b.name)).toEqual(["help", "check", "doctor", "version", "mcp"]);
     expect(h.globalFlags.map((f: any) => f.name)).toEqual(["--account", "--confirm"]);
     expect(h.exitCodes.map((e: any) => [e.code, e.kind])).toEqual([[0, "ok"], [1, "bug"], [2, "input"], [3, "drift"], [4, "session"], [5, "network"]]);
     expect((await run([], app())).output).toEqual(h);
     expect((await run(["--help"], app())).output).toEqual(h);
+  });
+
+  test("<command> --help or -h prints that command's entry from help, and nothing runs (#47)", async () => {
+    const { fetch, calls } = fakeFetch(happySite);
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    const a = makeApp(loginSite(), deps);
+    const h = (await run(["help"], a)).output as any;
+    const cases: [string[], string][] = [
+      [["products", "show", "--help"], "products show"],
+      [["order", "rename", "-h"], "order rename"],
+      [["products", "show", "--limit", "abc", "--bogus", "--help"], "products show"],
+      [["--confirm", "order", "rename", "--order-id", "1", "--help"], "order rename"],
+      [["login", "--help"], "login"],
+      [["check", "-h"], "check"],
+      [["help", "--help"], "help"],
+    ];
+    for (const [argv, name] of cases) {
+      const { output, code } = await run(argv, a);
+      expect(code, argv.join(" ")).toBe(0);
+      const entry = [...h.commands, ...h.builtins].find((c: any) => c.name === name);
+      expect(output).toEqual({ ...entry, usage: `shop ${name} [flags]`, globalFlags: h.globalFlags });
+    }
+    expect((await run(["order", "rename", "--help"], a)).output).toMatchObject({ write: true, flags: [{ name: "--order-id" }, { name: "--name" }] });
+    expect(calls).toEqual([]);
+    expect(loginCalls).toEqual([]);
+    // An unknown command stays input, --help or not; `-h` as a flag's value is that value.
+    expect((await run(["nope", "x", "--help"], a)).code).toBe(2);
+    saveSession(home.dir, { headers: {}, ids: { customerId: "C-1" } });
+    expect((await run(["order", "rename", "--order-id", "1", "--name", "-h"], a)).output).toEqual({
+      dryRun: true,
+      would: { operation: "PATCH /api/orders/:orderId", variables: { orderId: "1", name: "-h" } },
+    });
   });
 
   test("help lists login only for auth login", async () => {
@@ -321,6 +353,40 @@ describe("login", () => {
       expect((await run(["login", arg], makeApp(loginSite(), deps))).code).toBe(0);
     }
     expect(seen).toEqual([join(homedir(), ".site-cli-creator", "profile"), homedir()]);
+  });
+
+  test("after login --from-profile the silent refresh signs in from that profile first, then the CLI's own (#46)", async () => {
+    const source = tempHome();
+    try {
+      const seen: unknown[] = [];
+      let answers: Array<Record<string, string> | null> = [{ authorization: "Bearer t1" }];
+      const { fetch } = fakeFetch((req) => (req.headers.authorization === "Bearer t1" ? json({}, 401) : happySite(req)));
+      const { deps } = makeDeps(fetch, home.dir);
+      deps.env = { ...deps.env, SITE_CLI_NONINTERACTIVE: "1" };
+      deps.login = async (headless, options) => {
+        seen.push({ headless, fromProfile: options?.fromProfile });
+        return answers.shift() ?? null;
+      };
+      expect((await run(["login", "--from-profile", source.dir], makeApp(loginSite(), deps))).code).toBe(0);
+      expect(loadSession(home.dir)!.fromProfile).toBe(source.dir);
+
+      // The bearer expires: the refresh reuses the --from-profile sign-in, so no second sign-in is needed.
+      seen.length = 0;
+      answers = [{ authorization: "Bearer t2" }];
+      expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(0);
+      expect(seen).toEqual([{ headless: true, fromProfile: source.dir }]);
+      expect(loadSession(home.dir)!.fromProfile).toBe(source.dir);
+
+      // That profile is signed out too: the CLI's own profile is tried next; its sign-in no longer names the other profile.
+      saveSession(home.dir, { headers: { authorization: "Bearer t1" }, ids: { customerId: "C-1" }, fromProfile: source.dir });
+      seen.length = 0;
+      answers = [null, { authorization: "Bearer t3" }];
+      expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(0);
+      expect(seen).toEqual([{ headless: true, fromProfile: source.dir }, { headless: true, fromProfile: undefined }]);
+      expect(loadSession(home.dir)!.fromProfile).toBeUndefined();
+    } finally {
+      source.cleanup();
+    }
   });
 
   test("a login skill without a session signs in before running the command", async () => {
