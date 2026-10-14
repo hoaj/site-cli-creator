@@ -1,5 +1,6 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { readJson, writeJson } from "./manifests";
 import { fail } from "./output";
 
 /** The version comment every SKILL.md carries below its frontmatter (SPEC §8). */
@@ -15,9 +16,7 @@ export function setSkillMdVersion(path: string, version: string): void {
 }
 
 export function setPackageVersion(path: string, version: string): void {
-  const pkg = JSON.parse(readFileSync(path, "utf8"));
-  pkg.version = version;
-  writeFileSync(path, `${JSON.stringify(pkg, null, 2)}\n`);
+  writeJson(path, { ...readJson<Record<string, unknown>>(path), version });
 }
 
 /** Sets `version: "…"` in site.ts (a version pin like the others). */

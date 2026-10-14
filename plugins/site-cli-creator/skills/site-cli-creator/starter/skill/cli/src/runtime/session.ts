@@ -64,6 +64,8 @@ export function ensureStateDir(dir: string): string {
 
 export const sessionFile = (dir: string) => join(dir, "session.json");
 export const profileDir = (dir: string) => join(dir, "profile");
+/** The CLI's own Chrome profile, created (0700) with the state dir around it. */
+export const ensureProfileDir = (site: Names, env: Env = process.env) => ensureStateDir(profileDir(ensureStateDir(stateDir(site, env))));
 
 export function loadSession(dir: string): Session | null {
   const file = sessionFile(dir);

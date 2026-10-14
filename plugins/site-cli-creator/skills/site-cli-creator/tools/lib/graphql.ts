@@ -1,6 +1,7 @@
+import { stripNoise, topLevelDefinitions, type GraphqlType } from "../../starter/skill/cli/src/runtime/graphql";
 import { parseJson, shapeOf, type Shape } from "./shape";
 
-export type GraphqlOperationType = "query" | "mutation" | "subscription";
+export type GraphqlOperationType = GraphqlType;
 
 export type GraphqlCall = {
   operationName: string | null;
@@ -32,28 +33,6 @@ export function redactQuery(query: string): string {
     .replace(/[ \t]+$/gm, "")
     .trim();
   return numbers ? `${NUMBERS_REDACTED}\n${out}` : out;
-}
-
-function stripNoise(query: string): string {
-  return query.replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|#[^\n]*/g, "");
-}
-
-/** Operation definitions at brace depth 0 (fields named `query` inside a selection don't count). */
-function topLevelDefinitions(code: string): { type: GraphqlOperationType; name: string | null }[] {
-  const defs: { type: GraphqlOperationType; name: string | null }[] = [];
-  let depth = 0;
-  let top = "";
-  for (const ch of code) {
-    if (ch === "{" || ch === "(") {
-      if (depth === 0) top += " { ";
-      depth++;
-    } else if (ch === "}" || ch === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0) top += ch;
-  }
-  for (const m of top.matchAll(/(?:^|\s)(query|mutation|subscription)\b\s*([_A-Za-z][_0-9A-Za-z]*)?/g)) {
-    defs.push({ type: m[1] as GraphqlOperationType, name: m[2] ?? null });
-  }
-  return defs;
 }
 
 /** The type and name of the operation a query document runs (the named one, else the first). */

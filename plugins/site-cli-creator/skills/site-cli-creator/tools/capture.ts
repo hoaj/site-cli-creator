@@ -6,16 +6,18 @@
 // memory and is never written anywhere. A read Task aborts every write on every
 // host except sign-in steps; --write lets the Task's one write through.
 
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium, type BrowserContext, type Page, type Request } from "playwright-core";
 import { parseFlags, requireKebab } from "./lib/args";
+import { writeJson } from "./lib/manifests";
 import { fail, progress, runTool } from "./lib/output";
-import { CaptureRecorder, shapeFileNames, type Planned } from "./lib/recorder";
+import { CaptureRecorder, markers, shapeFileNames, type Planned } from "./lib/recorder";
 import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
 import { redactPath } from "./lib/shape";
+import { loginHostName } from "../starter/skill/cli/src/runtime/site";
 
 const USAGE =
   "bun tools/capture.ts --skill-dir <dir> --task <slug> --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]";
@@ -46,15 +48,6 @@ async function siteHints(skillDir: string): Promise<SiteHints> {
   } catch (error) {
     progress(`site.ts not loaded (${(error as Error).message}); using --url's origin`);
     return { loginHosts: [] };
-  }
-}
-
-/** `login.example.com:8443` or a URL → `login.example.com`. */
-function hostname(host: string): string {
-  try {
-    return new URL(host.includes("://") ? host : `https://${host}`).hostname.toLowerCase();
-  } catch {
-    return host.toLowerCase();
   }
 }
 
@@ -205,7 +198,7 @@ await runTool(async () => {
 
   const site = await siteHints(skillDir);
   const origin = values.origin ? parseOrigin(values.origin) : (site.origin ?? new URL(startUrl).origin);
-  const loginHosts = [...site.loginHosts, ...values["login-host"]].map(hostname);
+  const loginHosts = [...site.loginHosts, ...values["login-host"]].map(loginHostName);
   if (values["write-op"] && !values.write) fail("--write-op needs --write");
   const recorder = new CaptureRecorder({
     origin,
@@ -374,10 +367,10 @@ await runTool(async () => {
     const why = scriptError ? `--script failed: ${scriptError.message.split("\n")[0]}; ` : "";
     fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was`);
   }
-  const files = shapeFileNames(operations, recorder.originHostname);
+  const files = shapeFileNames(operations, new URL(origin).hostname);
   mkdirSync(dir, { recursive: true });
   clearPreviousCapture(dir);
-  operations.forEach((op, i) => writeFileSync(join(dir, files[i] as string), `${JSON.stringify(op, null, 2)}\n`));
+  operations.forEach((op, i) => writeJson(join(dir, files[i] as string), op));
   // Host names only: where the sign-in went, so site.ts login.hosts can list them.
   const signInHosts = [...recorder.signInHosts].sort();
   const index = {
@@ -390,12 +383,7 @@ await runTool(async () => {
       operation: op.operation,
       kind: op.kind,
       effect: op.effect,
-      ...(op.effectUnknown ? { effectUnknown: true } : {}),
-      ...(op.loginFlow ? { loginFlow: true } : {}),
-      ...(op.navigation ? { navigation: true } : {}),
-      ...(op.allowedRead ? { allowedRead: true } : {}),
-      ...(op.serverAction ? { serverAction: true } : {}),
-      ...(op.rsc ? { rsc: true } : {}),
+      ...markers(op),
       method: op.method,
       host: op.host,
       path: op.path,
@@ -404,7 +392,7 @@ await runTool(async () => {
       aborted: op.aborted,
     })),
   };
-  writeFileSync(join(dir, "index.json"), `${JSON.stringify(index, null, 2)}\n`);
+  writeJson(join(dir, "index.json"), index);
 
   if (scriptError) fail(`--script failed: ${scriptError.message.split("\n")[0]} (shapes so far written to ${dir})`);
   const blockedElsewhere = [...recorder.blockedElsewhere].sort();
@@ -424,7 +412,7 @@ await runTool(async () => {
       "Next.js: serverAction (a POST with a next-action header) and rsc (a text/x-component stream) are never Operations. If an aborted server action broke the page, capture again with --allow-read <its path>. Look for the JSON /api route the page also calls (reference/add-task.md, Next.js sites).",
     );
   }
-  const declared = new Set(recorder.declaredLoginHosts);
+  const declared = new Set(loginHosts);
   const undeclared = signInHosts.filter((h) => !declared.has(h));
   if (undeclared.length > 0) {
     hints.push(
@@ -440,18 +428,7 @@ await runTool(async () => {
     stoppedBy,
     ...(closedWindows ? { closedWindows } : {}),
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
-    operations: index.operations.map(({ operation, effect, effectUnknown, loginFlow, navigation, allowedRead, serverAction, rsc, file, aborted: n }) => ({
-      operation,
-      effect,
-      ...(effectUnknown ? { effectUnknown } : {}),
-      ...(loginFlow ? { loginFlow } : {}),
-      ...(navigation ? { navigation } : {}),
-      ...(allowedRead ? { allowedRead } : {}),
-      ...(serverAction ? { serverAction } : {}),
-      ...(rsc ? { rsc } : {}),
-      file,
-      aborted: n,
-    })),
+    operations: index.operations.map(({ kind: _kind, method: _method, host: _host, path: _path, seen: _seen, ...op }) => op),
     ...(signInHosts.length ? { loginHosts: signInHosts } : {}),
     ...(blockedElsewhere.length ? { blockedElsewhere } : {}),
     ...(hints.length ? { hints } : {}),

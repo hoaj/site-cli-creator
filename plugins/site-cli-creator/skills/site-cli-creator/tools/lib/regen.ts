@@ -10,7 +10,7 @@ export function moduleFiles(dir: string): string[] {
   if (!existsSync(dir)) return [];
   return readdirSync(dir)
     .filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts") && !f.endsWith(".d.ts"))
-    .sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+    .sort();
 }
 
 /** The file a command belongs in: its name with dashes (`subscription show` → `subscription-show.ts`). */

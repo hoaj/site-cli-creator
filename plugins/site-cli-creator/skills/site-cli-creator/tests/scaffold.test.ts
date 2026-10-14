@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { copyExpected } from "../fixtures/expected/copy";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
-import { chromePaths, unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
+import { unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
 import { findTokens } from "../tools/lib/template";
 
 const NEW = join(SKILL_ROOT, "tools", "new.ts");
@@ -231,9 +231,10 @@ describe("maintainer requirements (SPEC §13)", () => {
     expect(versionAtLeast("1.10.0", "1.4.0")).toBe(true);
     expect(versionAtLeast("1.3.12", "1.4.0")).toBe(false);
     expect(versionAtLeast("2.0.0-canary.1", "1.4.0")).toBe(true);
-    expect(chromePaths("linux", {})).toEqual(["/opt/google/chrome/chrome"]);
-    expect(chromePaths("linux", { SITE_CLI_CHROME: "/x/chrome" })).toEqual(["/x/chrome"]);
-    expect(chromePaths("win32", { PROGRAMFILES: "C:\\Program Files" })).toEqual(["C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"]);
+    const chromeMessage = (platform: string, env: Probe["env"]) => unmetRequirements("acme/shop-plugin", probe({ platform, env, exists: () => false }))[0]!.message;
+    expect(chromeMessage("linux", {})).toContain("(looked at /opt/google/chrome/chrome)");
+    expect(chromeMessage("linux", { SITE_CLI_CHROME: "/x/chrome" })).toContain("(looked at /x/chrome)");
+    expect(chromeMessage("win32", { PROGRAMFILES: "C:\\Program Files" })).toContain("(looked at C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe)");
   });
 
   test("new.ts checks before writing anything and fails with every unmet requirement as JSON", () => {
@@ -435,9 +436,9 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     }
     const install = sh([process.execPath, "install"], dir);
     expect(install.code, install.out).toBe(0);
-    // The root run already covers every skill's tests; one cli on its own proves they also pass from there.
-    for (const cwd of [dir, join(dir, "skills", "shop-login", "cli")]) {
-      const tested = sh([process.execPath, "test"], cwd);
+    // The root run covers every skill's tests; one file in one cli proves they also resolve from there.
+    for (const [cwd, only] of [[dir, []], [join(dir, "skills", "shop-login", "cli"), ["tests/site.test.ts"]]] as const) {
+      const tested = sh([process.execPath, "test", ...only], cwd);
       // The summary lines only: under CI, bun also prints every passing test's name ("a non-JSON 200 fails …").
       expect(tested.out, cwd).toMatch(/^ 0 fail$/m);
       expect(tested.out, cwd).not.toMatch(/^ [1-9]\d* fail$/m);

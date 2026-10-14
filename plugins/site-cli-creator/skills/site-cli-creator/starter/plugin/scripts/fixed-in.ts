@@ -3,9 +3,8 @@
 // into the branch between the previous release tag and <tag>, it finds "Fixes #n" / "Closes #n"
 // in the PR text and gives each issue the label fixed-in:<tag> plus a short comment, so the
 // Feedback skill can tell users which version fixed their report. Safe to rerun.
+import { flag, spawn, type Run } from "./run";
 import { compareVersions } from "./versions";
-
-export type Run = (cmd: string[]) => Promise<string>;
 
 const KEYWORD_REF = /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*:?\s+#(\d+)\b/gi;
 
@@ -38,11 +37,14 @@ export async function labelFixedIssues(
   const range = prev ? `${prev}..${tag}` : tag;
   const commits = (await run(["git", "rev-list", "--first-parent", range])).split("\n").filter(Boolean);
 
-  const pulls = new Map<number, Pull>();
-  for (const sha of commits) {
-    const found = JSON.parse(await run(["gh", "api", `repos/${repo}/commits/${sha}/pulls`])) as Pull[];
-    for (const pr of found) if (pr.merged_at && pr.base.ref === branch) pulls.set(pr.number, pr);
+  // One gh api call per commit: up to 8 at a time, read back in commit order.
+  const found: Pull[][] = [];
+  for (let i = 0; i < commits.length; i += 8) {
+    const batch = commits.slice(i, i + 8).map((sha) => run(["gh", "api", `repos/${repo}/commits/${sha}/pulls`]));
+    for (const raw of await Promise.all(batch)) found.push(JSON.parse(raw) as Pull[]);
   }
+  const pulls = new Map<number, Pull>();
+  for (const pr of found.flat()) if (pr.merged_at && pr.base.ref === branch) pulls.set(pr.number, pr);
   const issues = [...new Set([...pulls.values()].flatMap((pr) => issueRefs(`${pr.title}\n${pr.body ?? ""}`)))];
   log(`fixed-in: ${pulls.size} PR(s) since ${prev ?? "the first commit"}, ${issues.length} issue(s)`);
   if (issues.length === 0) return [];
@@ -79,18 +81,6 @@ export async function labelFixedIssues(
   // Every other issue was still handled; the rerun skips those already labelled.
   if (failed.length > 0) throw new Error(`fixed-in: could not label ${failed.join("; ")}`);
   return labelled;
-}
-
-const spawn: Run = async (cmd) => {
-  const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  if (code !== 0) throw new Error(`${cmd.slice(0, 3).join(" ")} failed (${code}): ${err.trim()}`);
-  return out;
-};
-
-function flag(argv: string[], name: string): string | undefined {
-  const i = argv.indexOf(name);
-  return i >= 0 ? argv[i + 1] : undefined;
 }
 
 if (import.meta.main) {

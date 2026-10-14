@@ -5,9 +5,8 @@
 // this posts a failing commit status on the PR's head, so the PR goes red (SPEC §9 "A stale PR
 // goes red"), `gh pr checks` fails and nothing merges it until it is rebased and bumped again.
 import { join } from "node:path";
+import { flag, spawn, type Run } from "./run";
 import { compareVersions, readPin, SOURCE, sourceVersion } from "./versions";
-
-export type Run = (cmd: string[]) => Promise<string>;
 
 export const STATUS_CONTEXT = "version above main";
 
@@ -51,18 +50,6 @@ export async function markStalePrs(
   }
   log(`stale-prs: ${base} is at ${mainVersion}; marked ${stale.map((n) => `#${n}`).join(" ") || "no PR"} stale`);
   return stale;
-}
-
-const spawn: Run = async (cmd) => {
-  const p = Bun.spawn(cmd, { stdout: "pipe", stderr: "pipe" });
-  const [out, err, code] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
-  if (code !== 0) throw new Error(`${cmd.slice(0, 3).join(" ")} failed (${code}): ${err.trim()}`);
-  return out;
-};
-
-function flag(argv: string[], name: string): string | undefined {
-  const i = argv.indexOf(name);
-  return i >= 0 ? argv[i + 1] : undefined;
 }
 
 if (import.meta.main) {

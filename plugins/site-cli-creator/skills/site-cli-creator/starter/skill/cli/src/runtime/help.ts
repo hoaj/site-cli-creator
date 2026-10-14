@@ -2,6 +2,7 @@
 import type { z } from "zod";
 import type { Command } from "./command";
 import { EXIT, nextStep, type Kind } from "./envelope";
+import { unwrap } from "./fingerprint";
 import type { Site } from "./site";
 
 export type FlagType = "boolean" | "string" | "number" | "enum";
@@ -17,18 +18,6 @@ export type FlagSpec = {
   values?: string[];
   description?: string;
 };
-
-const WRAPPERS = new Set(["optional", "default", "prefault", "nullable", "nonoptional", "readonly", "catch"]);
-
-function unwrap(schema: z.ZodType): z.ZodType {
-  let s: any = schema;
-  for (;;) {
-    const def = s._zod.def;
-    if (WRAPPERS.has(def.type)) s = def.innerType;
-    else if (def.type === "pipe") s = def.in;
-    else return s;
-  }
-}
 
 export const kebab = (key: string) => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 
@@ -52,6 +41,11 @@ export const isWriteCommand = (c: Command) => c.uses.some((op) => op.effect === 
 
 const flag = (name: string, type: FlagType, description: string): FlagSpec => ({ name: `--${name}`, key: name, type, multiple: false, required: false, description });
 
+export const GLOBAL_FLAGS: FlagSpec[] = [
+  flag("account", "string", "which account to act for, when the login has several"),
+  flag("confirm", "boolean", "send write Operations; without it a write command prints a dry run"),
+];
+
 export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   help: [],
   version: [],
@@ -62,6 +56,9 @@ export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   // Hidden: the platform smoke test in CI; not listed by help.
   selftest: [flag("url", "string", "an http(s) URL to fetch"), flag("no-chrome", "boolean", "only the fetch, no Chrome")],
 };
+
+/** A flag's description, for the MCP tool schemas that take the same argument. */
+export const flagDescription = (flags: FlagSpec[], key: string) => flags.find((f) => f.key === key)!.description!;
 
 /**
  * `<command> --help`: that command's entry from help() (a Task command or a listed built-in) with
@@ -90,10 +87,7 @@ export function help(site: Site, commands: Command[]) {
     usage: `${site.skill} <command> [flags]`,
     commands: commands.map((c) => ({ name: c.name, summary: c.summary, write: isWriteCommand(c), flags: flagSpecs(c.args) })),
     builtins,
-    globalFlags: [
-      flag("account", "string", "which account to act for, when the login has several"),
-      flag("confirm", "boolean", "send write Operations; without it a write command prints a dry run"),
-    ],
+    globalFlags: GLOBAL_FLAGS,
     exitCodes: (Object.entries(EXIT) as [keyof typeof EXIT, number][]).map(([kind, code]) => ({
       code,
       kind,

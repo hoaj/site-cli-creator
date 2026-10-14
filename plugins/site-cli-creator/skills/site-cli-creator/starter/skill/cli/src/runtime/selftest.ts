@@ -5,7 +5,7 @@
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { chromeLaunchOptions, findChrome, installHint } from "./chrome";
+import { chromeLaunchOptions, chromeNotFound, findChrome } from "./chrome";
 import { Failure } from "./envelope";
 import type { Env, Fetch } from "./site";
 
@@ -27,7 +27,7 @@ export async function selftest(options: SelftestOptions): Promise<SelftestResult
   if (!options.chrome) return { ok: true, fetch: status };
 
   const chrome = findChrome(options.env);
-  if (!chrome.path) throw new Failure("input", `selftest: Google Chrome was not found (looked at ${chrome.checked.join(", ") || "no known path on this OS"}). ${installHint()}`);
+  if (!chrome.path) throw new Failure("input", `selftest: ${chromeNotFound(chrome)}`);
   const profile = mkdtempSync(join(tmpdir(), "selftest-"));
   const { chromium } = await import("playwright-core");
   const context = await chromium.launchPersistentContext(profile, { ...chromeLaunchOptions(chrome), headless: true });
