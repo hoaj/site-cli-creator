@@ -15,7 +15,7 @@
 // | anything else thrown                                   | bug (caught in main)                 |
 import { existsSync } from "node:fs";
 import type { Call } from "./command";
-import { ContractError, DryRun, Failure, type Account, type DiffEntry, type Surface } from "./envelope";
+import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
 import { driftFingerprint, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, type Session } from "./session";
@@ -248,7 +248,7 @@ export class Client {
       // login --from-profile left the CLI's own profile signed out: refresh from the profile it used.
       this.deps.note(`signing in again from ${from}, the profile login --from-profile used (headless, in memory)`);
       const seeded = await this.signIn(true, { fromProfile: from }).catch((e) => {
-        if (e instanceof Failure && e.kind === "input") return null; // that profile is busy (a Capture runs on it)
+        if (e instanceof ProfileUnavailable) return null; // that profile is busy (a Capture runs on it)
         throw e;
       });
       if (seeded) return seeded;
