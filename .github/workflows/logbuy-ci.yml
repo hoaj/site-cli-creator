@@ -1,20 +1,34 @@
-# Pull requests: run every test (version sync, runtime) and require the PR's plugin version to
-# be above main's, so two merges never release the same number. A push to main re-checks every
-# open PR against the new main: a PR whose version no longer is above it goes red (a failing
-# "version above main" status), so a stale green result never lets it merge (SPEC §9).
-name: ci
+# logbuy's CI. Pull requests that change the plugin: run every test (version sync, runtime) and
+# require the PR's plugin version to be above main's, so two merges never release the same
+# number. A push to main that changes the plugin re-checks every open PR that changes it against
+# the new main: a PR whose version no longer is above it goes red (a failing "version above main"
+# status), so a stale green result never lets it merge (SPEC §9).
+name: logbuy-ci
 
 on:
   pull_request:
+    paths:
+      - plugins/logbuy/**
+      - .github/workflows/logbuy-ci.yml
   push:
     branches: [main]
+    paths:
+      - plugins/logbuy/**
+      - .github/workflows/logbuy-ci.yml
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: logbuy-ci-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
+
+env:
+  PLUGIN_DIR: plugins/logbuy
+
+defaults:
+  run:
+    working-directory: plugins/logbuy
 
 jobs:
   test:
@@ -57,7 +71,7 @@ jobs:
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.3"
-      - name: Mark open PRs whose version is no longer above main's
+      - name: Mark open PRs that change logbuy and whose version is no longer above main's
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bun scripts/stale-prs.ts --repo "$GITHUB_REPOSITORY" --base main
+        run: bun scripts/stale-prs.ts --repo "$GITHUB_REPOSITORY" --base main --dir "$PLUGIN_DIR"

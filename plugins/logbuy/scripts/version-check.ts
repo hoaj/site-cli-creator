@@ -19,7 +19,8 @@ export function versionCheck(root: string, base: string, run: Git = git): CheckR
   if (run(["rev-parse", "--verify", "--quiet", `${base}^{commit}`], root).code !== 0) {
     return { ok: false, message: `base ref ${base} not found: fetch it first (actions/checkout with fetch-depth: 0)` };
   }
-  const shown = run(["show", `${base}:${SOURCE}`], root);
+  // "./" reads the path relative to the plugin root, which is a folder of the repo.
+  const shown = run(["show", `${base}:./${SOURCE}`], root);
   if (shown.code !== 0) return { ok: true, message: `${base} has no ${SOURCE}: version ${head} is the first` };
   const baseVersion = readPin(shown.stdout, "json");
   if (baseVersion === null) return { ok: true, message: `${base}'s ${SOURCE} has no version: version ${head} is the first` };

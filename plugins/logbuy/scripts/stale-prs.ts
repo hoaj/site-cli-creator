@@ -1,9 +1,11 @@
-// bun scripts/stale-prs.ts [--repo <owner/name>] [--base main]
-// Run by ci.yml on every push to main. A PR's green "version above main" check was computed
+// bun scripts/stale-prs.ts [--repo <owner/name>] [--base main] [--dir <plugin dir in the repo>]
+// Run by logbuy-ci.yml on every push to main that changes the plugin. A PR's green "version above main" check was computed
 // against the main it was opened on; once main moves, the same version may no longer be above
 // it. For every open PR into the base branch whose plugin version is not above main's (now),
 // this posts a failing commit status on the PR's head, so the PR goes red (SPEC §9 "A stale PR
 // goes red"), `gh pr checks` fails and nothing merges it until it is rebased and bumped again.
+// The plugin lives in a folder of a repo that holds other plugins (--dir plugins/logbuy): only
+// PRs that change a file in that folder carry a version to compare; the others are left alone.
 import { join } from "node:path";
 import { compareVersions, readPin, SOURCE, sourceVersion } from "./versions";
 
@@ -11,12 +13,12 @@ export type Run = (cmd: string[]) => Promise<string>;
 
 export const STATUS_CONTEXT = "version above main";
 
-type Pull = { number: number; headRefOid: string };
+type Pull = { number: number; headRefOid: string; files?: { path: string }[] };
 
 /** The plugin version a commit carries, or null when it has no readable manifest. */
-async function versionAt(run: Run, repo: string, sha: string): Promise<string | null> {
+async function versionAt(run: Run, repo: string, manifest: string, sha: string): Promise<string | null> {
   try {
-    const content = await run(["gh", "api", `repos/${repo}/contents/${SOURCE}?ref=${sha}`, "--jq", ".content"]);
+    const content = await run(["gh", "api", `repos/${repo}/contents/${manifest}?ref=${sha}`, "--jq", ".content"]);
     return readPin(Buffer.from(content.trim(), "base64").toString("utf8"), "json");
   } catch {
     return null;
@@ -25,19 +27,25 @@ async function versionAt(run: Run, repo: string, sha: string): Promise<string | 
 
 /** Marks every open PR whose version is not above `mainVersion`; returns their numbers. */
 export async function markStalePrs(
-  opts: { repo: string; base: string; mainVersion: string },
+  opts: { repo: string; base: string; mainVersion: string; dir?: string },
   run: Run,
   log: (line: string) => void = console.error,
 ): Promise<number[]> {
   const { repo, base, mainVersion } = opts;
+  const dir = (opts.dir ?? "").replace(/^\.?\/+|\/+$/g, "");
+  const manifest = dir ? `${dir}/${SOURCE}` : SOURCE;
   const pulls = JSON.parse(
-    await run(["gh", "pr", "list", "--repo", repo, "--base", base, "--state", "open", "--limit", "200", "--json", "number,headRefOid"]),
+    await run([
+      "gh", "pr", "list", "--repo", repo, "--base", base, "--state", "open", "--limit", "200",
+      "--json", dir ? "number,headRefOid,files" : "number,headRefOid",
+    ]),
   ) as Pull[];
   const stale: number[] = [];
   for (const pr of pulls) {
-    const version = await versionAt(run, repo, pr.headRefOid);
+    if (dir && !(pr.files ?? []).some((f) => f.path.startsWith(`${dir}/`))) continue;
+    const version = await versionAt(run, repo, manifest, pr.headRefOid);
     if (version === null) {
-      log(`stale-prs: #${pr.number} has no readable ${SOURCE}, skipped`);
+      log(`stale-prs: #${pr.number} has no readable ${manifest}, skipped`);
       continue;
     }
     if (compareVersions(version, mainVersion) > 0) continue;
@@ -69,12 +77,12 @@ if (import.meta.main) {
   const argv = process.argv.slice(2);
   const repo = flag(argv, "--repo") ?? process.env.GITHUB_REPOSITORY;
   if (!repo) {
-    console.error("usage: bun scripts/stale-prs.ts [--repo <owner/name>] [--base main]");
+    console.error("usage: bun scripts/stale-prs.ts [--repo <owner/name>] [--base main] [--dir <plugin dir in the repo>]");
     process.exit(2);
   }
   try {
     const mainVersion = sourceVersion(join(import.meta.dir, ".."));
-    await markStalePrs({ repo, base: flag(argv, "--base") ?? "main", mainVersion }, spawn);
+    await markStalePrs({ repo, base: flag(argv, "--base") ?? "main", mainVersion, dir: flag(argv, "--dir") }, spawn);
   } catch (err) {
     console.error((err as Error).message);
     process.exit(1);

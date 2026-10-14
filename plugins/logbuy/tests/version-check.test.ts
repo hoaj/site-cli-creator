@@ -66,6 +66,21 @@ test("fails loudly when the base ref is missing", () => {
   expect(r.message).toContain("base ref origin/main not found");
 });
 
+test("reads main's manifest from the plugin's folder when the plugin is not the repo root", () => {
+  const root = mkdtempSync(join(tmpdir(), "version-check-"));
+  roots.push(root);
+  const plugin = join(root, "plugins", "demo");
+  git(root, "init", "-q", "-b", "main");
+  setManifest(root, "9.9.9"); // another plugin's manifest at the repo root must not count
+  setManifest(plugin, "0.3.0");
+  git(root, "add", ".");
+  git(root, "commit", "-q", "-m", "main");
+  git(root, "checkout", "-q", "-b", "pr");
+  setManifest(plugin, "0.3.1");
+  git(root, "commit", "-q", "-am", "pr");
+  expect(versionCheck(plugin, "main")).toEqual({ ok: true, message: "version 0.3.1 is above main's 0.3.0" });
+});
+
 test("CLI exits 0 or 1 with the message", () => {
   const ok = Bun.spawnSync([process.execPath, CHECK, "main", "--root", repo("0.1.0", "0.1.1")]);
   expect(ok.exitCode).toBe(0);

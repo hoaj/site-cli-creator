@@ -1,12 +1,12 @@
 ---
 name: logbuy-feedback
-description: Files a problem with the logbuy plugin as a GitHub issue on hoaj/logbuy-plugin, after the user approves the text. Use when a logbuy CLI exits 3 (drift) or 1 (bug), when the plugin cannot do a Task the user needs (a feature request), or when the user says "report this" about it. Not for exit 2 (input), 4 (session) or 5 (network).
+description: Files a problem with the logbuy plugin as a GitHub issue on hoaj/skills (label logbuy), after the user approves the text. Use when a logbuy CLI exits 3 (drift) or 1 (bug), when the plugin cannot do a Task the user needs (a feature request), or when the user says "report this" about it. Not for exit 2 (input), 4 (session) or 5 (network).
 ---
-<!-- version: 0.3.0 -->
+<!-- version: 0.3.1 -->
 
 # logbuy feedback
 
-A CLI skill in this plugin hit Drift or a bug, or it lacks a Task the user needs. Draft one issue for `hoaj/logbuy-plugin`, show it to the user, and file it only on a yes. The maintainer's generator picks it up from there.
+A CLI skill in this plugin hit Drift or a bug, or it lacks a Task the user needs. Draft one issue for `hoaj/skills`, the repo this plugin lives in alongside other plugins, show it to the user, and file it only on a yes. The maintainer's generator picks it up from there.
 
 ## When to use
 
@@ -34,20 +34,20 @@ key=$(cat <<'EOF'
 <key>
 EOF
 )
-gh issue list --repo hoaj/logbuy-plugin --state all --search "\"$key\" in:title" --json number,title,state,labels,closedAt,url
+gh issue list --repo hoaj/skills --state all --search "\"$key\" in:title" --json number,title,state,labels,closedAt,url
 ```
 
-Feature: list open feature requests and judge by meaning.
+Feature: list open logbuy feature requests and judge by meaning.
 
 ```sh
-gh issue list --repo hoaj/logbuy-plugin --state open --label feature --json number,title,url
+gh issue list --repo hoaj/skills --state open --search '"feature: logbuy:" in:title' --json number,title,url
 ```
 
 GitHub's search is fuzzy: for Drift and bug, a match is only an issue whose title is exactly the title step 3 would write (the Fingerprint, or `bug: <bug key>`). For Drift, also note open issues whose title starts with the same `<plugin>:<skill>:<operation>:` (the same Operation, seen another way, such as by `check` instead of a command); they are not matches, but the body names them (step 3). When `gh` is missing or not logged in, skip the search and go to step 3; step 4 gives the user a link instead.
 
 ### 2. Decide what to do
 
-Compare `fixed-in:vX.Y.Z` labels with the envelope's `version` as semantic versions. Several matches are normal (a closed issue and the issue filed when it came back), so take the first row that fits, top to bottom:
+Compare `fixed-in:logbuy-vX.Y.Z` labels (the repo has other plugins: ignore `fixed-in` labels without `logbuy-`) with the envelope's `version` as semantic versions. Several matches are normal (a closed issue and the issue filed when it came back), so take the first row that fits, top to bottom:
 
 | Match | Action | Files a new issue |
 |---|---|---|
@@ -68,7 +68,7 @@ With no open match and several closed ones, judge the closed rows by the most re
 | bug | `bug: <bug key>` | `bug` |
 | feature | `feature: <skill>: <Task in plain words>` | `feature` |
 
-The label lets the maintainer filter the queue; dedup still goes by the exact title (step 1).
+Every issue also gets the label `logbuy`, so the maintainer can tell it from the other plugins in the repo. The labels filter the queue; dedup still goes by the exact title (step 1).
 
 Body for drift and bug:
 
@@ -90,25 +90,25 @@ A `check` envelope with several entries in `drifts` gives one issue per entry, e
 
 ### 4. Ask, then file
 
-Show the user the title, body and the action from step 2 (new issue, +1 or nothing). Say it goes to `hoaj/logbuy-plugin` on GitHub. File or comment only after a yes; on a correction, show the new text and ask again. Drift is no exception.
+Show the user the title, body and the action from step 2 (new issue, +1 or nothing). Say it goes to `hoaj/skills` on GitHub. File or comment only after a yes; on a correction, show the new text and ask again. Drift is no exception.
 
 ```sh
 title=$(cat <<'EOF'
 <title>
 EOF
 )
-gh issue create --repo hoaj/logbuy-plugin --title "$title" --label <label> --body-file - <<'EOF'
+gh issue create --repo hoaj/skills --title "$title" --label logbuy --label <label> --body-file - <<'EOF'
 <body>
 EOF
-gh issue comment <n> --repo hoaj/logbuy-plugin --body "+1 on <version>, <os>"
+gh issue comment <n> --repo hoaj/skills --body "+1 on <version>, <os>"
 ```
 
-Set the title the same byte-exact way as the key in step 1, so the next user's search finds this issue. `<label>` is the one from step 3; if `gh` says the label does not exist (a repo set up before it), file again without `--label`.
+Set the title the same byte-exact way as the key in step 1, so the next user's search finds this issue. `<label>` is the one from step 3; if `gh` says a label does not exist, file again without that `--label`.
 
 Without `gh`, without a login, or when `gh` is refused permission: give the user a pre-filled link to open instead, with the title, body and label URL-encoded:
 
 ```
-https://github.com/hoaj/logbuy-plugin/issues/new?title=<title>&body=<body>&labels=<label>
+https://github.com/hoaj/skills/issues/new?title=<title>&body=<body>&labels=logbuy,<label>
 ```
 
 Duplicates filed this way are caught later by the maintainer through the Fingerprint.

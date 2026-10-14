@@ -6,8 +6,8 @@ import { defineSite, type Auth } from "./runtime/site";
 export default defineSite({
   plugin: "logbuy",
   skill: "logbuy",
-  repo: "hoaj/logbuy-plugin",
-  version: "0.3.0",
+  repo: "hoaj/skills",
+  version: "0.3.1",
   generatedWith: "0.2.1",
   origin: "https://www.mylogbuy.com",
   auth: "login" as Auth,
