@@ -10,7 +10,7 @@ import type { Command } from "./runtime/command";
 import { doctor, type Exec } from "./runtime/doctor";
 import { ContractError, DryRun, EXIT, Failure, emit, errorEnvelope, note, type Surface } from "./runtime/envelope";
 import { bugFrame, bugKey, errorName, redactStack } from "./runtime/fingerprint";
-import { BUILTIN_FLAGS, commandHelp, flagSpecs, help, isWriteCommand, type FlagSpec } from "./runtime/help";
+import { BUILTIN_FLAGS, commandHelp, flagDescription, flagSpecs, GLOBAL_FLAGS, help, isWriteCommand, type FlagSpec } from "./runtime/help";
 import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool } from "./runtime/mcp";
 import { selftest } from "./runtime/selftest";
@@ -160,40 +160,23 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
       commandName = asked.name;
       return ok(asked);
     }
-    const builtinFlags = (name: string) => {
+    // `login` is a built-in only for a skill that signs in; otherwise the word is looked up as a Task.
+    if (Object.hasOwn(BUILTIN_FLAGS, builtin) && (builtin !== "login" || site.auth === "login")) {
+      commandName = builtin;
       if (words.length > 1) throw input(`unexpected argument "${words[1]}"`);
-      return parseFlags(BUILTIN_FLAGS[name], rest);
-    };
-
-    if (builtin === "help") {
-      commandName = "help";
-      builtinFlags("help");
-      return ok(help(site, app.commands));
-    }
-    if (builtin === "version") {
-      commandName = "version";
-      builtinFlags("version");
-      return ok({ plugin: site.plugin, skill: site.skill, version: site.version });
-    }
-    if (builtin === "doctor") {
-      commandName = "doctor";
-      builtinFlags("doctor");
-      return ok(await doctor(site, { env: deps.env, exec: app.exec, compiled: compiled() }));
-    }
-    if (builtin === "selftest") {
+      const f = parseFlags(BUILTIN_FLAGS[builtin]!, rest);
+      if (builtin === "help") return ok(help(site, app.commands));
+      if (builtin === "version") return ok({ plugin: site.plugin, skill: site.skill, version: site.version });
+      if (builtin === "doctor") return ok(await doctor(site, { env: deps.env, exec: app.exec, compiled: compiled() }));
       // Hidden built-in for the generator's platform smoke test (SPEC §9); not listed by help.
-      commandName = "selftest";
-      const f = builtinFlags("selftest");
-      return ok(await selftest({ url: f.url as string | undefined, chrome: !f["no-chrome"], fetch: deps.fetch, env: deps.env }));
-    }
-    if (builtin === "check") {
-      commandName = "check";
-      const f = builtinFlags("check");
-      return ok(await check(client, app.operations, { op: f.op as string | undefined, writes: !!f.writes, account }, app.checkWrites));
-    }
-    if (builtin === "login" && site.auth === "login") {
-      commandName = "login";
-      const raw = builtinFlags("login")["from-profile"] as string | undefined;
+      if (builtin === "selftest") return ok(await selftest({ url: f.url as string | undefined, chrome: !f["no-chrome"], fetch: deps.fetch, env: deps.env }));
+      if (builtin === "check") return ok(await check(client, app.operations, { op: f.op as string | undefined, writes: !!f.writes, account }, app.checkWrites));
+      if (builtin === "mcp") {
+        if (account !== undefined || confirm) throw input("mcp takes no flags; account and confirm are arguments of each tool call");
+        return { output: null, code: EXIT.ok, serve: "mcp" };
+      }
+      // login
+      const raw = f["from-profile"] as string | undefined;
       if (raw === undefined) {
         const session = await client.signIn(false);
         if (!session) throw new Failure("session", `Sign-in to ${site.origin} did not complete; run login again and finish signing in in the Chrome window.`);
@@ -208,13 +191,6 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
         );
       }
       return ok({ loggedIn: true, fromProfile: true, stateDir: client.dir, ids: Object.keys(session.ids) });
-    }
-
-    if (builtin === "mcp") {
-      commandName = "mcp";
-      builtinFlags("mcp");
-      if (account !== undefined || confirm) throw input("mcp takes no flags; account and confirm are arguments of each tool call");
-      return { output: null, code: EXIT.ok, serve: "mcp" };
     }
 
     const name = words.slice(0, 2).join(" ");
@@ -254,7 +230,7 @@ function failed(e: unknown, site: Site, commandName: string, surface: Surface = 
   return { output: errorEnvelope(bug, site, surface), code: EXIT.bug };
 }
 
-const MCP_ACCOUNT = z.string().min(1).optional().describe("which account to act for, when the login has several");
+const MCP_ACCOUNT = z.string().min(1).optional().describe(flagDescription(GLOBAL_FLAGS, "account"));
 const MCP_CONFIRM = z.boolean().optional().describe("send the write; without it the tool returns a dry run to show the user first");
 
 /** `loginWaitMs`: how long the login tool waits for the sign-in before answering signingIn (below an MCP client's request timeout). */
@@ -343,8 +319,8 @@ export function mcpServer(app: App, options: McpOptions = {}) {
     : [];
 
   const checkSchema = z.object({
-    op: z.string().optional().describe("check one Operation and the chain it needs"),
-    writes: z.boolean().optional().describe("also check write Operations in headless Chrome (aborted, never sent)"),
+    op: z.string().optional().describe(flagDescription(BUILTIN_FLAGS.check!, "op")),
+    writes: z.boolean().optional().describe(flagDescription(BUILTIN_FLAGS.check!, "writes")),
     account: MCP_ACCOUNT,
   }).strict();
 
