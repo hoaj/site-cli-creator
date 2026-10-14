@@ -12,17 +12,15 @@ import { parseFlags } from "./lib/args";
 import { draftOperation, operationFileName } from "./lib/draft";
 import { fail, runTool } from "./lib/output";
 import { mergeOperation, type OperationShape } from "./lib/recorder";
+import { parseJson } from "./lib/shape";
 
 const USAGE = "bun tools/draft-contract.ts <shape.json> [--name <op>] [--out <file.ts>]";
 
 function parseShape(path: string): OperationShape | null {
-  try {
-    const shape = JSON.parse(readFileSync(path, "utf8"));
-    if (!shape || typeof shape.operation !== "string" || !Array.isArray(shape.responses) || !shape.request) return null;
-    return shape as OperationShape;
-  } catch {
-    return null;
-  }
+  const parsed = parseJson(readFileSync(path, "utf8"));
+  const shape = parsed.ok ? (parsed.value as any) : null;
+  if (!shape || typeof shape.operation !== "string" || !Array.isArray(shape.responses) || !shape.request) return null;
+  return shape as OperationShape;
 }
 
 function readShape(path: string): OperationShape {

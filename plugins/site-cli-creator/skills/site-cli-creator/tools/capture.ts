@@ -6,12 +6,13 @@
 // memory and is never written anywhere. A read Task aborts every write on every
 // host except sign-in steps; --write lets the Task's one write through.
 
-import { existsSync, mkdirSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium, type BrowserContext, type Page, type Request } from "playwright-core";
 import { parseFlags, requireKebab } from "./lib/args";
+import { writeJson } from "./lib/manifests";
 import { fail, progress, runTool } from "./lib/output";
 import { CaptureRecorder, markers, shapeFileNames, type Planned } from "./lib/recorder";
 import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
@@ -369,7 +370,7 @@ await runTool(async () => {
   const files = shapeFileNames(operations, new URL(origin).hostname);
   mkdirSync(dir, { recursive: true });
   clearPreviousCapture(dir);
-  operations.forEach((op, i) => writeFileSync(join(dir, files[i] as string), `${JSON.stringify(op, null, 2)}\n`));
+  operations.forEach((op, i) => writeJson(join(dir, files[i] as string), op));
   // Host names only: where the sign-in went, so site.ts login.hosts can list them.
   const signInHosts = [...recorder.signInHosts].sort();
   const index = {
@@ -391,7 +392,7 @@ await runTool(async () => {
       aborted: op.aborted,
     })),
   };
-  writeFileSync(join(dir, "index.json"), `${JSON.stringify(index, null, 2)}\n`);
+  writeJson(join(dir, "index.json"), index);
 
   if (scriptError) fail(`--script failed: ${scriptError.message.split("\n")[0]} (shapes so far written to ${dir})`);
   const blockedElsewhere = [...recorder.blockedElsewhere].sort();
