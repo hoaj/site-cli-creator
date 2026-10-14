@@ -53,6 +53,7 @@ export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   mcp: [
     flag("http", "boolean", "remote mode: serve over HTTP behind the Owner's sign-in, for web and phone clients. Needs OWNER_PASSWORD (12+ characters) or OWNER_PASSWORD_HASH, and PUBLIC_URL (https; http only on localhost). Without it, local mode over stdio"),
     flag("port", "number", "the HTTP port in remote mode (default: PORT, else 8080)"),
+    flag("hash-password", "boolean", "read the Owner password on stdin and print the OWNER_PASSWORD_HASH to set on the host instead of OWNER_PASSWORD"),
   ],
   login: [flag("from-profile", "string", "reuse the sign-in another Chrome profile holds (the Capture tool's ~/.site-cli-creator/profile) instead of signing in again")],
   check: [flag("op", "string", "check one Operation and the chain it needs"), flag("writes", "boolean", "also check write Operations in headless Chrome (aborted, never sent)")],

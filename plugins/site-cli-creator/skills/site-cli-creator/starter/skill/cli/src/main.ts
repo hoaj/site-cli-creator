@@ -13,7 +13,7 @@ import { bugFrame, bugKey, errorName, redactStack } from "./runtime/fingerprint"
 import { BUILTIN_FLAGS, commandHelp, flagDescription, flagSpecs, GLOBAL_FLAGS, help, isWriteCommand, type FlagSpec } from "./runtime/help";
 import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
-import { remoteConfig, type RemoteConfig } from "./runtime/remote-config";
+import { hashPassword, MIN_PASSWORD_LENGTH, remoteConfig, type RemoteConfig } from "./runtime/remote-config";
 import { selftest } from "./runtime/selftest";
 import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir } from "./runtime/session";
 import type { Operation } from "./runtime/operation";
@@ -27,6 +27,8 @@ export type App = {
   deps?: Partial<Deps>;
   checkWrites?: WriteChecker;
   exec?: Exec;
+  /** All of stdin as text (`mcp --hash-password`); tests pass their own. */
+  readStdin?: () => Promise<string>;
 };
 /**
  * `serve`: the run starts a server instead of printing one document (the `mcp` built-in): local
@@ -177,6 +179,13 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
       if (builtin === "check") return ok(await check(client, app.operations, { op: f.op as string | undefined, writes: !!f.writes, account }, app.checkWrites));
       if (builtin === "mcp") {
         if (account !== undefined || confirm) throw input("mcp takes no --account or --confirm; account and confirm are arguments of each tool call");
+        if (f["hash-password"]) {
+          if (f.http || f.port !== undefined) throw input("--hash-password takes no other flags");
+          // The password comes on stdin, so it stays out of the shell's history and the process list.
+          const password = (await (app.readStdin ?? (() => Bun.stdin.text()))()).replace(/\r?\n$/, "");
+          if (password.length < MIN_PASSWORD_LENGTH) throw input(`the Owner password must be at least ${MIN_PASSWORD_LENGTH} characters`);
+          return ok({ OWNER_PASSWORD_HASH: hashPassword(password) });
+        }
         if (f.port !== undefined && !f.http) throw input("--port is for remote mode; pass it with --http");
         if (!f.http) return { output: null, code: EXIT.ok, serve: "mcp" };
         // Remote mode: the host's settings are checked here, so a missing password is one input envelope.
@@ -383,7 +392,14 @@ export async function main(argv: string[], app: App): Promise<never> {
     // Loaded only here, so local mode and every CLI command never load the SDK or Express.
     const { serveHttp } = await import("./runtime/remote");
     const deps = defaultDeps(app);
-    const server = await serveHttp({ ...mcpTools(app), site: app.site, config: result.remote, dir: ensureStateDir(stateDir(app.site, deps.env)), note });
+    let server: Awaited<ReturnType<typeof serveHttp>>;
+    try {
+      server = await serveHttp({ ...mcpTools(app), site: app.site, config: result.remote, dir: ensureStateDir(stateDir(app.site, deps.env)), note });
+    } catch (e) {
+      // A port in use or an unreadable oauth.json is still one envelope on stdout, never a stack trace.
+      const { output, code } = failed(e, app.site, "mcp");
+      return emit(output, code);
+    }
     await new Promise<void>((resolve) => {
       process.once("SIGTERM", resolve);
       process.once("SIGINT", resolve);

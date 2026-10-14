@@ -8,6 +8,7 @@ import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/
 import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { Failure } from "./envelope";
 import { inputSchema, toolResult, type McpTool, type ServerInfo } from "./mcp";
 import { OAuthStore, OwnerProvider, failedPage, returningPage, signedInPage } from "./owner-auth";
 import { redirectAllowed, type RemoteConfig } from "./remote-config";
@@ -26,7 +27,7 @@ export type ServeOptions = {
   now?: () => number;
 };
 
-export type RemoteServer = { url: string; store: OAuthStore; close(): Promise<void> };
+export type RemoteServer = { url: string; store: OAuthStore; provider: OwnerProvider; close(): Promise<void> };
 
 /** Origins a browser-borne request to /mcp may come from; a request without Origin is served. */
 const CLIENT_ORIGINS = ["https://claude.ai"];
@@ -75,7 +76,8 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
   };
 
   const app = express();
-  app.set("trust proxy", 1); // behind the host's proxy, req.ip is the client (rate limits, lockout)
+  // req.ip feeds the lockout and the SDK's rate limits: trust X-Forwarded-For only from the proxies in front.
+  app.set("trust proxy", config.trustProxy);
   app.disable("x-powered-by");
   app.use((_req, res, next) => {
     res.set({
@@ -140,13 +142,18 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
   app.delete("/mcp", origin, bearer, stateless);
 
   const http: HttpServer = await new Promise((resolve, reject) => {
-    const s = app.listen(config.port, o.host ?? "0.0.0.0", (err?: Error) => (err ? reject(err) : resolve(s)));
-    s.once("error", reject);
+    const fail = (err: NodeJS.ErrnoException) =>
+      reject(new Failure("input", err.code === "EADDRINUSE" ? `port ${config.port} is already in use` : `cannot listen on port ${config.port} (${err.code ?? err.message})`, {
+        next: "Choose a free port with --port or PORT, then start `mcp --http` again.",
+      }));
+    const s = app.listen(config.port, o.host ?? "0.0.0.0", (err?: Error) => (err ? fail(err) : resolve(s)));
+    s.once("error", fail);
   });
   note(`remote mode: listening on port ${config.port}; clients connect to ${mcpUrl.href}`);
   return {
     url: mcpUrl.href,
     store,
+    provider,
     close: () =>
       new Promise<void>((resolve) => {
         http.closeAllConnections?.();
