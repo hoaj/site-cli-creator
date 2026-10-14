@@ -4,7 +4,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { findChrome, installHint } from "./chrome";
 import { osName } from "./envelope";
-import { loadSession, stateDir } from "./session";
+import { legacyStateDir, loadSession, stateDir } from "./session";
 import type { Env, Site } from "./site";
 
 export type Exec = (cmd: string[]) => Promise<{ code: number; stdout: string }>;
@@ -29,6 +29,8 @@ export type DoctorOptions = {
   exists?: (path: string) => boolean;
   /** The plugin's generated.json; by default found from the binary (bin/ → plugin root) or the source tree. */
   generatedJson?: string;
+  /** The user's home dir (tests). */
+  home?: string;
 };
 
 /**
@@ -90,7 +92,11 @@ export async function doctor(site: Site, options: DoctorOptions = {}) {
   const platform = options.platform ?? process.platform;
   const execPath = options.execPath ?? process.execPath;
   const exists = options.exists ?? existsSync;
-  const dir = stateDir(site, env);
+  const dir = stateDir(site, env, options.home);
+  // An older build's ~/.<plugin>-<plugin>/ still there beside ~/.<plugin>/: run() moves it only
+  // when the new dir doesn't exist, so it is never merged or deleted (SPEC §7).
+  const legacy = legacyStateDir(site, env, options.home);
+  const oldStateDir = legacy && exists(legacy) && exists(dir) ? { oldStateDir: `${legacy}: left alone and not used (an older build's state dir); ${dir} is used` } : {};
   const generated = readGenerated(options.generatedJson ?? generatedJsonPath(!!options.compiled, execPath), site, exists);
 
   let session: string;
@@ -139,6 +145,7 @@ export async function doctor(site: Site, options: DoctorOptions = {}) {
     os: osName(platform),
     auth: site.auth,
     stateDir: dir,
+    ...oldStateDir,
     session,
     chrome,
     gh,

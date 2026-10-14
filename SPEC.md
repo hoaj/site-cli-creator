@@ -123,7 +123,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 
 - **Every CLI skill declares `auth` in `site.ts`:** `"login"` or `"none"`. The generator asks at `add-skill` and confirms it from the Capture. A plugin can mix both kinds. The rest of this section describes `auth: "login"`. `auth: "none"` is at the end.
 - **Chrome only runs for `login`, the session refresh and `check`'s write checks.** Every command, including write commands, uses plain `fetch`.
-- **State** lives in `~/.<plugin>-<skill>/` with mode 0700. The path and mode are spec choices: the path avoids collisions between two plugins whose CLI skills share a name. It holds:
+- **State** lives in `~/.<plugin>/` when the CLI skill is named after its plugin (as `new` names a plugin's first skill), else in `~/.<plugin>-<skill>/`, with mode 0700. The path and mode are spec choices: naming the plugin avoids collisions between two plugins whose CLI skills share a name, without doubling the name for a plugin's own skill ([State dir doubles the name](https://github.com/hoaj/skills/issues/44)). Builds before generator 0.2.1 used `~/.<plugin>-<plugin>/`; on its first run the CLI moves that dir to `~/.<plugin>/` (a rename, so the modes and the sign-in carry over) when `~/.<plugin>/` doesn't exist yet. It never merges or deletes: if both exist, it uses `~/.<plugin>/`, leaves the old one alone, and `doctor` names it. It holds:
   - `profile/`: a Chrome user-data dir owned by the tool. Chrome 136+ refuses automation on the default profile.
   - `session.json` (0600): the bearer, the cookie, and the chain-root ids.
 
