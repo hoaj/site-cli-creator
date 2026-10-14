@@ -1,0 +1,34 @@
+{
+  "operation": "POST /auth/signin",
+  "kind": "rest",
+  "effect": "write",
+  "loginFlow": true,
+  "resourceType": "fetch",
+  "host": "www.mylogbuy.com",
+  "method": "POST",
+  "path": "/auth/signin",
+  "request": {
+    "headers": {
+      "accept": "text/x-component",
+      "baggage": null,
+      "content-type": "multipart/form-data",
+      "cookie": null,
+      "next-action": null,
+      "next-router-state-tree": null,
+      "origin": null,
+      "referer": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "user-agent": null,
+      "x-deployment-id": null
+    },
+    "body": {
+      "kind": "multipart"
+    }
+  },
+  "responses": [],
+  "seen": 1,
+  "aborted": 0
+}

@@ -1,0 +1,164 @@
+{
+  "task": "deal-search",
+  "startPath": "/",
+  "write": false,
+  "operations": [
+    {
+      "operation": "GET /",
+      "kind": "rest",
+      "effect": "read",
+      "navigation": true,
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/",
+      "file": "GET-root.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /auth/signin",
+      "kind": "rest",
+      "effect": "read",
+      "navigation": true,
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/auth/signin",
+      "file": "GET-auth-signin.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "POST /auth/signin",
+      "kind": "rest",
+      "effect": "write",
+      "loginFlow": true,
+      "method": "POST",
+      "host": "www.mylogbuy.com",
+      "path": "/auth/signin",
+      "file": "POST-auth-signin.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/content-set-configs",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/content-set-configs",
+      "file": "GET-api-content-set-configs.shape.json",
+      "seen": 8,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/notifications/unread-count",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/notifications/unread-count",
+      "file": "GET-api-notifications-unread-count.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /search",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/search",
+      "file": "GET-search.shape.json",
+      "seen": 3,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /legal/terms-of-service",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/legal/terms-of-service",
+      "file": "GET-legal-terms-of-service.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /partner/:id",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/partner/:id",
+      "file": "GET-partner-id.shape.json",
+      "seen": 15,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/search/suppliers",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/search/suppliers",
+      "file": "GET-api-search-suppliers.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "anonymous",
+      "kind": "graphql",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/search/suppliers",
+      "file": "anonymous.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "POST /search",
+      "kind": "rest",
+      "effect": "write",
+      "method": "POST",
+      "host": "www.mylogbuy.com",
+      "path": "/search",
+      "file": "POST-search.shape.json",
+      "seen": 12,
+      "aborted": 12
+    },
+    {
+      "operation": "GET /profile",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile",
+      "file": "GET-profile.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /legal/privacy-policy",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/legal/privacy-policy",
+      "file": "GET-legal-privacy-policy.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /profile/favorites",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile/favorites",
+      "file": "GET-profile-favorites.shape.json",
+      "seen": 1,
+      "aborted": 0
+    }
+  ]
+}

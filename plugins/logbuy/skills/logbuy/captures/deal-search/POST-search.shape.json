@@ -1,0 +1,47 @@
+{
+  "operation": "POST /search",
+  "kind": "rest",
+  "effect": "write",
+  "resourceType": "fetch",
+  "host": "www.mylogbuy.com",
+  "method": "POST",
+  "path": "/search",
+  "request": {
+    "headers": {
+      "accept": "text/x-component",
+      "baggage": null,
+      "content-type": "text/plain",
+      "cookie": null,
+      "next-action": null,
+      "next-router-state-tree": null,
+      "origin": null,
+      "referer": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "user-agent": null,
+      "x-deployment-id": null
+    },
+    "query": {
+      "type": "object",
+      "fields": {
+        "q": {
+          "type": "string"
+        }
+      }
+    },
+    "body": {
+      "kind": "json",
+      "shape": {
+        "type": "array",
+        "items": {
+          "type": "number"
+        }
+      }
+    }
+  },
+  "responses": [],
+  "seen": 12,
+  "aborted": 12
+}

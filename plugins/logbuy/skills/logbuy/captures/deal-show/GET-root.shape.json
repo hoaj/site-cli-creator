@@ -1,0 +1,37 @@
+{
+  "operation": "GET /",
+  "kind": "rest",
+  "effect": "read",
+  "resourceType": "fetch",
+  "host": "www.mylogbuy.com",
+  "method": "GET",
+  "path": "/",
+  "request": {
+    "headers": {
+      "accept": "*/*",
+      "baggage": null,
+      "cookie": null,
+      "next-router-state-tree": null,
+      "next-url": null,
+      "referer": null,
+      "rsc": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "user-agent": null,
+      "x-deployment-id": null
+    },
+    "query": {
+      "type": "object",
+      "fields": {
+        "_rsc": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "responses": [],
+  "seen": 2,
+  "aborted": 0
+}
