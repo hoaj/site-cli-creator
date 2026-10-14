@@ -3,6 +3,7 @@
 // commands the CLI runs, so a tool result is exactly what the command prints: its result, a
 // dry run, or an error envelope. Nothing else may reach stdout; progress stays on stderr.
 import { z } from "zod";
+import { render } from "./envelope";
 
 /** Protocol versions this server speaks, newest first. A client asking for another gets the first. */
 export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
@@ -33,11 +34,11 @@ export function inputSchema(schema: z.ZodObject): Record<string, unknown> {
   return json;
 }
 
-/** A tool's output as MCP content: the JSON as text, an object also as structured content. */
+/** A tool's output as MCP content: the JSON as text (the CLI's own rendering), an object also as structured content. */
 export function toolResult(output: unknown, code: number) {
   const structured = output !== null && typeof output === "object" && !Array.isArray(output);
   return {
-    content: [{ type: "text", text: JSON.stringify(output ?? null, null, 2) }],
+    content: [{ type: "text", text: render(output ?? null).trimEnd() }],
     ...(structured && { structuredContent: output }),
     ...(code !== 0 && { isError: true }),
   };
@@ -97,7 +98,9 @@ export type McpServer = ReturnType<typeof createMcpServer>;
 
 /**
  * Serves stdin to stdout until stdin ends. Messages are handled one at a time, in order, so two
- * tool calls never refresh the same session at once. A line that is no JSON gets -32700.
+ * tool calls never refresh the same session at once. A line that is no JSON gets -32700, a message
+ * the server throws on gets -32603, and a write that fails (the client closed the pipe: EPIPE)
+ * ends the loop quietly, like emit().
  */
 export async function serveStdio(
   server: McpServer,
@@ -106,28 +109,43 @@ export async function serveStdio(
 ): Promise<void> {
   const decoder = new TextDecoder();
   let buffered = "";
+  let closed = false;
+  const send = async (msg: object) => {
+    try {
+      await write(JSON.stringify(msg) + "\n");
+    } catch {
+      closed = true;
+    }
+  };
   const answer = async (line: string) => {
     if (!line.trim()) return;
     let parsed: unknown;
     try {
       parsed = JSON.parse(line);
     } catch {
-      return write(JSON.stringify(failure(null, -32700, "Parse error")) + "\n");
+      return send(failure(null, -32700, "Parse error"));
     }
-    const res = await server.handle(parsed);
-    if (res) await write(JSON.stringify(res) + "\n");
+    let res: object | null;
+    try {
+      res = await server.handle(parsed);
+    } catch {
+      const id = (parsed as Message | null)?.id;
+      res = failure(isId(id) ? id : null, -32603, "Internal error in the MCP server");
+    }
+    if (res) await send(res);
   };
   const reader = input.getReader();
-  for (;;) {
+  while (!closed) {
     const { done, value } = await reader.read();
     if (done) break;
     buffered += decoder.decode(value, { stream: true });
     let nl: number;
-    while ((nl = buffered.indexOf("\n")) >= 0) {
+    while (!closed && (nl = buffered.indexOf("\n")) >= 0) {
       const line = buffered.slice(0, nl).replace(/\r$/, "");
       buffered = buffered.slice(nl + 1);
       await answer(line);
     }
   }
-  await answer(buffered + decoder.decode());
+  if (!closed) await answer(buffered + decoder.decode());
+  reader.releaseLock();
 }

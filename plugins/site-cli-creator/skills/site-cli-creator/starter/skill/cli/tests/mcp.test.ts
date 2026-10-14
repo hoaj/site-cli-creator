@@ -1,7 +1,12 @@
 // The `mcp` built-in: the same Task commands as MCP tools over stdio, through main's mcpServer().
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { z } from "zod";
 import { mcpServer, run } from "../src/main";
+import { defineCommand } from "../src/runtime/command";
+import { Failure } from "../src/runtime/envelope";
+import { serveStdio } from "../src/runtime/mcp";
 import { saveSession } from "../src/runtime/session";
 import { fakeFetch, happySite, json, loginSite, makeApp, makeDeps, makeSite, tempHome } from "./helpers";
 
@@ -178,6 +183,61 @@ describe("tools/call", () => {
     expect(loginCalls).toEqual([false]);
   });
 
+  test("with no saved sign-in, a tool fails with session at once and never launches Chrome", async () => {
+    const { server, loginCalls } = await serverFor(loginSite(), happySite, [{ authorization: "Bearer x" }]);
+    rmSync(join(home.dir, "session.json"));
+    const { error } = textOf(await callTool(server, "products_show", {}));
+    expect(error.kind).toBe("session");
+    expect(error.next).toContain("login tool");
+    expect(loginCalls).toEqual([]);
+  });
+
+  test("several accounts: the error names the account argument, never the --account flag", async () => {
+    const site = makeSite({ accounts: async () => [{ id: "A1", label: "One" }, { id: "A2", label: "Two" }] });
+    const { server } = await serverFor(site);
+    const { error } = textOf(await callTool(server, "products_show", {}));
+    expect(error.kind).toBe("input");
+    expect(error.accounts).toHaveLength(2);
+    expect(error.message).not.toContain("--account");
+    expect(error.message).toContain("account argument");
+    const wrong = textOf(await callTool(server, "products_show", { account: "A9" })).error;
+    expect(wrong.message).not.toContain("--account");
+  });
+
+  test("login does not hold the server: an unfinished sign-in returns signingIn, and other calls are answered", async () => {
+    const f = fakeFetch(happySite);
+    const d = makeDeps(f.fetch, home.dir);
+    const headedCalls: boolean[] = [];
+    d.deps.login = async (headless) => {
+      headedCalls.push(headless);
+      return headless ? null : new Promise(() => {});
+    };
+    const server = mcpServer(makeApp(loginSite(), d.deps), { loginWaitMs: 5 });
+    const first = textOf(await callTool(server, "login"));
+    expect(first.signingIn).toBe(true);
+    const busy = textOf(await callTool(server, "products_show", {})).error;
+    expect(busy.kind).toBe("session");
+    expect(busy.next).toContain("Chrome window");
+    expect(textOf(await callTool(server, "login")).signingIn).toBe(true);
+    expect(headedCalls).toEqual([false]);
+    const pong: any = await server.handle(request("ping"));
+    expect(pong.result).toEqual({});
+  });
+
+  test("a login that fails on its own (no Chrome) tells the user why instead of pointing back at login", async () => {
+    const f = fakeFetch(happySite);
+    const d = makeDeps(f.fetch, home.dir);
+    d.deps.login = async () => {
+      throw new Failure("session", "Google Chrome was not found (looked at /nowhere). Install Google Chrome.");
+    };
+    const server = mcpServer(makeApp(loginSite(), d.deps));
+    const { error } = textOf(await callTool(server, "login"));
+    expect(error.kind).toBe("session");
+    expect(error.message).toContain("Google Chrome was not found");
+    expect(error.next).not.toContain("Call the login tool");
+    expect(error.next).toContain("Tell the user");
+  });
+
   test("check runs as a tool", async () => {
     const { server } = await serverFor();
     const out = textOf(await callTool(server, "check", { op: "getCustomer" }));
@@ -229,10 +289,33 @@ describe("over stdio", () => {
     expect(docs[2].result.tools.map((t: any) => t.name)).toContain("big_list");
   });
 
-  test("`mcp` takes no flags", async () => {
+  test("`mcp` takes no flags, global ones included", async () => {
     const f = fakeFetch(happySite);
-    const { output, code } = await run(["mcp", "--x"], makeApp(makeSite(), makeDeps(f.fetch, home.dir).deps));
-    expect(code).toBe(2);
-    expect((output as any).error.kind).toBe("input");
+    const app = makeApp(makeSite(), makeDeps(f.fetch, home.dir).deps);
+    for (const argv of [["mcp", "--x"], ["mcp", "--confirm"], ["mcp", "--account", "A1"]]) {
+      const { output, code } = await run(argv, app);
+      expect(code, argv.join(" ")).toBe(2);
+      expect((output as any).error.kind).toBe("input");
+    }
+  });
+
+  test("a Task command whose noun is a built-in's name still runs from the CLI", async () => {
+    const f = fakeFetch(happySite);
+    const mcpList = defineCommand({ name: "mcp list", summary: "The site's MCP feature", args: z.object({}), uses: [], run: async () => ({ listed: true }) });
+    const app = makeApp(makeSite(), makeDeps(f.fetch, home.dir).deps);
+    const { output, code } = await run(["mcp", "list"], { ...app, commands: [...app.commands, mcpList] });
+    expect(code).toBe(0);
+    expect(output).toEqual({ listed: true });
+  });
+
+  test("serveStdio keeps going when a message makes the server throw, and stops quietly when output closes", async () => {
+    const lines: string[] = [];
+    const throwing = { handle: async () => { throw new Error("boom"); } } as unknown as ReturnType<typeof mcpServer>;
+    const input = (text: string) => new Blob([text]).stream();
+    await serveStdio(throwing, input(JSON.stringify(request("tools/list")) + "\n"), async (l) => void lines.push(l));
+    expect(JSON.parse(lines[0]!)).toMatchObject({ error: { code: -32603 } });
+    const { server } = await serverFor();
+    const closed = async () => { throw Object.assign(new Error("EPIPE"), { code: "EPIPE" }); };
+    await expect(serveStdio(server, input(JSON.stringify(request("ping")) + "\n" + JSON.stringify(request("ping")) + "\n"), closed)).resolves.toBeUndefined();
   });
 });
