@@ -70,6 +70,7 @@ The plugin version starts at `0.1.0` and is written by the generator directly (n
   scripts/bump.ts                 STARTER  bun run bump <patch|minor|major>
   scripts/version-check.ts        STARTER  fails when the PR's version is not above main's
   scripts/stale-prs.ts            STARTER  failing "version above main" status on every open PR whose version is not above main's
+  scripts/run.ts                  STARTER  command runner and --flag lookup shared by stale-prs.ts and fixed-in.ts
   tests/version-sync.test.ts      STARTER  every pin (4 manifests, SKILL.md comments, cli/package.json, site.ts version) equals .claude-plugin/plugin.json's
   generated.json                  GENERATED {"generatedWith": "...", "maintainer": "..."}
   README.md                       GENERATED
