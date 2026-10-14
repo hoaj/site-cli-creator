@@ -12,6 +12,12 @@ export type Session = {
   ids: Record<string, string>;
   /** Account ids only: labels come from the site and are never saved. */
   accounts?: Pick<Account, "id">[];
+  /**
+   * The Chrome profile `login --from-profile` signed in from (an absolute path, no cookie). The
+   * silent refresh and `check --writes` seed their Chrome from it again, since the CLI's own
+   * profile/ holds no sign-in then.
+   */
+  fromProfile?: string;
   savedAt: string;
 };
 

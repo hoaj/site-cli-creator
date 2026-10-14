@@ -13,8 +13,9 @@
 // | other non-2xx                                          | drift http                           |
 // | response fails Zod                                     | drift zod (path, Zod issue code)     |
 // | anything else thrown                                   | bug (caught in main)                 |
+import { existsSync } from "node:fs";
 import type { Call } from "./command";
-import { ContractError, DryRun, Failure, type Account, type DiffEntry } from "./envelope";
+import { ContractError, DryRun, Failure, type Account, type DiffEntry, type Surface } from "./envelope";
 import { driftFingerprint, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, type Session } from "./session";
@@ -44,6 +45,12 @@ export type ClientOptions = {
   session?: Session;
   /** false: an auth failure is Drift at once, with no sign-in or bootstrap rerun. */
   reauth?: boolean;
+  /**
+   * "mcp": a tool call of the MCP server. It never opens a headed sign-in (no saved session: session
+   * at once, without Chrome; the headless refresh failed: session), and its messages name tool
+   * arguments instead of CLI flags.
+   */
+  surface?: Surface;
 };
 
 export type Request = { method: string; url: string; headers: Record<string, string>; body?: string };
@@ -161,6 +168,7 @@ export class Client {
   fresh = false;
   private session: Session | null;
   private readonly reauthAllowed: boolean;
+  private readonly surface: Surface;
   private persisted: boolean;
   /** The account list fetched in this run, labels included. Only the ids are saved (SPEC §7). */
   private fetchedAccounts?: Account[];
@@ -172,6 +180,7 @@ export class Client {
     this.session = options.session ?? null;
     this.persisted = !options.session;
     this.reauthAllowed = options.reauth ?? true;
+    this.surface = options.surface ?? "cli";
     if (options.reauth === false) this.fresh = true;
   }
 
@@ -187,6 +196,10 @@ export class Client {
   async ensureSession(): Promise<Session> {
     const cached = this.peek();
     if (cached) return cached;
+    if (this.site.auth === "login" && this.surface === "mcp") {
+      // Never signed in: nothing for a headless refresh to find, so don't spend Chrome launches on it.
+      throw new Failure("session", `There is no sign-in to ${this.site.origin} yet.`);
+    }
     if (this.site.auth === "login") return this.signInOrFail();
     if (this.site.bootstrap && this.reauthAllowed) return this.bootstrap();
     this.session = { headers: {}, ids: {}, savedAt: new Date().toISOString() };
@@ -214,19 +227,43 @@ export class Client {
     const raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
     const ids: Record<string, string> = {};
     for (const [k, v] of Object.entries(raw ?? {})) if (v !== undefined && v !== null) ids[k] = String(v);
-    this.session = saveSession(this.dir, { headers, ids });
+    this.session = saveSession(this.dir, { headers, ids, ...(options?.fromProfile && { fromProfile: options.fromProfile }) });
     this.persisted = true;
     this.fresh = true;
     return this.session;
   }
 
+  /**
+   * The Chrome profile the current sign-in came from with `login --from-profile`, while it still
+   * exists; undefined when the CLI's own profile holds the sign-in.
+   */
+  fromProfile(): string | undefined {
+    const dir = this.peek()?.fromProfile;
+    return dir && existsSync(dir) ? dir : undefined;
+  }
+
   private async signInOrFail(): Promise<Session> {
+    const from = this.fromProfile();
+    if (from) {
+      // login --from-profile left the CLI's own profile signed out: refresh from the profile it used.
+      this.deps.note(`signing in again from ${from}, the profile login --from-profile used (headless, in memory)`);
+      const seeded = await this.signIn(true, { fromProfile: from }).catch((e) => {
+        if (e instanceof Failure && e.kind === "input") return null; // that profile is busy (a Capture runs on it)
+        throw e;
+      });
+      if (seeded) return seeded;
+    }
     this.deps.note("signing in again from the Chrome profile (headless)");
     const refreshed = await this.signIn(true);
     if (refreshed) return refreshed;
-    if (nonInteractive(this.deps.env)) {
-      // An agent with no person at the keyboard: fail now instead of waiting for a headed sign-in.
-      throw new Failure("session", `The saved sign-in to ${this.site.origin} has expired and SITE_CLI_NONINTERACTIVE=1 is set, so Chrome was not opened.`);
+    if (this.surface === "mcp" || nonInteractive(this.deps.env)) {
+      // No person waiting at a Chrome window (an MCP tool call, or an agent): fail now instead of waiting for a headed sign-in.
+      throw new Failure(
+        "session",
+        this.surface === "mcp"
+          ? `The saved sign-in to ${this.site.origin} has expired, and a tool call does not open Chrome to sign in.`
+          : `The saved sign-in to ${this.site.origin} has expired and SITE_CLI_NONINTERACTIVE=1 is set, so Chrome was not opened.`,
+      );
     }
     this.deps.note("opening Chrome: sign in there to continue");
     const s = await this.signIn(false);
@@ -307,13 +344,13 @@ export class Client {
       // The cached list may predate an account the user added since: look again before refusing.
       if (list.length > 0 && !list.some((a) => a.id === requested)) list = await this.listAccounts(true);
       if (list.length > 0 && !list.some((a) => a.id === requested)) {
-        throw new Failure("input", `--account ${requested} is not one of the ${list.length} accounts under this login.`, { accounts: list });
+        throw new Failure("input", `${this.surface === "mcp" ? "The account argument" : "--account"} ${requested} is not one of the ${list.length} accounts under this login.`, { accounts: list });
       }
       return requested;
     }
     if (list.length > 1) list = await this.listAccounts(true); // the user picks by label
     if (list.length === 1) return list[0].id;
-    if (list.length > 1) throw new Failure("input", `This login has ${list.length} accounts; pass --account <id>.`, { accounts: list });
+    if (list.length > 1) throw new Failure("input", `This login has ${list.length} accounts; pass ${this.surface === "mcp" ? "one id as the account argument" : "--account <id>"}.`, { accounts: list });
     return undefined;
   }
 

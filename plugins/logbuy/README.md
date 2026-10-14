@@ -36,6 +36,16 @@ copilot plugin install logbuy
 
 There is no setup step. The first time your agent uses a CLI skill, it runs that skill's `install.sh`, which downloads the binary matching the skill's version into the skill's `bin/` folder. Skills that need a login open Chrome once for you to sign in.
 
+### Any MCP client (Claude Desktop, Cursor, …)
+
+The `logbuy` binary is also an MCP server: `skills/logbuy/bin/logbuy mcp` serves the same Tasks as tools over stdio (`deal_search`, `deal_show`, `deal_browse` and `category_list`, plus `login`, `check` and `doctor`), with the same sign-in and Drift checks. Clone [`hoaj/skills`](https://github.com/hoaj/skills), get the binary once with `bash plugins/logbuy/skills/logbuy/install.sh`, then add it to your client:
+
+```json
+{ "mcpServers": { "logbuy": { "command": "/path/to/skills/plugins/logbuy/skills/logbuy/bin/logbuy", "args": ["mcp"] } } }
+```
+
+Claude Code: `claude mcp add logbuy -- /path/to/skills/plugins/logbuy/skills/logbuy/bin/logbuy mcp` (the plugin above is the better fit there: it also brings the skill's guidance). The first tool call asks you to call the `login` tool, which opens Chrome for you to sign in to LogBuy; the session stays on your machine in `~/.logbuy/`, shared with the CLI.
+
 ## Update
 
 Update the plugin in your agent's plugin manager (Claude Code: `/plugin update logbuy`). A new version lands in a new folder, so the agent downloads the matching binary on first use. Right after a release, the binary can take a few minutes to build; `install.sh` says so when it is not there yet.

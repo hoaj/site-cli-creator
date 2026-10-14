@@ -7,7 +7,7 @@ export default defineSite({
   plugin: "logbuy",
   skill: "logbuy",
   repo: "hoaj/skills",
-  version: "0.3.1",
+  version: "0.4.0",
   generatedWith: "0.2.1",
   origin: "https://www.mylogbuy.com",
   auth: "login" as Auth,
