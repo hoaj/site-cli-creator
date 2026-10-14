@@ -2,6 +2,7 @@
 import type { z } from "zod";
 import type { Command } from "./command";
 import { EXIT, nextStep, type Kind } from "./envelope";
+import { unwrap } from "./fingerprint";
 import type { Site } from "./site";
 
 export type FlagType = "boolean" | "string" | "number" | "enum";
@@ -17,18 +18,6 @@ export type FlagSpec = {
   values?: string[];
   description?: string;
 };
-
-const WRAPPERS = new Set(["optional", "default", "prefault", "nullable", "nonoptional", "readonly", "catch"]);
-
-function unwrap(schema: z.ZodType): z.ZodType {
-  let s: any = schema;
-  for (;;) {
-    const def = s._zod.def;
-    if (WRAPPERS.has(def.type)) s = def.innerType;
-    else if (def.type === "pipe") s = def.in;
-    else return s;
-  }
-}
 
 export const kebab = (key: string) => key.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
 

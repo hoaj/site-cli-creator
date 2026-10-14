@@ -12,7 +12,7 @@ import { stripNoise, topLevelDefinitions, type GraphqlType } from "./graphql";
 import { closeContext, launch, launchInMemory, profileState } from "./login";
 import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverCheckedWarning } from "./needs";
 import type { Operation } from "./operation";
-import { ensureStateDir, profileDir, stateDir } from "./session";
+import { ensureProfileDir } from "./session";
 import { effectiveOrigin, isLoginHost, tokenMatches, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
@@ -405,14 +405,10 @@ export function chromeWriteChecker(site: Site, env = process.env, fromProfile?: 
     const out = new Map<string, DriftEntry | null>();
     const seeded = site.auth === "login" && fromProfile !== undefined;
     const temp = site.auth === "none" ? mkdtempSync(join(tmpdir(), `${site.skill}-check-`)) : undefined;
-    const profile = temp ?? profileDir(ensureStateDir(stateDir(site, env)));
     let context: BrowserContext | undefined;
     try {
       if (seeded) context = await launchInMemory(site, true, env, await profileState(site, fromProfile, env, { localStorage: true }));
-      else {
-        if (!temp) ensureStateDir(profile);
-        context = await launch(site, profile, true, env);
-      }
+      else context = await launch(site, temp ?? ensureProfileDir(site, env), true, env);
       context.setDefaultTimeout(ACTION_TIMEOUT_MS);
       const origin = effectiveOrigin(site, env);
       const signIn = seeded ? `the sign-in carried over from ${fromProfile}` : "the CLI's Chrome profile";

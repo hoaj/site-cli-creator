@@ -2,6 +2,7 @@
 // Google Chrome, a logged-in gh, and admin rights on the plugin repo. The site account
 // (requirement 1) is a question the agent asks, not a check.
 import { existsSync } from "node:fs";
+import { findChrome } from "../../starter/skill/cli/src/runtime/chrome";
 
 export const MIN_BUN = "1.4.0";
 
@@ -25,28 +26,16 @@ export function versionAtLeast(a: string, b: string): boolean {
   return true;
 }
 
-/** Where Google Chrome lives per OS (the same paths the CLI's runtime/chrome.ts checks); SITE_CLI_CHROME overrides. */
-export function chromePaths(platform: string, env: Record<string, string | undefined>): string[] {
-  if (env.SITE_CLI_CHROME) return [env.SITE_CLI_CHROME];
-  if (platform === "darwin") return ["/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"];
-  if (platform === "linux") return ["/opt/google/chrome/chrome"];
-  if (platform === "win32") {
-    const roots = [env.LOCALAPPDATA, env.PROGRAMFILES, env["PROGRAMFILES(X86)"]].filter((r): r is string => !!r);
-    return roots.map((r) => `${r}\\Google\\Chrome\\Application\\chrome.exe`);
-  }
-  return [];
-}
-
 export function unmetRequirements(repo: string, probe: Probe): Unmet[] {
   const unmet: Unmet[] = [];
   if (!versionAtLeast(probe.bunVersion, MIN_BUN)) {
     unmet.push({ requirement: "bun", message: `Bun ${probe.bunVersion} is too old; ${MIN_BUN} or newer is needed: bun upgrade (https://bun.sh)` });
   }
-  const chrome = chromePaths(probe.platform, probe.env);
-  if (!chrome.some((p) => probe.exists(p))) {
+  const chrome = findChrome(probe.env, probe.platform, probe.exists);
+  if (!chrome.path) {
     unmet.push({
       requirement: "chrome",
-      message: `Google Chrome was not found (looked at ${chrome.join(", ") || "no known path on this OS"}); install it from https://www.google.com/chrome/ (Captures and check --writes need it)`,
+      message: `Google Chrome was not found (looked at ${chrome.checked.join(", ") || "no known path on this OS"}); install it from https://www.google.com/chrome/ (Captures and check --writes need it)`,
     });
   }
   const auth = probe.gh(["auth", "status"]);
