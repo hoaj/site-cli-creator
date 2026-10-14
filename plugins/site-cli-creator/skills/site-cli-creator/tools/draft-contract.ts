@@ -12,17 +12,22 @@ import { parseFlags } from "./lib/args";
 import { draftOperation, operationFileName } from "./lib/draft";
 import { fail, runTool } from "./lib/output";
 import { mergeOperation, type OperationShape } from "./lib/recorder";
+import { parseJson } from "./lib/shape";
 
 const USAGE = "bun tools/draft-contract.ts <shape.json> [--name <op>] [--out <file.ts>]";
 
+/** A Capture shape file, or null for anything else: unreadable (a directory, no access), no JSON, or another shape. */
 function parseShape(path: string): OperationShape | null {
+  let text: string;
   try {
-    const shape = JSON.parse(readFileSync(path, "utf8"));
-    if (!shape || typeof shape.operation !== "string" || !Array.isArray(shape.responses) || !shape.request) return null;
-    return shape as OperationShape;
+    text = readFileSync(path, "utf8");
   } catch {
     return null;
   }
+  const parsed = parseJson(text);
+  const shape = parsed.ok ? (parsed.value as any) : null;
+  if (!shape || typeof shape.operation !== "string" || !Array.isArray(shape.responses) || !shape.request) return null;
+  return shape as OperationShape;
 }
 
 function readShape(path: string): OperationShape {

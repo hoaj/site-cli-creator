@@ -2,10 +2,10 @@
 // headless for the silent refresh. Under SITE_CLI_TEST=1 the headed sign-in runs headless too.
 import { existsSync } from "node:fs";
 import type { BrowserContext, Cookie, Request } from "playwright-core";
-import { findChrome, chromeLaunchOptions, installHint } from "./chrome";
-import { ContractError, Failure } from "./envelope";
-import { ensureStateDir, profileDir, stateDir } from "./session";
-import { effectiveOrigin, isLoginHost, isTest, onSiteDomain, rebase, siteDomain, tokenMatches, type Env, type Site } from "./site";
+import { chromeLaunchOptions, chromeNotFound, findChrome } from "./chrome";
+import { ContractError, Failure, ProfileUnavailable } from "./envelope";
+import { ensureProfileDir } from "./session";
+import { effectiveOrigin, isLoginHost, isTest, loginHostName, onSiteDomain, rebase, siteDomain, tokenMatches, type Env, type Site } from "./site";
 
 const REFRESH_TIMEOUT_MS = 30_000;
 /** How long a headless refresh may sit on a login host before it counts as logged out (SSO hops pass through). */
@@ -23,21 +23,6 @@ export type LoginOptions = {
   fromProfile?: string;
 };
 
-/** A host name from a login host entry (`login.example.com`, `localhost:4100`, or a URL). */
-function hostName(host: string): string {
-  try {
-    return new URL(host.includes("://") ? host : `http://${host}`).hostname.toLowerCase();
-  } catch {
-    return host.toLowerCase();
-  }
-}
-
-/** Whether a cookie's domain applies to a host: the host itself, or a parent domain (`.example.com`). */
-const domainMatches = (host: string, domain: string) => {
-  const d = domain.replace(/^\./, "").toLowerCase();
-  return host === d || host.endsWith(`.${d}`);
-};
-
 /**
  * Whether a cookie, by its domain, belongs to the site: what `login --from-profile` carries over.
  * The hosts are the ones the runtime and the Capture tool treat as the site's: a host on the
@@ -49,8 +34,8 @@ export function siteCookie(site: Site, cookieDomain: string, env: Env = process.
   const origin = effectiveOrigin(site, env);
   const domain = siteDomain(origin);
   if (onSiteDomain(domain, cookieHost) || isLoginHost(site, `http://${cookieHost}`)) return true;
-  const hosts = [new URL(origin).hostname, ...(site.login?.hosts ?? []).map(hostName)];
-  return hosts.some((h) => domainMatches(h, cookieHost));
+  const hosts = [new URL(origin).hostname, ...(site.login?.hosts ?? []).map(loginHostName)];
+  return hosts.some((h) => onSiteDomain(cookieHost, h));
 }
 
 /** What another Chrome profile holds for the site, in Playwright's storageState form. */
@@ -64,14 +49,14 @@ export type ProfileState = { cookies: Cookie[]; origins: { origin: string; local
  * token), read on a page whose every request is answered locally, so nothing reaches the site.
  */
 export async function profileState(site: Site, dir: string, env: Env = process.env, options: { localStorage?: boolean } = {}): Promise<ProfileState> {
-  if (!existsSync(dir)) throw new Failure("input", `--from-profile: no such Chrome profile dir: ${dir}`);
+  if (!existsSync(dir)) throw new ProfileUnavailable(`--from-profile: no such Chrome profile dir: ${dir}`);
   let context: BrowserContext;
   try {
     context = await launch(site, dir, true, env);
   } catch (error) {
     if (error instanceof Failure) throw error;
     const why = String((error as Error)?.message ?? error).split("\n")[0];
-    throw new Failure("input", `--from-profile: could not open ${dir} (${why}). If a Capture is still running on it, end it first.`);
+    throw new ProfileUnavailable(`--from-profile: could not open ${dir} (${why}). If a Capture is still running on it, end it first.`);
   }
   try {
     const cookies = (await context.cookies()).filter((c) => siteCookie(site, c.domain, env));
@@ -96,7 +81,7 @@ export function chromeMissing(site: Site, env: Env = process.env): Failure | nul
   const chrome = findChrome(env);
   if (chrome.path) return null;
   const kind = site.auth === "login" ? "session" : "input";
-  return new Failure(kind, `Google Chrome was not found (looked at ${chrome.checked.join(", ") || "no known path on this OS"}). ${installHint()}`);
+  return new Failure(kind, chromeNotFound(chrome));
 }
 
 export async function launch(site: Site, userDataDir: string, headless: boolean, env: Env = process.env): Promise<BrowserContext> {
@@ -162,7 +147,7 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Re
   // Seeded cookies stay in memory: the sign-in runs in a context with no profile on disk.
   const context = seed.length
     ? await launchInMemory(site, headless, env, { cookies: seed, origins: [] })
-    : await launch(site, ensureStateDir(profileDir(ensureStateDir(stateDir(site, env)))), headless, env);
+    : await launch(site, ensureProfileDir(site, env), headless, env);
   try {
     const done = new Promise<Request | "logged-out" | null>((resolve) => {
       const timer = setTimeout(() => resolve(null), timeoutMs);

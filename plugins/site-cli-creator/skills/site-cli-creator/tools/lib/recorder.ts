@@ -5,16 +5,17 @@
 // Values are held in memory only, to recognise them when they reappear in a
 // URL path (a username, a search term), and are never written anywhere.
 
-import { onSiteDomain, siteDomain } from "../../starter/skill/cli/src/runtime/site";
+import { decodeJwt, onSiteDomain, siteDomain } from "../../starter/skill/cli/src/runtime/site";
 import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
 import {
   bodyShape,
   mediaType,
   mergeBodies,
-  mergeShapes,
+  mergeOptional,
   parseJson,
   queryShape,
   redactPath,
+  safeDecode,
   shapeOf,
   type BodyShape,
   type Shape,
@@ -57,6 +58,14 @@ export type ResponseShape = {
   setCookies?: string[];
   body: BodyShape;
 };
+
+/** The true-or-absent flags an OperationShape may carry, in the order the Capture writes them. */
+export const MARKERS = ["effectUnknown", "loginFlow", "navigation", "allowedRead", "serverAction", "rsc"] as const;
+
+/** The markers set on `op`, as `{name: true}`. */
+export function markers(op: Partial<Record<(typeof MARKERS)[number], true>>): Partial<Record<(typeof MARKERS)[number], true>> {
+  return Object.fromEntries(MARKERS.filter((k) => op[k]).map((k) => [k, true]));
+}
 
 export type OperationShape = {
   operation: string;
@@ -168,11 +177,6 @@ export function isSignInStep(method: string, pathOrName: string): boolean {
   return words(segments.at(-1) ?? "").every((w) => STEP_VERBS.has(w)) && isTokenStep(words(segments.slice(-2).join("-")));
 }
 
-/** A sign-in step sent by POST, from a path or an operation name alone. */
-export function isLoginFlow(text: string): boolean {
-  return isSignInStep("POST", text);
-}
-
 function isLoginHostName(host: string): boolean {
   return LOGIN_HOST_LABELS.has(host.split(".", 1)[0] ?? "");
 }
@@ -222,8 +226,7 @@ export function bearerClaims(authorization: string | undefined): Shape | undefin
   const token = authorization?.match(/^Bearer\s+([\w-]+)\.([\w-]+)\.([\w-]*)$/i);
   if (!token) return undefined;
   try {
-    const json = Buffer.from(token[2]!.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
-    const payload = JSON.parse(json);
+    const payload = decodeJwt(token[0]);
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
     return shapeOf(payload);
   } catch {
@@ -299,11 +302,6 @@ export class CaptureRecorder {
     return this.loginHosts.has(host.toLowerCase());
   }
 
-  /** Login hosts site.ts or --login-host named. */
-  get declaredLoginHosts(): string[] {
-    return [...this.loginHosts];
-  }
-
   /** A sign-in step went to `host`: remember it unless it is the origin's own host. */
   private noteSignInHost(host: string): void {
     const h = host.toLowerCase();
@@ -352,9 +350,10 @@ export class CaptureRecorder {
     // `?query=<word>` is an ordinary query field, recorded as a type like any other.
     const graphqlPath = isGraphqlPath(url.pathname);
     let gql: GraphqlCall[] | null = null;
+    let parsed: ReturnType<typeof parseJson> | undefined;
     if (req.postData && req.postData.length > 0) {
       const text = req.postData.toString("utf8");
-      const parsed = parseJson(text);
+      parsed = parseJson(text);
       if (parsed.ok) {
         gql = graphqlFromBody(parsed.value, { graphqlPath });
         collectStrings(parsed.value, (s) => this.remember(s));
@@ -413,7 +412,7 @@ export class CaptureRecorder {
     const serverAction = effect === "write" && header(req.headers, "next-action") !== undefined;
     const rsc = url.searchParams.has("_rsc") || header(req.headers, "rsc") === "1";
     const query = queryShape(url.searchParams);
-    const body = req.postData && req.postData.length > 0 ? bodyShape(req.postData, contentType) : undefined;
+    const body = req.postData && req.postData.length > 0 ? bodyShape(req.postData, contentType, parsed) : undefined;
     const allowedRead = effect === "write" && this.allowRead.some((p) => where.some((w) => w.includes(p)));
     const loginFlow =
       !allowedRead &&
@@ -492,14 +491,17 @@ export class CaptureRecorder {
     const { response, aborted = false } = outcome;
     const contentType = response ? mediaType(header(response.headers, "content-type")) : undefined;
     let splitBodies: unknown[] | null = null;
+    let parsed: ReturnType<typeof parseJson> | undefined;
     if (response?.body && response.body.length > 0) {
-      const parsed = parseJson(response.body.toString("utf8"));
+      parsed = parseJson(response.body.toString("utf8"));
       if (parsed.ok) {
         collectStrings(parsed.value, (s) => this.remember(s));
         if (Array.isArray(parsed.value) && planned.calls.some((c) => c.responseIndex !== undefined)) splitBodies = parsed.value;
       }
     }
     const claims = outcome.headers ? bearerClaims(header(outcome.headers, "authorization")) : undefined;
+    // Shapes are never changed once built, so every call of the request shares this one.
+    const whole = response ? bodyShape(response.body, contentType, parsed) : undefined;
     for (const call of planned.calls) {
       const shape: OperationShape = structuredClone(call.shape);
       if (outcome.headers) {
@@ -513,7 +515,7 @@ export class CaptureRecorder {
         const body: BodyShape =
           splitBodies && call.responseIndex !== undefined
             ? { kind: "json", shape: shapeOf(splitBodies[call.responseIndex]) }
-            : bodyShape(response.body, contentType);
+            : whole!;
         const cookies = setCookieNames(header(response.headers, "set-cookie"));
         const headers = headerShape(response.headers, (n) => n === "set-cookie");
         shape.responses = [
@@ -549,10 +551,7 @@ export class CaptureRecorder {
       .split("/")
       .map((seg) => {
         if (!seg || seg.startsWith(":")) return seg;
-        let decoded = seg;
-        try {
-          decoded = decodeURIComponent(seg);
-        } catch {}
+        const decoded = safeDecode(seg);
         if (decoded.length < 3) return seg;
         // A whole value (`jens.hansen`), or a capitalised word inside one (`Vesterbrogade` from "Vesterbrogade 1").
         if (this.values.has(decoded)) return ":id";
@@ -581,14 +580,6 @@ export class CaptureRecorder {
     }
     return [...merged.values()].sort((a, b) => a.first - b.first).map((o) => o.shape);
   }
-
-  get originHostname(): string {
-    return this.originHost;
-  }
-}
-
-function mergeMaybe(a?: Shape, b?: Shape): Shape | undefined {
-  return a && b ? mergeShapes(a, b) : (a ?? b);
 }
 
 function mergeResponse(a: ResponseShape, b: ResponseShape): ResponseShape {
@@ -613,20 +604,14 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
     else responses[i] = mergeResponse(responses[i]!, r);
   }
   responses.sort((x, y) => x.status - y.status);
-  const query = mergeMaybe(a.request.query, b.request.query);
-  const variables = mergeMaybe(a.request.variables, b.request.variables);
-  const bearer = mergeMaybe(a.request.bearerClaims, b.request.bearerClaims);
+  const query = mergeOptional(a.request.query, b.request.query);
+  const variables = mergeOptional(a.request.variables, b.request.variables);
+  const bearer = mergeOptional(a.request.bearerClaims, b.request.bearerClaims);
   const body = a.request.body && b.request.body ? mergeBodies(a.request.body, b.request.body) : (a.request.body ?? b.request.body);
-  const flag = (k: "loginFlow" | "navigation" | "allowedRead" | "effectUnknown" | "serverAction" | "rsc") => (a[k] || b[k] ? { [k]: true as const } : {});
   return {
     ...a,
     effect: a.effect === "write" || b.effect === "write" ? "write" : "read",
-    ...flag("effectUnknown"),
-    ...flag("loginFlow"),
-    ...flag("navigation"),
-    ...flag("allowedRead"),
-    ...flag("serverAction"),
-    ...flag("rsc"),
+    ...markers(b), // a's are already in ...a
     graphql: a.graphql && !a.graphql.query && b.graphql?.query ? b.graphql : a.graphql,
     request: {
       headers: mergeHeaders(a.request.headers, b.request.headers),

@@ -8,7 +8,7 @@
 import { existsSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseFlags, requireKebab } from "./lib/args";
-import { buildManifests, buildMarketplaces, INITIAL_VERSION, MANIFESTS, MARKETPLACES, writeJson } from "./lib/manifests";
+import { buildManifests, buildMarketplaces, INITIAL_VERSION, MANIFESTS, MARKETPLACES, writeJson, type PluginInfo } from "./lib/manifests";
 import { fail, progress, runTool } from "./lib/output";
 import { generatorVersion, starterDir, toolCommand } from "./lib/paths";
 import { assertWritableDir, requireDir, setSkillMdVersion } from "./lib/scaffold";
@@ -26,14 +26,14 @@ const LABELS = [
   { name: "needs-account", color: "d4c5f9", description: "The maintainer's account can't perform this Task" },
 ];
 
-function fallbackReadme(t: Required<Pick<Tokens, "PLUGIN" | "REPO" | "DESCRIPTION" | "MAINTAINER">>): string {
-  return `# ${t.PLUGIN}
+function fallbackReadme(info: PluginInfo): string {
+  return `# ${info.plugin}
 
-${t.DESCRIPTION}
+${info.description}
 
-Generated with site-cli-creator. Maintainer: @${t.MAINTAINER}.
+Generated with site-cli-creator. Maintainer: @${info.maintainer}.
 
-Problems and feature requests go to [${t.REPO}](https://github.com/${t.REPO}/issues) through the \`${t.PLUGIN}-feedback\` skill.
+Problems and feature requests go to [${info.repo}](https://github.com/${info.repo}/issues) through the \`${info.plugin}-feedback\` skill.
 `;
 }
 
@@ -109,27 +109,27 @@ await runTool(async () => {
   const feedbackSkillMd = join(dir, feedbackRel, "SKILL.md");
   if (existsSync(feedbackSkillMd)) setSkillMdVersion(feedbackSkillMd, INITIAL_VERSION);
 
-  const manifests = buildManifests({ plugin, repo: values.repo, description: values.description, maintainer: values.maintainer });
-  for (const [key, rel] of Object.entries(MANIFESTS)) {
-    writeJson(join(dir, rel), manifests[key as keyof typeof MANIFESTS]);
-    files.push(rel);
-  }
-  const marketplaces = buildMarketplaces({ plugin, repo: values.repo, description: values.description, maintainer: values.maintainer });
-  for (const [key, rel] of Object.entries(MARKETPLACES)) {
-    writeJson(join(dir, rel), marketplaces[key as keyof typeof MARKETPLACES]);
-    files.push(rel);
+  const info: PluginInfo = { plugin, repo: values.repo, description: values.description, maintainer: values.maintainer };
+  const manifests: Record<string, unknown> = buildManifests(info);
+  const marketplaces: Record<string, unknown> = buildMarketplaces(info);
+  for (const [built, paths] of [[manifests, MANIFESTS], [marketplaces, MARKETPLACES]] as const) {
+    for (const [key, rel] of Object.entries(paths)) {
+      writeJson(join(dir, rel), built[key]);
+      files.push(rel);
+    }
   }
   writeJson(join(dir, "generated.json"), { generatedWith, maintainer: values.maintainer });
   files.push("generated.json");
   if (!existsSync(join(dir, "README.md"))) {
     writeFileSync(
       join(dir, "README.md"),
-      fallbackReadme({ PLUGIN: plugin, REPO: values.repo, DESCRIPTION: values.description, MAINTAINER: values.maintainer }),
+      fallbackReadme(info),
     );
     files.push("README.md");
   }
   assertNoTokens(dir);
 
+  const next = `${toolCommand("add-skill")} --dir ${dir} --skill <name> --origin <url> --auth login|none`;
   let labels: { created: string[]; failed?: string } | "skipped" = "skipped";
   if (!values["no-labels"]) {
     progress(`creating labels on ${values.repo}`);
@@ -142,7 +142,7 @@ await runTool(async () => {
       fail(
         `the plugin's files were written to ${dir}, but creating the repo labels failed (${labels.failed}). ` +
           "Run the commands in `retry` until they succeed, then go on with add-skill; do not run new.ts again.",
-        { dir, labels, retry, next: `${toolCommand("add-skill")} --dir ${dir} --skill <name> --origin <url> --auth login|none` },
+        { dir, labels, retry, next },
       );
     }
   }
@@ -154,6 +154,6 @@ await runTool(async () => {
     generatedWith,
     labels,
     files: [...new Set(files)].sort(),
-    next: `${toolCommand("add-skill")} --dir ${dir} --skill <name> --origin <url> --auth login|none`,
+    next,
   };
 });

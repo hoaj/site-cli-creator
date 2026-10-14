@@ -302,6 +302,12 @@ describe("draft-contract.ts", () => {
     expect(r.out.source).toContain('dueDate: z.string() /* ISO date string */.nullable()');
     expect(r.out.source).toContain("pdfUrl: z.unknown().nullable() /* TODO");
     expect(r.out.source).toStartWith("// From captures/merge-a/GET-api-invoices-id.shape.json + captures/merge-b/");
+
+    // A sibling shape file that cannot be read is skipped, not fatal.
+    mkdirSync(join(work, "merge", "captures", "merge-c", "GET-api-invoices-id.shape.json"), { recursive: true });
+    const skipped = run(join(work, "merge", "captures", "merge-a", "GET-api-invoices-id.shape.json"));
+    expect(skipped.code).toBe(0);
+    expect(skipped.out.mergedFrom).toEqual(["captures/merge-b/GET-api-invoices-id.shape.json"]);
   });
 
   test("--help prints the usage and every flag's meaning, exit 0", () => {
@@ -317,6 +323,8 @@ describe("draft-contract.ts", () => {
     expect(missing.out.error.message).toContain("no such shape file");
     writeFileSync(join(work, "bad.json"), JSON.stringify({ hello: 1 }));
     expect(run(join(work, "bad.json")).out.error.message).toContain("not a Capture shape file");
+    mkdirSync(join(work, "dir.shape.json"), { recursive: true });
+    expect(run(join(work, "dir.shape.json")).out.error.message).toContain("not a Capture shape file");
     expect(run().out.error.message).toContain("expected one shape file");
     expect(run(join(work, "bad.json"), join(work, "other.json")).out.error.message).toContain('unexpected argument');
   });

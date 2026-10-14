@@ -223,18 +223,20 @@ describe("check over writes", () => {
     expect(matchesOperation(site, gql, origin, req("POST", `${origin}/graphql`, { operationName: "other" }))).toBe(false);
   });
 
-  test("isDeclaredRead: registry reads pass, a batch only if every document is a read", () => {
+  test("declared reads pass: a REST read, a GraphQL batch only if every document is a read", () => {
     const createQuote = { operationName: "createQuote", query: "mutation createQuote { x }" };
     const persisted = { operationName: "listProducts", extensions: { persistedQuery: { sha256Hash: "h" } } };
     const searchOrders = defineOperation({ ...getOrder, name: "POST /api/orders/search", rest: { method: "POST", path: "/api/orders/search" } });
     const reads = [getCustomer, listProducts, searchOrders];
-    expect(isDeclaredRead(site, reads, origin, req("POST", `${origin}/graphql`, persisted))).toBe(true);
-    expect(isDeclaredRead(site, reads, origin, req("POST", `${origin}/graphql`, [persisted, { operationName: "getCustomer" }]))).toBe(true);
-    expect(isDeclaredRead(site, reads, origin, req("POST", `${origin}/graphql`, [persisted, createQuote]))).toBe(false);
-    expect(isDeclaredRead(site, reads, origin, req("POST", `${origin}/graphql`, createQuote))).toBe(false);
+    const v = (url: string, body: unknown) => triggerVerdict(site, renameOrder, [renameOrder], reads, origin, req("POST", url, body));
+    expect(v(`${origin}/graphql`, persisted)).toBe("pass");
+    expect(v(`${origin}/graphql`, [persisted, { operationName: "getCustomer" }])).toBe("pass");
+    expect(v(`${origin}/graphql`, [persisted, createQuote])).toBe("abort");
+    expect(v(`${origin}/graphql`, createQuote)).toBe("abort");
+    expect(v(`https://other.test/graphql`, persisted)).toBe("abort");
     expect(isDeclaredRead(site, reads, origin, req("POST", `${origin}/api/orders/search`, {}))).toBe(true);
     expect(isDeclaredRead(site, reads, origin, req("PATCH", `${origin}/api/orders/search`, {}))).toBe(false);
-    expect(isDeclaredRead(site, reads, origin, req("POST", `https://other.test/graphql`, persisted))).toBe(false);
+    expect(isDeclaredRead(site, reads, origin, req("POST", `https://other.test/api/orders/search`, {}))).toBe(false);
   });
 
   test("triggerVerdict: the target is captured; login hosts, tokenRequest, reads and readOnlyRequests pass; other non-GETs abort", () => {
