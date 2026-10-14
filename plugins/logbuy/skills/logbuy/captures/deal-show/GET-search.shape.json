@@ -1,0 +1,73 @@
+{
+  "operation": "GET /search",
+  "kind": "rest",
+  "effect": "read",
+  "navigation": true,
+  "resourceType": "document",
+  "host": "www.mylogbuy.com",
+  "method": "GET",
+  "path": "/search",
+  "request": {
+    "headers": {
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+      "baggage": null,
+      "cookie": null,
+      "next-router-prefetch": null,
+      "next-router-state-tree": null,
+      "next-url": null,
+      "referer": null,
+      "rsc": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "upgrade-insecure-requests": null,
+      "user-agent": null,
+      "x-deployment-id": null
+    },
+    "query": {
+      "type": "object",
+      "fields": {
+        "q": {
+          "type": "string"
+        },
+        "_rsc": {
+          "type": "string"
+        },
+        "filters": {
+          "type": "string"
+        }
+      },
+      "optional": [
+        "filters",
+        "q"
+      ]
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "contentType": "text/html",
+      "headers": {
+        "age": null,
+        "cache-control": null,
+        "content-encoding": null,
+        "content-type": "text/html",
+        "date": null,
+        "link": null,
+        "server": null,
+        "strict-transport-security": null,
+        "vary": null,
+        "x-matched-path": null,
+        "x-powered-by": null,
+        "x-vercel-cache": null,
+        "x-vercel-id": null
+      },
+      "body": {
+        "kind": "html"
+      }
+    }
+  ],
+  "seen": 11,
+  "aborted": 0
+}

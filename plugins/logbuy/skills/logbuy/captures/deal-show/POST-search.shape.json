@@ -1,0 +1,138 @@
+{
+  "operation": "POST /search",
+  "kind": "rest",
+  "effect": "write",
+  "allowedRead": true,
+  "resourceType": "fetch",
+  "host": "www.mylogbuy.com",
+  "method": "POST",
+  "path": "/search",
+  "request": {
+    "headers": {
+      "accept": "text/x-component",
+      "baggage": null,
+      "content-type": "text/plain",
+      "cookie": null,
+      "next-action": null,
+      "next-router-state-tree": null,
+      "origin": null,
+      "referer": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "user-agent": null,
+      "x-deployment-id": null
+    },
+    "query": {
+      "type": "object",
+      "fields": {
+        "q": {
+          "type": "string"
+        },
+        "filters": {
+          "type": "string"
+        }
+      },
+      "optional": [
+        "filters",
+        "q"
+      ]
+    },
+    "body": {
+      "kind": "json",
+      "shape": {
+        "type": "array",
+        "items": {
+          "type": "union",
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "boolean"
+            },
+            {
+              "type": "object",
+              "fields": {
+                "supplierId": {
+                  "type": "number"
+                },
+                "dealId": {
+                  "type": "number"
+                },
+                "requestNewCode": {
+                  "type": "boolean"
+                },
+                "client": {
+                  "type": "string"
+                },
+                "queryKey": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "meta": {
+                  "type": "string"
+                },
+                "signal": {
+                  "type": "string"
+                },
+                "promoCodeText": {
+                  "type": "string"
+                },
+                "query": {
+                  "type": "string"
+                },
+                "countryId": {
+                  "type": "number"
+                },
+                "anonAuth": {
+                  "type": "boolean"
+                }
+              },
+              "optional": [
+                "anonAuth",
+                "client",
+                "countryId",
+                "dealId",
+                "meta",
+                "promoCodeText",
+                "query",
+                "queryKey",
+                "requestNewCode",
+                "signal",
+                "supplierId"
+              ]
+            }
+          ]
+        }
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "contentType": "text/x-component",
+      "headers": {
+        "cache-control": null,
+        "content-encoding": null,
+        "content-type": "text/x-component",
+        "date": null,
+        "server": null,
+        "strict-transport-security": null,
+        "vary": null,
+        "x-action-revalidated": null,
+        "x-matched-path": null,
+        "x-vercel-cache": null,
+        "x-vercel-id": null
+      },
+      "body": {
+        "kind": "text"
+      }
+    }
+  ],
+  "seen": 65,
+  "aborted": 0
+}

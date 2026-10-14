@@ -1,0 +1,219 @@
+{
+  "task": "deal-show",
+  "startPath": "/search",
+  "write": false,
+  "operations": [
+    {
+      "operation": "GET /search",
+      "kind": "rest",
+      "effect": "read",
+      "navigation": true,
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/search",
+      "file": "GET-search.shape.json",
+      "seen": 11,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/content-set-configs",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/content-set-configs",
+      "file": "GET-api-content-set-configs.shape.json",
+      "seen": 9,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/notifications/unread-count",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/notifications/unread-count",
+      "file": "GET-api-notifications-unread-count.shape.json",
+      "seen": 3,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/",
+      "file": "GET-root.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /legal/terms-of-service",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/legal/terms-of-service",
+      "file": "GET-legal-terms-of-service.shape.json",
+      "seen": 3,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /profile",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile",
+      "file": "GET-profile.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /profile/favorites",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile/favorites",
+      "file": "GET-profile-favorites.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /legal/privacy-policy",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/legal/privacy-policy",
+      "file": "GET-legal-privacy-policy.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "POST /search",
+      "kind": "rest",
+      "effect": "write",
+      "allowedRead": true,
+      "method": "POST",
+      "host": "www.mylogbuy.com",
+      "path": "/search",
+      "file": "POST-search.shape.json",
+      "seen": 65,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /partner/:id",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/partner/:id",
+      "file": "GET-partner-id.shape.json",
+      "seen": 27,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/deal-redirect/:id",
+      "kind": "rest",
+      "effect": "read",
+      "navigation": true,
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/deal-redirect/:id",
+      "file": "GET-api-deal-redirect-id.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/member-card",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/member-card",
+      "file": "GET-api-member-card.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /new-and-hot",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/new-and-hot",
+      "file": "GET-new-and-hot.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/notifications",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/notifications",
+      "file": "GET-api-notifications.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /profile/cashback",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile/cashback",
+      "file": "GET-profile-cashback.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /profile/giftcards",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile/giftcards",
+      "file": "GET-profile-giftcards.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /profile/evouchers",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile/evouchers",
+      "file": "GET-profile-evouchers.shape.json",
+      "seen": 3,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /profile/change-password",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile/change-password",
+      "file": "GET-profile-change-password.shape.json",
+      "seen": 2,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /profile/bank-account",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/profile/bank-account",
+      "file": "GET-profile-bank-account.shape.json",
+      "seen": 1,
+      "aborted": 0
+    }
+  ]
+}
