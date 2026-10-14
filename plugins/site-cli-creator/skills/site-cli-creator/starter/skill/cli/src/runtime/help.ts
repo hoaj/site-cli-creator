@@ -51,7 +51,7 @@ export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   version: [],
   doctor: [],
   mcp: [
-    flag("http", "boolean", "remote mode: serve over HTTP behind the Owner's sign-in, for web and phone clients (needs OWNER_PASSWORD and PUBLIC_URL); without it, local mode over stdio"),
+    flag("http", "boolean", "remote mode: serve over HTTP behind the Owner's sign-in, for web and phone clients. Needs OWNER_PASSWORD (12+ characters) or OWNER_PASSWORD_HASH, and PUBLIC_URL (https; http only on localhost). Without it, local mode over stdio"),
     flag("port", "number", "the HTTP port in remote mode (default: PORT, else 8080)"),
   ],
   login: [flag("from-profile", "string", "reuse the sign-in another Chrome profile holds (the Capture tool's ~/.site-cli-creator/profile) instead of signing in again")],

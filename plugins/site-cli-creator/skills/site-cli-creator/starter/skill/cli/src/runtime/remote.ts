@@ -59,6 +59,8 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     mcpUrl,
     siteName: new URL(o.site.origin).host,
     serverName: o.info.name,
+    // A tool with a confirm argument writes (the same rule the server instructions give clients).
+    writes: o.tools.some((t) => "confirm" in t.schema.shape),
     allowRedirect: (uri) => redirectAllowed(uri, config.extraRedirects),
     now: o.now,
     onEvent: note,

@@ -117,16 +117,17 @@ input:focus,button:focus{outline:2px solid var(--ink);outline-offset:2px}
 </style><body><div class="wrap"><div class="card"><h1>${esc(title)}</h1>${body}</div></div></body></html>`;
 }
 
-export type SignInPage = { requestId: string; clientName?: string; returnTo: string; loopback: boolean; siteName: string; serverName: string; error?: string };
+export type SignInPage = { requestId: string; clientName?: string; returnTo: string; loopback: boolean; siteName: string; serverName: string; writes: boolean; error?: string };
 
 export function signInPage(o: SignInPage): string {
   const who = o.clientName ? `<b>${esc(o.clientName)}</b>` : "An app";
+  const can = o.writes ? "It can run all of its tools there, including ones that change your data after you confirm them." : "Its tools there only read your data.";
   const back = o.loopback
     ? `<p class="muted">After signing in you are sent back to a program on this computer (<b>${esc(o.returnTo)}</b>). Stop if you did not just start a sign-in there.</p>`
     : `<p class="muted">After signing in you are sent back to <b>${esc(o.returnTo)}</b>. Stop if that is not where you came from.</p>`;
   return page(
     "Allow access?",
-    `<p>${who} wants to use <b>${esc(o.serverName)}</b> on <b>${esc(o.siteName)}</b> as you. It can run all of its tools there, including ones that change your data after you confirm them.</p>${back}
+    `<p>${who} wants to use <b>${esc(o.serverName)}</b> on <b>${esc(o.siteName)}</b> as you. ${can}</p>${back}
      ${o.error ? `<p class="error">${esc(o.error)}</p>` : ""}
      <form method="post" action="/login">
        <input type="hidden" name="request" value="${esc(o.requestId)}">
@@ -157,6 +158,8 @@ export type OwnerProviderOptions = {
   mcpUrl: URL;
   siteName: string;
   serverName: string;
+  /** Whether any tool writes (the sign-in page says so, or that the tools only read). */
+  writes?: boolean;
   allowRedirect: (uri: string) => boolean;
   /** Seconds since the epoch; tests move it. */
   now?: () => number;
@@ -255,6 +258,7 @@ export class OwnerProvider implements OAuthServerProvider {
       loopback: back.protocol === "http:",
       siteName: this.o.siteName,
       serverName: this.o.serverName,
+      writes: this.o.writes ?? true,
       error,
     });
   }

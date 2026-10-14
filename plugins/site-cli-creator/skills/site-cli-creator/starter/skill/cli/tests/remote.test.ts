@@ -155,6 +155,7 @@ describe("remoteConfig", () => {
     const { output, code } = await run(["mcp", "--http"], makeApp(makeSite(), d.deps));
     expect(code).toBe(2);
     expect((output as any).error.message).toMatch(/OWNER_PASSWORD/);
+    expect((output as any).error.next).toMatch(/environment variable/);
     d.deps.env = { ...d.deps.env, OWNER_PASSWORD: PW, PUBLIC_URL: "https://x.example" };
     const ok = await run(["mcp", "--http", "--port", "5000"], makeApp(makeSite(), d.deps));
     expect(ok).toMatchObject({ code: 0, serve: "mcp-http" });
@@ -204,6 +205,19 @@ describe("Server sign-in over HTTP", () => {
     expect(res.headers.get("content-security-policy")).toContain("form-action 'self'");
     const login = await postLogin(base, requestIdOf(html)!, "wrong one");
     expect(login.headers.get("cache-control")).toContain("no-store");
+  });
+
+  test("with no write tools, the sign-in page says the tools only read", async () => {
+    const port = freePort();
+    const d = makeDeps(fakeFetch(happySite).fetch, home.dir);
+    const app = { ...makeApp(makeSite(), d.deps), commands: [makeApp(makeSite(), d.deps).commands[0]!] };
+    const config = remoteConfig({ OWNER_PASSWORD: PW, PUBLIC_URL: `http://127.0.0.1:${port}` }, { port });
+    servers.push(await serveHttp({ ...mcpTools(app), site: app.site, config, dir: home.dir, host: "127.0.0.1", note: () => {} }));
+    const base = `http://127.0.0.1:${port}`;
+    const client = await (await register(base)).json();
+    const html = await (await authorizePage(base, client.client_id, pkce().challenge)).text();
+    expect(html).toContain("only read");
+    expect(html).not.toMatch(/change your data/);
   });
 
   test("refresh rotates; a reused refresh token signs that client out", async () => {
