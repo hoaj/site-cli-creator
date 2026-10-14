@@ -56,11 +56,22 @@ export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   help: [],
   version: [],
   doctor: [],
+  mcp: [],
   login: [flag("from-profile", "string", "reuse the sign-in another Chrome profile holds (the Capture tool's ~/.site-cli-creator/profile) instead of signing in again")],
   check: [flag("op", "string", "check one Operation and the chain it needs"), flag("writes", "boolean", "also check write Operations in headless Chrome (aborted, never sent)")],
   // Hidden: the platform smoke test in CI; not listed by help.
   selftest: [flag("url", "string", "an http(s) URL to fetch"), flag("no-chrome", "boolean", "only the fetch, no Chrome")],
 };
+
+/**
+ * `<command> --help`: that command's entry from help() (a Task command or a listed built-in) with
+ * its usage line and the global flags. Undefined when help() lists no command of that name.
+ */
+export function commandHelp(site: Site, commands: Command[], name: string) {
+  const h = help(site, commands);
+  const entry = [...h.commands, ...h.builtins].find((c) => c.name === name);
+  return entry && { ...entry, usage: `${site.skill} ${name} [flags]`, globalFlags: h.globalFlags };
+}
 
 export function help(site: Site, commands: Command[]) {
   const builtins = [
@@ -69,6 +80,7 @@ export function help(site: Site, commands: Command[]) {
     { name: "check", summary: "Call every read Operation live and validate it against its Contract; --writes also checks writes without sending them" },
     { name: "doctor", summary: "Versions, state dir, Chrome, gh status and binary findings, for reports" },
     { name: "version", summary: "Print the version" },
+    { name: "mcp", summary: "Serve the Task commands as MCP tools over stdio, for MCP clients such as Claude Desktop or Cursor; started by the client, not by agents" },
   ].map((b) => ({ ...b, flags: BUILTIN_FLAGS[b.name] }));
   return {
     plugin: site.plugin,
