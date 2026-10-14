@@ -47,6 +47,4 @@ export type Operation<V extends z.ZodType = z.ZodType, R extends z.ZodType = z.Z
   trigger?(page: Page): Promise<void>;
 };
 
-export type AnyOperation = Operation<z.ZodType, z.ZodType>;
-
 export const defineOperation = <V extends z.ZodType, R extends z.ZodType>(op: Operation<V, R>): Operation<V, R> => op;
