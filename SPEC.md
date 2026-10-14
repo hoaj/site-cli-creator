@@ -158,7 +158,8 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   - `login [--from-profile <dir>]` (only for `auth: "login"`, §7);
   - `check [--op <name>] [--writes]` (§10);
   - `doctor`: versions, `generatedWith`, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;
-  - `version`.
+  - `version`;
+  - `mcp`: serves the same CLI skill as an MCP server on stdio, for MCP clients (see **MCP server** below). Agents running the CLI never call it.
 
 **Output:** stdout is always exactly one JSON document, and stderr carries progress. A failure prints:
 
@@ -182,6 +183,13 @@ The envelope is everything the Feedback skill needs, and the CLI is responsible 
 **Writes:** decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/issues/11). A write command without `--confirm` validates its input, resolves the chain, prints `{"dryRun": true, "would": {...}}` and exits 0. SKILL.md tells the agent to show the user the dry run and get an explicit yes before rerunning with `--confirm`.
 
 **Tasks across logins:** never one command. The agent chains commands from each CLI skill.
+
+**MCP server:** `<skill> mcp` turns the same binary into an MCP server (stdio, JSON-RPC, tools only), so MCP clients without skills (Claude Desktop, Cursor and others) get the same Tasks. There is one code path: a tool call runs the Task command's own code, Contracts, session and classification, and returns exactly what the command prints (its result, a dry run, or the error envelope) as JSON text, plus structured content when it is an object; a failure has `isError`. Nothing is maintained twice. The wrap differs from the CLI only in these ways:
+- **Tools:** one per Task, named `<noun>_<verb>`, described by the command's summary. Its input schema is the command's `args` schema, plus `account` and, on writes, `confirm`. Unknown arguments are input. Annotations follow the Effect: a read Task is `readOnlyHint`, a write Task is `destructiveHint` (the Effect cannot say less). Built-in tools: `login` (`auth: "login"` only), `check` and `doctor`. There are no `help`, `version` or `selftest` tools: `tools/list` and the server info replace them.
+- **Writes:** a write tool without `confirm: true` returns the dry run, and the server's instructions tell the client to show it and get the user's yes first, as SKILL.md does.
+- **Sign-in:** a Task tool never opens a headed sign-in and waits (`SITE_CLI_NONINTERACTIVE`): after the silent refresh fails it returns `session`, and `next` says to call the `login` tool, which opens Chrome.
+- **`next`:** speaks of tools and arguments instead of commands and flags. An MCP client may have no Feedback skill, so for Drift and bugs `next` offers the Feedback skill when it is there, else the plugin repo's new-issue page, and either only on the user's yes.
+- **Not yet:** no output schemas (a command declares no output schema), no remote transport and no hosting; a remote server comes later, with the session kept on the user's own instance, never on a shared host.
 
 **SKILL.md** (about 45–60 lines):
 1. Frontmatter with only `name` and `description`. The version goes in an HTML comment below it, because a `version:` key breaks Copilot.
