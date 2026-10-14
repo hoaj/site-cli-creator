@@ -53,12 +53,17 @@ export function siteCookie(site: Site, cookieDomain: string, env: Env = process.
   return hosts.some((h) => domainMatches(h, cookieHost));
 }
 
+/** What another Chrome profile holds for the site, in Playwright's storageState form. */
+export type ProfileState = { cookies: Cookie[]; origins: { origin: string; localStorage: { name: string; value: string }[] }[] };
+
 /**
- * The cookies another Chrome profile holds for the site origin and its login hosts, read with
- * Playwright and kept in memory: never written, never logged. Chrome keeps only persistent cookies
- * between runs, so a sign-in held in session cookies or in page storage does not carry over.
+ * What another Chrome profile holds for the site, read with Playwright and kept in memory: never
+ * written, never logged. `cookies`: those for the site origin and its login hosts. Chrome keeps only
+ * persistent cookies between runs, so a sign-in held in session cookies does not carry over.
+ * `origins`: with `localStorage`, the origin's localStorage (where many frontends cache their
+ * token), read on a page whose every request is answered locally, so nothing reaches the site.
  */
-export async function profileCookies(site: Site, dir: string, env: Env = process.env): Promise<Cookie[]> {
+export async function profileState(site: Site, dir: string, env: Env = process.env, options: { localStorage?: boolean } = {}): Promise<ProfileState> {
   if (!existsSync(dir)) throw new Failure("input", `--from-profile: no such Chrome profile dir: ${dir}`);
   let context: BrowserContext;
   try {
@@ -69,7 +74,19 @@ export async function profileCookies(site: Site, dir: string, env: Env = process
     throw new Failure("input", `--from-profile: could not open ${dir} (${why}). If a Capture is still running on it, end it first.`);
   }
   try {
-    return (await context.cookies()).filter((c) => siteCookie(site, c.domain, env));
+    const cookies = (await context.cookies()).filter((c) => siteCookie(site, c.domain, env));
+    if (!options.localStorage) return { cookies, origins: [] };
+    const origin = new URL(effectiveOrigin(site, env)).origin;
+    await context.route("**/*", (route) => route.fulfill({ contentType: "text/html", body: "<html></html>" }));
+    const page = await context.newPage();
+    try {
+      await page.goto(origin);
+      const localStorage = await page.evaluate(() => Object.entries(window.localStorage).map(([name, value]) => ({ name, value })));
+      return { cookies, origins: localStorage.length ? [{ origin, localStorage }] : [] };
+    } finally {
+      await page.close().catch(() => {});
+      await context.unrouteAll({ behavior: "ignoreErrors" }).catch(() => {});
+    }
   } finally {
     await context.close().catch(() => {});
   }
@@ -95,16 +112,17 @@ export async function launch(site: Site, userDataDir: string, headless: boolean,
 }
 
 /**
- * Chrome with no user-data dir of the CLI's own (an incognito-style context): cookies added to it
- * stay in memory and go when it closes. Close it with closeContext(), which closes the browser too.
+ * Chrome with no user-data dir of the CLI's own (an incognito-style context) holding `state` (from
+ * profileState()): another profile's sign-in, in memory only, gone when it closes. Close it with
+ * closeContext(), which closes the browser too.
  */
-export async function launchInMemory(site: Site, headless: boolean, env: Env = process.env): Promise<BrowserContext> {
+export async function launchInMemory(site: Site, headless: boolean, env: Env = process.env, state?: ProfileState): Promise<BrowserContext> {
   const missing = chromeMissing(site, env);
   if (missing) throw missing;
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ ...chromeLaunchOptions(findChrome(env)), headless });
   try {
-    return await browser.newContext({ baseURL: effectiveOrigin(site, env), viewport: headless ? { width: 1280, height: 900 } : null });
+    return await browser.newContext({ baseURL: effectiveOrigin(site, env), viewport: headless ? { width: 1280, height: 900 } : null, storageState: state });
   } catch (error) {
     await browser.close().catch(() => {});
     throw error;
@@ -112,7 +130,7 @@ export async function launchInMemory(site: Site, headless: boolean, env: Env = p
 }
 
 /** Closes a context from launch() or launchInMemory(), and the browser launchInMemory() started. */
-async function closeContext(context: BrowserContext): Promise<void> {
+export async function closeContext(context: BrowserContext): Promise<void> {
   await context.close().catch(() => {});
   await context.browser()?.close().catch(() => {});
 }
@@ -136,17 +154,16 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Re
   const headless = options.headless || isTest(env);
   const timeoutMs = loginTimeoutMs(site, options.headless, env);
   const origin = effectiveOrigin(site, env);
-  const seed = options.fromProfile ? await profileCookies(site, options.fromProfile, env) : [];
+  const seed = options.fromProfile ? (await profileState(site, options.fromProfile, env)).cookies : [];
   if (options.fromProfile) {
     if (seed.length === 0) return null;
     options.note?.(`signing in with ${seed.length} cookie(s) from ${options.fromProfile} (kept in memory)`);
   }
   // Seeded cookies stay in memory: the sign-in runs in a context with no profile on disk.
   const context = seed.length
-    ? await launchInMemory(site, headless, env)
+    ? await launchInMemory(site, headless, env, { cookies: seed, origins: [] })
     : await launch(site, ensureStateDir(profileDir(ensureStateDir(stateDir(site, env)))), headless, env);
   try {
-    if (seed.length) await context.addCookies(seed);
     const done = new Promise<Request | "logged-out" | null>((resolve) => {
       const timer = setTimeout(() => resolve(null), timeoutMs);
       let grace: ReturnType<typeof setTimeout> | undefined;

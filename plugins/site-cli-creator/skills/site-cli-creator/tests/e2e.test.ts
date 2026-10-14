@@ -11,9 +11,9 @@
 // Needs Google Chrome (login, check --writes, Capture). Without it the suites are skipped.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { copyExpected, OPERATION_NAMES } from "../fixtures/expected/copy";
 import { ACCOUNT, INVOICES, newStore, SUBSCRIPTIONS, USER } from "../fixtures/site/data";
 import { startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
@@ -107,6 +107,13 @@ const FIXTURE_VALUES: { value: string; re: RegExp }[] = [
     const re = typeof v === "number" ? new RegExp(`(?<![\\d.])${escape(s)}(?![\\d.])`) : new RegExp(`(?<![\\p{L}\\p{N}_])${escape(s)}(?![\\p{L}\\p{N}_])`, "u");
     return { value: s, re };
   });
+
+/** The Chrome cookie files under a profile dir that hold a cookie named `name`. */
+function cookieFilesHolding(dir: string, name: string): string[] {
+  const files = (d: string): string[] =>
+    existsSync(d) ? readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(d, e.name)) : [join(d, e.name)])) : [];
+  return files(dir).filter((f) => basename(f).startsWith("Cookies") && readFileSync(f).includes(name));
+}
 
 function leaks(text: string): string[] {
   return FIXTURE_VALUES.filter(({ re }) => re.test(text)).map(({ value }) => value);
@@ -346,8 +353,24 @@ for (const auth of ["none", "login"] as const) {
           expect(sid).toBeDefined();
           expect(r.stdout + r.stderr).not.toContain(sid!);
           // The session works.
-          const sub = await cli(["subscription", "show"], { env: { SITE_CLI_HOME: freshHome, SITE_CLI_NONINTERACTIVE: "1" } });
+          const offline = { SITE_CLI_HOME: freshHome, SITE_CLI_NONINTERACTIVE: "1" };
+          const sub = await cli(["subscription", "show"], { env: offline });
           expect(sub.code, sub.stderr).toBe(0);
+
+          // check --writes drives the write trigger signed in from the Capture's profile: still one sign-in (#46).
+          const notes = site.notes().length;
+          const writes = writesSeen();
+          const checked = await cli(["check", "--writes"], { env: offline, timeout: 180_000 });
+          expect(checked.code, checked.stdout + checked.stderr).toBe(0);
+          expect(checked.out.operations.find((o: { operation: string }) => o.operation === OPS.addNote)?.status).toBe("ok");
+          expect(writesSeen()).toBe(writes);
+          expect(site.notes().length).toBe(notes);
+          // The bearer expires: the silent refresh signs in from the Capture's profile too.
+          site.revokeTokens();
+          const refreshed = await cli(["subscription", "show"], { env: offline });
+          expect(refreshed.code, refreshed.stdout + refreshed.stderr).toBe(0);
+          // The CLI's own profile never received the sign-in.
+          expect(cookieFilesHolding(join(freshHome, "profile"), "shop_sid")).toEqual([]);
 
           const missing = await cli(["login", "--from-profile", join(work, "no-such-profile")], { env: { SITE_CLI_HOME: freshHome } });
           expect(missing.code).toBe(2);
