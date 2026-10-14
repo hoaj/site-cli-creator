@@ -3,7 +3,7 @@
   "owner": { "name": "Andreas Jørgensen" },
   "metadata": {
     "description": "Personal agent skills by hoaj",
-    "version": "1.3.2"
+    "version": "1.4.1"
   },
   "plugins": [
     {
@@ -18,7 +18,7 @@
     },
     {
       "name": "logbuy",
-      "source": { "source": "url", "url": "https://github.com/hoaj/logbuy-plugin.git" },
+      "source": "./plugins/logbuy",
       "description": "Find deals on Visma LogBuy (mylogbuy.com): search products, show a deal, browse categories."
     }
   ]
