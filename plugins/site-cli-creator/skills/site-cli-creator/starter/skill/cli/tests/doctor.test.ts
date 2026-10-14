@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { chromeCandidates, chromeLaunchOptions, findChrome } from "../src/runtime/chrome";
 import { binaryFindings, doctor, generatedJsonPath, readGenerated, type Exec } from "../src/runtime/doctor";
@@ -86,6 +86,21 @@ describe("doctor", () => {
       platform: "linux",
     });
     expect(out.chrome).toStartWith("not found (looked at /opt/google/chrome/chrome)");
+  });
+
+  test("an older build's ~/.<plugin>-<plugin>/ beside ~/.<plugin>/ is named as left alone (#44)", async () => {
+    const site = makeSite({ plugin: "acme", skill: "acme" });
+    const opts = { env: {}, exec: fakeExec({}), home: home.dir };
+    expect(await doctor(site, opts)).toMatchObject({ stateDir: join(home.dir, ".acme"), session: "none" });
+    expect((await doctor(site, opts)).oldStateDir).toBeUndefined();
+    mkdirSync(join(home.dir, ".acme-acme"));
+    expect((await doctor(site, opts)).oldStateDir).toBeUndefined(); // only the old one: run() moves it
+    saveSession(join(home.dir, ".acme"), { headers: {}, ids: {}, savedAt: "2026-10-01T00:00:00.000Z" });
+    const both = await doctor(site, opts);
+    expect(both).toMatchObject({ stateDir: join(home.dir, ".acme"), session: "saved 2026-10-01T00:00:00.000Z" });
+    expect(both.oldStateDir).toStartWith(`${join(home.dir, ".acme-acme")}: left alone and not used`);
+    // A skill not named after its plugin has no older name.
+    expect((await doctor(makeSite({ plugin: "acme", skill: "shop" }), opts)).stateDir).toBe(join(home.dir, ".acme-shop"));
   });
 
   test("no repo access names the owner", async () => {

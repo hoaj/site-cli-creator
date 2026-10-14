@@ -13,6 +13,7 @@ import { bugFrame, bugKey, errorName, redactStack } from "./runtime/fingerprint"
 import { BUILTIN_FLAGS, flagSpecs, help, type FlagSpec } from "./runtime/help";
 import { chromeLogin } from "./runtime/login";
 import { selftest } from "./runtime/selftest";
+import { legacyStateDir, migrateStateDir, stateDir } from "./runtime/session";
 import type { Operation } from "./runtime/operation";
 import { siteProblems, type Site } from "./runtime/site";
 
@@ -101,6 +102,20 @@ function defaultDeps(app: App): Deps {
   };
 }
 
+/**
+ * Moves a state dir an older build left in ~/.<plugin>-<plugin>/ to ~/.<plugin>/ once (SPEC §7), so
+ * the user stays signed in. A move that fails is reported and never stops the command.
+ */
+function moveLegacyStateDir(site: Site, deps: Deps) {
+  try {
+    const m = migrateStateDir(site, deps.env);
+    if (m.moved) deps.note(`moved the state dir ${m.from} to ${m.to}; the sign-in carries over`);
+  } catch (e) {
+    const code = (e as NodeJS.ErrnoException)?.code ?? errorName(e);
+    deps.note(`could not move the state dir ${legacyStateDir(site, deps.env)} to ${stateDir(site, deps.env)} (${code}); it stays where it is, and a sign-in may be needed`);
+  }
+}
+
 const compiled = () => import.meta.path.includes("$bunfs") || import.meta.path.includes("~BUN");
 
 export async function run(argv: string[], app: App): Promise<RunResult> {
@@ -111,6 +126,7 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
     if (problems.length) throw new ContractError(`site.ts: ${problems.join("; ")}`);
     const { words, flags, account, confirm } = splitGlobals(argv);
     const deps = defaultDeps(app);
+    moveLegacyStateDir(site, deps);
     const client = new Client(site, deps, { confirm });
     let builtin = words[0] ?? "help";
     let rest = flags;
