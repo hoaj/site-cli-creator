@@ -16,6 +16,8 @@ export type FailureDetails = {
   drifts?: DriftEntry[];
   stack?: string[];
   accounts?: Account[];
+  /** Replaces the kind's fixed `next`, when that sentence would be wrong here (the MCP login tool's own failures). */
+  next?: string;
 };
 
 export class Failure extends Error {
@@ -113,7 +115,7 @@ export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface =
       ...(d.accounts !== undefined && { accounts: d.accounts }),
       version: site.version,
       os: osName(),
-      next: nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface),
+      next: d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface),
     },
   };
 }
