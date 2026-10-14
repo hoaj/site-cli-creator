@@ -1,0 +1,56 @@
+{
+  "operation": "GET /auth/signin",
+  "kind": "rest",
+  "effect": "read",
+  "navigation": true,
+  "resourceType": "document",
+  "host": "www.mylogbuy.com",
+  "method": "GET",
+  "path": "/auth/signin",
+  "request": {
+    "headers": {
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/jxl,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+      "accept-encoding": null,
+      "accept-language": null,
+      "cache-control": null,
+      "cookie": null,
+      "pragma": null,
+      "priority": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sec-fetch-dest": null,
+      "sec-fetch-mode": null,
+      "sec-fetch-site": null,
+      "sec-fetch-user": null,
+      "upgrade-insecure-requests": null,
+      "user-agent": null
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "contentType": "text/html",
+      "headers": {
+        "age": null,
+        "cache-control": null,
+        "content-encoding": null,
+        "content-type": "text/html",
+        "date": null,
+        "link": null,
+        "server": null,
+        "strict-transport-security": null,
+        "vary": null,
+        "x-matched-path": null,
+        "x-powered-by": null,
+        "x-vercel-cache": null,
+        "x-vercel-id": null
+      },
+      "body": {
+        "kind": "html"
+      }
+    }
+  ],
+  "seen": 1,
+  "aborted": 0
+}

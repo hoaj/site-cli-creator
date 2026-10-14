@@ -1,0 +1,59 @@
+{
+  "operation": "GET /legal/privacy-policy",
+  "kind": "rest",
+  "effect": "read",
+  "resourceType": "fetch",
+  "host": "www.mylogbuy.com",
+  "method": "GET",
+  "path": "/legal/privacy-policy",
+  "request": {
+    "headers": {
+      "accept": "*/*",
+      "baggage": null,
+      "cookie": null,
+      "next-router-prefetch": null,
+      "next-router-state-tree": null,
+      "next-url": null,
+      "referer": null,
+      "rsc": null,
+      "sec-ch-ua": null,
+      "sec-ch-ua-mobile": null,
+      "sec-ch-ua-platform": null,
+      "sentry-trace": null,
+      "user-agent": null,
+      "x-deployment-id": null
+    },
+    "query": {
+      "type": "object",
+      "fields": {
+        "_rsc": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  "responses": [
+    {
+      "status": 200,
+      "contentType": "text/x-component",
+      "headers": {
+        "age": null,
+        "cache-control": null,
+        "content-encoding": null,
+        "content-type": "text/x-component",
+        "date": null,
+        "server": null,
+        "strict-transport-security": null,
+        "vary": null,
+        "x-matched-path": null,
+        "x-vercel-cache": null,
+        "x-vercel-id": null
+      },
+      "body": {
+        "kind": "text"
+      }
+    }
+  ],
+  "seen": 2,
+  "aborted": 0
+}

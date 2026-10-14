@@ -1,0 +1,13 @@
+{
+  "name": "logbuy-plugin",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bump": "bun scripts/bump.ts",
+    "test": "bun test",
+    "version-check": "bun scripts/version-check.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2"
+  }
+}

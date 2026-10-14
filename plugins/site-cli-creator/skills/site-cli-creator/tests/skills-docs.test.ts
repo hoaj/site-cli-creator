@@ -49,7 +49,7 @@ describe("manifests", () => {
       const mk = JSON.parse(read(join(REPO, p)));
       const entry = mk.plugins.find((x: { name: string }) => x.name === "site-cli-creator");
       expect(entry).toEqual({ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description });
-      expect(mk.metadata.version).toBe("1.3.1");
+      expect(mk.metadata.version).toBe("1.4.0");
     }
     expect(read(join(REPO, "README.md"))).toContain("[site-cli-creator](./plugins/site-cli-creator)");
   });

@@ -1,0 +1,52 @@
+{
+  "task": "deal-browse",
+  "startPath": "/search",
+  "write": false,
+  "operations": [
+    {
+      "operation": "GET /search",
+      "kind": "rest",
+      "effect": "read",
+      "navigation": true,
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/search",
+      "file": "GET-search.shape.json",
+      "seen": 3,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/content-set-configs",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/content-set-configs",
+      "file": "GET-api-content-set-configs.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /api/notifications/unread-count",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/api/notifications/unread-count",
+      "file": "GET-api-notifications-unread-count.shape.json",
+      "seen": 1,
+      "aborted": 0
+    },
+    {
+      "operation": "GET /",
+      "kind": "rest",
+      "effect": "read",
+      "method": "GET",
+      "host": "www.mylogbuy.com",
+      "path": "/",
+      "file": "GET-root.shape.json",
+      "seen": 1,
+      "aborted": 0
+    }
+  ]
+}
