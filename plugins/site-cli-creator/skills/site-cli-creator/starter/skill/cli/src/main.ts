@@ -15,7 +15,8 @@ import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
 import { hashPassword, MIN_PASSWORD_LENGTH, remoteConfig, type RemoteConfig } from "./runtime/remote-config";
 import { selftest } from "./runtime/selftest";
-import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir } from "./runtime/session";
+import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir, type Session } from "./runtime/session";
+import type { SessionCheck } from "./runtime/setup";
 import type { Operation } from "./runtime/operation";
 import { siteProblems, type Site } from "./runtime/site";
 import { z } from "zod";
@@ -249,8 +250,50 @@ function failed(e: unknown, site: Site, commandName: string, surface: Surface = 
 const MCP_ACCOUNT = z.string().min(1).optional().describe(flagDescription(GLOBAL_FLAGS, "account"));
 const MCP_CONFIRM = z.boolean().optional().describe("send the write; without it the tool returns a dry run to show the user first");
 
-/** `loginWaitMs`: how long the login tool waits for the sign-in before answering signingIn (below an MCP client's request timeout). */
-export type McpOptions = { loginWaitMs?: number };
+/**
+ * What the Setup page says when it cannot take an uploaded Session: one sentence for the Owner,
+ * built from the Failure's kind and never from its message, so nothing the site sent is echoed.
+ */
+function sessionReason(e: unknown, skill: string): string {
+  if (e instanceof Failure) {
+    const refused = e.kind === "session" || (e.kind === "drift" && !!e.drifts?.length && e.drifts.every((d) => d.fingerprint.includes(":auth:")));
+    if (refused) return `the site did not accept this Session (signed out or expired). Run \`${skill} login\` on your computer again and upload the new session.json`;
+    if (e.kind === "network") return "the site is not responding right now; try again later";
+    if (e.kind === "drift") return `the site has changed (Drift), so the Session could not be checked; run \`${skill} check\` on your computer`;
+  }
+  return "the Session could not be checked (an error inside the server)";
+}
+
+/**
+ * The Setup page's live check: the read Operations, called as `check` does but with the uploaded
+ * Session and no sign-in or refresh, so a bad upload is refused before it replaces a working
+ * Session. The candidate is never saved.
+ */
+export async function checkSession(app: App, candidate: Session): Promise<SessionCheck> {
+  const client = new Client(app.site, defaultDeps(app), { session: candidate, reauth: false, surface: "mcp" });
+  try {
+    let result: Awaited<ReturnType<typeof check>>;
+    try {
+      result = await check(client, app.operations, { writes: false });
+    } catch (e) {
+      // Several accounts and no account asked for: check ends in input naming them. One account proves the Session works.
+      const accounts = e instanceof Failure && e.kind === "input" ? e.details.accounts : undefined;
+      if (!accounts?.length) throw e;
+      result = await check(client, app.operations, { writes: false, account: accounts[0]!.id });
+    }
+    const tried = result.operations.filter((r) => r.effect === "read" && r.status === "ok").length;
+    if (tried === 0 && app.operations.some((op) => op.effect === "read")) return { ok: false, reason: "none of the site's reads could be tried with this Session" };
+    return { ok: true, tried };
+  } catch (e) {
+    return { ok: false, reason: sessionReason(e, app.site.skill) };
+  }
+}
+
+/**
+ * `loginWaitMs`: how long the login tool waits for the sign-in before answering signingIn (below an
+ * MCP client's request timeout). `remote`: the tools of a remote server (below).
+ */
+export type McpOptions = { loginWaitMs?: number; remote?: boolean };
 
 /**
  * The `mcp` built-in's tools: one per Task command, plus login (auth login), check and doctor.
@@ -258,11 +301,14 @@ export type McpOptions = { loginWaitMs?: number };
  * typed (JSON, not flags), messages and `next` speak of tools, and a command never opens a headed
  * sign-in (Client `surface: "mcp"`), so it fails with session and the client calls login instead.
  * run() has already moved a legacy state dir by the time main() serves. Local mode serves them
- * over stdio (mcpServer); remote mode over HTTP (runtime/remote.ts).
+ * over stdio (mcpServer); remote mode over HTTP (runtime/remote.ts). In remote mode there is no
+ * Chrome to sign in with: the login tool is not listed, check offers no `writes`, and a session
+ * failure sends the Owner to the Setup page (the adapter in remote.ts rewrites its `next`).
  */
 export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo; tools: McpTool[] } {
   const { site } = app;
-  const deps = defaultDeps(app);
+  // A remote server has no Chrome: a Client there never tries one, so a refused sign-in is a clean session failure.
+  const deps: Deps = options.remote ? { ...defaultDeps(app), login: async () => null } : defaultDeps(app);
   const loginWaitMs = options.loginWaitMs ?? 20_000;
   /** The headed sign-in the login tool started, while its Chrome window is open. */
   let signingIn: Promise<unknown> | null = null;
@@ -331,13 +377,13 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
     return done.r;
   };
 
-  const login = site.auth === "login"
+  const login = site.auth === "login" && !options.remote
     ? [tool("login", "Open Chrome so the user signs in to the site; call it when a tool fails with kind session", z.object({}).strict(), { readOnlyHint: false, destructiveHint: false, openWorldHint: true }, "login", signIn)]
     : [];
 
   const checkSchema = z.object({
     op: z.string().optional().describe(flagDescription(BUILTIN_FLAGS.check!, "op")),
-    writes: z.boolean().optional().describe(flagDescription(BUILTIN_FLAGS.check!, "writes")),
+    ...(!options.remote && { writes: z.boolean().optional().describe(flagDescription(BUILTIN_FLAGS.check!, "writes")) }),
     account: MCP_ACCOUNT,
   }).strict();
 
@@ -357,6 +403,7 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
     `These tools run Tasks on ${site.origin}${site.auth === "login" ? " as the signed-in user" : ""}; every result is JSON.`,
     `A tool with a confirm argument writes: call it without confirm first, show the user the dry run it returns, and call it again with confirm: true only after the user's explicit yes.`,
     `A failed call returns {"error": {kind, message, next}}: do what next says. On kind drift, stop and do not work around it.`,
+    ...(options.remote ? [`When a tool fails with kind session, the Owner must give this server a new Session on its Setup page; do what next says.`] : []),
   ].join(" ");
   return { info: { name: site.skill === site.plugin ? site.plugin : `${site.plugin}-${site.skill}`, version: site.version, instructions }, tools };
 }
@@ -394,7 +441,15 @@ export async function main(argv: string[], app: App): Promise<never> {
     const deps = defaultDeps(app);
     let server: Awaited<ReturnType<typeof serveHttp>>;
     try {
-      server = await serveHttp({ ...mcpTools(app), site: app.site, config: result.remote, dir: ensureStateDir(stateDir(app.site, deps.env)), note });
+      server = await serveHttp({
+        ...mcpTools(app, { remote: true }),
+        site: app.site,
+        config: result.remote,
+        dir: ensureStateDir(stateDir(app.site, deps.env)),
+        env: deps.env,
+        checkSession: (candidate) => checkSession(app, candidate),
+        note,
+      });
     } catch (e) {
       // A port in use or an unreadable oauth.json is still one envelope on stdout, never a stack trace.
       const { output, code } = failed(e, app.site, "mcp");

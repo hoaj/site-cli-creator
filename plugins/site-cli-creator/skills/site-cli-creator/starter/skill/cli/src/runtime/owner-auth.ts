@@ -280,6 +280,28 @@ export class OwnerProvider implements OAuthServerProvider {
     return mine.length >= LOCK_AFTER || (mine.length > 0 && this.allFailures.length >= GLOBAL_LOCK_AFTER);
   }
 
+  private recordFailure(ip: string) {
+    const t = this.now();
+    if (!this.failures.has(ip) && this.failures.size >= MAX_TRACKED) this.failures.delete(this.failures.keys().next().value!);
+    this.failures.set(ip, [...(this.failures.get(ip) ?? []), t]);
+    this.allFailures.push(t);
+  }
+
+  /** The Owner password for a Setup page action, under the same lockout as the sign-in page. */
+  checkOwnerPassword(password: string, ip: string): { ok: true } | { error: string } {
+    if (this.locked(ip)) {
+      this.event(`Setup page refused from ${ip}: locked out`);
+      return { error: "Too many attempts. Try again in a few minutes." };
+    }
+    if (!verifyPassword(this.o.password, password)) {
+      this.recordFailure(ip);
+      this.event(`failed Setup page password from ${ip}`);
+      return { error: "Wrong password." };
+    }
+    this.failures.delete(ip);
+    return { ok: true };
+  }
+
   /** POST /login: the password for an open sign-in page. */
   completeLogin(requestId: string, password: string, ip: string): LoginResult {
     this.sweep();
@@ -294,10 +316,7 @@ export class OwnerProvider implements OAuthServerProvider {
 
     if (!verifyPassword(this.o.password, password)) {
       pending.attempts += 1;
-      const t = this.now();
-      if (!this.failures.has(ip) && this.failures.size >= MAX_TRACKED) this.failures.delete(this.failures.keys().next().value!);
-      this.failures.set(ip, [...(this.failures.get(ip) ?? []), t]);
-      this.allFailures.push(t);
+      this.recordFailure(ip);
       if (pending.attempts >= LOCK_AFTER) this.pending.delete(requestId);
       this.event(`failed sign-in from ${ip}${who} (wrong password)`);
       return { error: "Wrong password.", requestId: pending.attempts < LOCK_AFTER ? requestId : undefined };
