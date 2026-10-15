@@ -3,6 +3,7 @@
 // main.ts imports this module only for `--http`, so local mode never loads the SDK or Express.
 import express from "express";
 import type { Server as HttpServer } from "node:http";
+import { Readable } from "node:stream";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
@@ -12,7 +13,9 @@ import { Failure } from "./envelope";
 import { inputSchema, toolResult, type McpTool, type ServerInfo } from "./mcp";
 import { OAuthStore, OwnerProvider, failedPage, returningPage, signedInPage } from "./owner-auth";
 import { redirectAllowed, type RemoteConfig } from "./remote-config";
-import type { Site } from "./site";
+import { saveSession, sessionUploadSchema, type Session } from "./session";
+import { clearSession, persistenceWarning, readStatus, setupPage, writeStatus, type SessionCheck, type SetupPage } from "./setup";
+import type { Env, Site } from "./site";
 
 export type ServeOptions = {
   info: ServerInfo;
@@ -23,6 +26,10 @@ export type ServeOptions = {
   dir: string;
   /** Interface to listen on; all of them by default, as a container needs. */
   host?: string;
+  /** The host's environment, for the Setup page's volume warning. */
+  env?: Env;
+  /** One live read with a candidate Session (main.ts builds it from the registry), before it is stored. */
+  checkSession: (candidate: Session) => Promise<SessionCheck>;
   note: (message: string) => void;
   now?: () => number;
 };
@@ -32,8 +39,30 @@ export type RemoteServer = { url: string; store: OAuthStore; provider: OwnerProv
 /** Origins a browser-borne request to /mcp may come from; a request without Origin is served. */
 const CLIENT_ORIGINS = ["https://claude.ai"];
 
+/** The Setup page's upload: a request of at most this size, holding a session.json of at most the second. */
+const MAX_UPLOAD_REQUEST = 256 * 1024;
+const MAX_SESSION_BYTES = 64 * 1024;
+
+/** What the tool adapter needs to point a client at the Setup page. */
+type SetupInfo = { dir: string; url: string; skill: string; now: () => number };
+
+/**
+ * A `session` failure in remote mode is the Owner's to fix, not the client's: the Setup page then
+ * shows the Session as expired (when one was stored), and `next` names that page, not the login tool.
+ */
+function sessionFailure(output: unknown, setup: SetupInfo): unknown {
+  const error = (output as { error?: { kind?: string; message?: string } } | null)?.error;
+  if (!error || error.kind !== "session") return output;
+  const before = readStatus(setup.dir);
+  if (before.state !== "missing") {
+    writeStatus(setup.dir, { state: "expired", ...(before.uploadedAt && { uploadedAt: before.uploadedAt }), checkedAt: new Date(setup.now()).toISOString(), reason: String(error.message ?? "") });
+  }
+  const next = `Ask the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json). Do not retry until they have.`;
+  return { error: { ...error, next } };
+}
+
 /** The tools as an SDK low-level Server: list and call go to the same McpTool list as local mode. */
-function mcpServerFor(info: ServerInfo, tools: McpTool[], serial: <T>(fn: () => Promise<T>) => Promise<T>) {
+function mcpServerFor(info: ServerInfo, tools: McpTool[], serial: <T>(fn: () => Promise<T>) => Promise<T>, setup: SetupInfo) {
   const byName = new Map(tools.map((t) => [t.name, t]));
   const server = new Server({ name: info.name, version: info.version }, { capabilities: { tools: { listChanged: false } }, instructions: info.instructions });
   server.setRequestHandler(ListToolsRequestSchema, async () => ({
@@ -44,7 +73,7 @@ function mcpServerFor(info: ServerInfo, tools: McpTool[], serial: <T>(fn: () => 
     if (!tool) throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${req.params.name}`);
     // One call at a time, as over stdio, so two calls never refresh one Session together.
     const { output, code } = await serial(() => tool.call((req.params.arguments ?? {}) as Record<string, unknown>));
-    return toolResult(output, code) as never;
+    return toolResult(sessionFailure(output, setup), code) as never;
   });
   return server;
 }
@@ -74,6 +103,9 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     queue = next.catch(() => {});
     return next;
   };
+
+  const clock = () => (o.now ? o.now() * 1000 : Date.now());
+  const setup: SetupInfo = { dir: o.dir, url: new URL("setup", base).href, skill: o.site.skill, now: clock };
 
   const app = express();
   // req.ip feeds the lockout and the SDK's rate limits: trust X-Forwarded-For only from the proxies in front.
@@ -114,6 +146,101 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     res.status(400).type("html").send(failedPage(result.error));
   });
 
+  // --- the Setup page: the Owner gives the server a Session; every action asks for the Owner password ---
+
+  const siteName = new URL(o.site.origin).host;
+  const answer = (res: express.Response, status: number, notice?: SetupPage["notice"]) =>
+    void res
+      .status(status)
+      .set("Cache-Control", "no-store")
+      .type("html")
+      .send(setupPage({ serverName: o.info.name, siteName, auth: o.site.auth, status: readStatus(o.dir), warning: persistenceWarning(o.env ?? {}, o.dir), notice, skill: o.site.skill }));
+  const refuse = (res: express.Response, status: number, text: string) => answer(res, status, { kind: "error", text });
+  const ownerOnly = (req: express.Request, res: express.Response, password: unknown): boolean => {
+    const checked = provider.checkOwnerPassword(typeof password === "string" ? password : "", req.ip ?? "unknown");
+    if ("ok" in checked) return true;
+    refuse(res, 401, checked.error);
+    return false;
+  };
+
+  /** An answer given without reading the body: the connection closes and the unread body is dropped. */
+  const refuseUnread = (req: express.Request, res: express.Response, status: number, text: string) => {
+    res.set("Connection", "close");
+    req.resume();
+    refuse(res, status, text);
+  };
+
+  app.get("/setup", (_req, res) => answer(res, 200));
+
+  app.post("/setup/session", async (req, res) => {
+    if (o.site.auth !== "login") return refuseUnread(req, res, 400, "This site needs no sign-in, so there is no Session to upload.");
+    const length = Number(req.headers["content-length"]);
+    if (!Number.isFinite(length) || length > MAX_UPLOAD_REQUEST) return refuseUnread(req, res, 413, "That upload is too large for a session.json.");
+    let form: FormData;
+    try {
+      form = await new Request("http://local/", {
+        method: "POST",
+        headers: { "content-type": req.headers["content-type"] ?? "" },
+        body: Readable.toWeb(req) as unknown as ReadableStream,
+        duplex: "half",
+      } as RequestInit).formData();
+    } catch {
+      return refuse(res, 400, "The upload could not be read; use the form on this page.");
+    }
+    if (!ownerOnly(req, res, form.get("password"))) return;
+    const file = form.get("session_file");
+    const pasted = form.get("session_text");
+    let text = file instanceof File ? await file.text() : "";
+    if (!text.trim()) text = typeof pasted === "string" ? pasted : "";
+    if (!text.trim()) return refuse(res, 400, "Choose session.json or paste its contents.");
+    if (Buffer.byteLength(text) > MAX_SESSION_BYTES) return refuse(res, 413, "session.json is larger than 64 KB; that is not a session file.");
+    let parsed: ReturnType<typeof sessionUploadSchema.safeParse>;
+    try {
+      parsed = sessionUploadSchema.safeParse(JSON.parse(text));
+    } catch {
+      parsed = sessionUploadSchema.safeParse(undefined);
+    }
+    if (!parsed.success) {
+      // Top-level field names only: nothing the Owner sent comes back.
+      const fields = [...new Set(parsed.error.issues.map((i) => String(i.path[0] ?? "")).filter(Boolean))];
+      return refuse(res, 400, `That is not a session.json from ${o.site.skill} login${fields.length ? ` (check: ${fields.join(", ")})` : ""}.`);
+    }
+    const at = new Date(clock()).toISOString();
+    const { headers, ids, accounts } = parsed.data;
+    let checked: SessionCheck;
+    try {
+      // Through the same queue as the tool calls, so the check never overlaps a call that refreshes a Session.
+      checked = await serial(() => o.checkSession({ headers, ids, accounts, savedAt: at }));
+    } catch {
+      note("a Session upload failed inside the server");
+      return refuse(res, 500, "The Session could not be checked (an error inside the server).");
+    }
+    if (!checked.ok) {
+      note("Session rejected (the live check failed)");
+      return refuse(res, 400, `Not stored: ${checked.reason}.`);
+    }
+    await serial(async () => {
+      saveSession(o.dir, { headers, ids, accounts, savedAt: at });
+      writeStatus(o.dir, { state: "valid", uploadedAt: at, checkedAt: at });
+    });
+    note("Session stored (checked)");
+    answer(res, 200, { kind: "ok", text: checked.tried > 0 ? `Session stored and checked against ${siteName}.` : "Session stored; this skill has no read to check it with." });
+  });
+
+  app.post("/setup/delete", express.urlencoded({ extended: false, limit: "16kb" }), async (req, res) => {
+    if (!ownerOnly(req, res, req.body?.password)) return;
+    await serial(async () => clearSession(o.dir));
+    note("Session deleted");
+    answer(res, 200, { kind: "ok", text: "Session deleted." });
+  });
+
+  app.post("/setup/signout", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+    if (!ownerOnly(req, res, req.body?.password)) return;
+    provider.revokeAll();
+    note("every client signed out from the Setup page");
+    answer(res, 200, { kind: "ok", text: "Every client is signed out; each one has to sign in again." });
+  });
+
   const allowedOrigins = new Set([base.origin, ...CLIENT_ORIGINS]);
   const origin: express.RequestHandler = (req, res, next) => {
     const from = req.headers.origin;
@@ -123,7 +250,7 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
   const bearer = requireBearerAuth({ verifier: provider, resourceMetadataUrl: getOAuthProtectedResourceMetadataUrl(mcpUrl), expectedResource: mcpUrl });
 
   app.post("/mcp", origin, bearer, express.json({ limit: "1mb" }), async (req, res) => {
-    const server = mcpServerFor(o.info, o.tools, serial);
+    const server = mcpServerFor(o.info, o.tools, serial, setup);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on("close", () => {
       transport.close().catch(() => {});

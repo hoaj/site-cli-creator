@@ -4,6 +4,7 @@
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import type { Account } from "./envelope";
 import type { Env } from "./site";
 
@@ -20,6 +21,17 @@ export type Session = {
   fromProfile?: string;
   savedAt: string;
 };
+
+/**
+ * What the Setup page accepts as a Session: the shape `login` writes. Unknown keys are stripped
+ * (`fromProfile` is a path on the Owner's computer, meaningless on a server).
+ */
+export const sessionUploadSchema = z.object({
+  headers: z.record(z.string(), z.string()),
+  ids: z.record(z.string(), z.string()),
+  accounts: z.array(z.object({ id: z.string() })).optional(),
+  savedAt: z.string().optional(),
+});
 
 type Names = { plugin: string; skill: string };
 
