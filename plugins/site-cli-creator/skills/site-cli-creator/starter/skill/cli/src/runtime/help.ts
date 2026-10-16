@@ -29,7 +29,9 @@ export function flagSpecs(args: z.ZodObject): FlagSpec[] {
     if (multiple) inner = unwrap(inner._zod.def.element);
     const t = inner._zod.def.type;
     const type: FlagType = t === "boolean" ? "boolean" : t === "number" || t === "int" || t === "bigint" ? "number" : t === "enum" ? "enum" : "string";
-    const spec: FlagSpec = { name: `--${kebab(key)}`, key, type, multiple, required: (schema as any)._zod.optin !== "optional" && type !== "boolean" };
+    // Zod 4 marks `.optional()` as optin "optional" and `.default()` as "defaulted": either may be left out.
+    const optin = (schema as any)._zod.optin;
+    const spec: FlagSpec = { name: `--${kebab(key)}`, key, type, multiple, required: optin !== "optional" && optin !== "defaulted" && type !== "boolean" };
     if (type === "enum") spec.values = Object.values(inner._zod.def.entries).map(String);
     const description = schema.description ?? inner.description;
     if (description) spec.description = description;

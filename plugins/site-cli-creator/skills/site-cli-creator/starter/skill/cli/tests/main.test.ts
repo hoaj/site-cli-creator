@@ -47,6 +47,21 @@ describe("flag parsing", () => {
     expect(specs[4].values).toEqual(["a", "b"]);
   });
 
+  test("a flag with a default is not required, whatever wraps it (#70: Zod 4 reports it as defaulted)", () => {
+    const withDefaults = flagSpecs(z.object({
+      limit: z.number().default(10),
+      pages: z.coerce.number().int().min(1).max(200).default(10).describe("how many"),
+      query: z.string(),
+      sort: z.enum(["new", "old"]).default("new"),
+    }));
+    expect(withDefaults.map((s) => [s.name, s.required])).toEqual([
+      ["--limit", false],
+      ["--pages", false],
+      ["--query", true],
+      ["--sort", false],
+    ]);
+  });
+
   test("presence booleans, --k v, --k=v, numbers, repeated arrays", () => {
     expect(parseFlags(specs, ["--all", "--from-date", "2026-01-01", "--limit=5", "--tag", "x", "--tag", "y"])).toEqual({
       all: true,
