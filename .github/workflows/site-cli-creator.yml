@@ -97,7 +97,8 @@ jobs:
           name: smoke-${{ matrix.target }}
           path: ${{ runner.temp }}/dist/
           if-no-files-found: error
-          retention-days: 3
+          # Only run-smoke in this same run reads them; a day keeps ~100 MB binaries from filling the storage quota.
+          retention-days: 1
 
   # Each binary on its own platform, with no node_modules: help, version, the
   # hidden `selftest` (plain fetch, Chrome launch, route.abort), a Task command
