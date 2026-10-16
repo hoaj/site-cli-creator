@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.5.1, both skills exist", () => {
+  test("version 0.6.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.5.1");
+      expect(m.version).toBe("0.6.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -49,7 +49,7 @@ describe("manifests", () => {
       const mk = JSON.parse(read(join(REPO, p)));
       const entry = mk.plugins.find((x: { name: string }) => x.name === "site-cli-creator");
       expect(entry).toEqual({ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description });
-      expect(mk.metadata.version).toBe("1.8.1");
+      expect(mk.metadata.version).toBe("1.9.0");
     }
     expect(read(join(REPO, "README.md"))).toContain("[site-cli-creator](./plugins/site-cli-creator)");
   });
@@ -61,6 +61,7 @@ describe("skills", () => {
     generatorFeedback: join(PLUGIN, "skills/site-cli-creator-feedback/SKILL.md"),
     starterSkill: join(GEN, "starter/skill/SKILL.md"),
     starterFeedback: join(GEN, "starter/feedback/SKILL.md"),
+    starterDeploy: join(GEN, "starter/deploy/SKILL.md"),
   };
 
   test("frontmatter holds only name and description", () => {
@@ -108,6 +109,35 @@ describe("skills", () => {
     for (const s of ["fixed-in", "on its way", "bug: <bug key>", "feature: <skill>: <Task in plain words>", "/issues/new", "Drift is no exception", "gh issue create --repo __REPO__"]) expect(md).toContain(s);
   });
 
+  test("starter deploy SKILL.md states the container contract and the Railway steps, with only plugin-level tokens", () => {
+    const md = read(skills.starterDeploy);
+    expect(md).toMatch(/^---\n[\s\S]*?\n---\n<!-- version: 0\.1\.0 -->\n/);
+    expect(frontmatter(md).name).toBe("__PLUGIN__-deploy");
+    expect(md.trimEnd().split("\n").length).toBeLessThanOrEqual(140);
+    for (const t of ["__SKILL__", "__ORIGIN__", "__AUTH__"]) expect(md).not.toContain(t);
+    for (const s of ["/data", "/healthz", "/setup", "/mcp", "OWNER_PASSWORD_HASH", "--hash-password", "railway up", "openssl rand", "PUBLIC_URL"]) expect(md).toContain(s);
+    const railway = md.slice(md.indexOf("## Railway"));
+    for (const s of ["railway init", "railway volume add", "railway variable set", "railway domain", "railway up", "/data", "/healthz", "/setup"]) expect(railway).toContain(s);
+  });
+
+  test("starter Dockerfile builds the binary from cli/ and runs mcp --http on a distroless image", () => {
+    const df = read(join(GEN, "starter/skill/Dockerfile"));
+    expect(df).toContain("COPY cli/");
+    expect(df).toMatch(/bun build\.ts "\$t" \/out\/__SKILL__/);
+    expect(df).toContain("bun-linux-x64");
+    expect(df).toContain("bun-linux-arm64");
+    expect(df).toMatch(/^FROM gcr\.io\/distroless\/cc-debian12/m);
+    expect(df).toContain("HOME=/data");
+    expect(df).toMatch(/^EXPOSE 8080$/m);
+    expect(df).toContain('ENTRYPOINT ["/usr/local/bin/__SKILL__", "mcp", "--http"]');
+    const rj = JSON.parse(read(join(GEN, "starter/skill/railway.json")));
+    expect(rj.build).toEqual({ builder: "DOCKERFILE", dockerfilePath: "Dockerfile" });
+    expect(rj.deploy.healthcheckPath).toBe("/healthz");
+    expect(rj.deploy.numReplicas).toBe(1);
+    const ignore = read(join(GEN, "starter/skill/.dockerignore")).split("\n");
+    for (const f of ["bin/", "captures/", "cli/node_modules/", "cli/dist/", "cli/tests/"]) expect(ignore).toContain(f);
+  });
+
   test("generator feedback files on hoaj/skills with the site-cli-creator label", () => {
     const md = read(skills.generatorFeedback);
     expect(md).toContain("gh issue create --repo hoaj/skills --label site-cli-creator");
@@ -116,7 +146,7 @@ describe("skills", () => {
   });
 
   test("starter files use only known placeholder tokens", () => {
-    for (const p of [skills.starterSkill, skills.starterFeedback, join(GEN, "starter/plugin/README.md")]) {
+    for (const p of [skills.starterSkill, skills.starterFeedback, skills.starterDeploy, join(GEN, "starter/plugin/README.md")]) {
       for (const [t] of read(p).matchAll(/__[A-Z_]+__/g)) expect(TOKENS.has(t)).toBe(true);
     }
   });
@@ -251,6 +281,19 @@ describe.skipIf(!IN_REPO)(`generator CI workflow${REPO_REASON}`, () => {
     expect(existsSync(join(PLUGIN, "tsconfig.json"))).toBe(true);
   });
 
+  test("the docker job builds the fixture plugin's Dockerfile and checks the running container, after cleanup-smoke", () => {
+    const start = wf.indexOf("  docker:");
+    expect(start).toBeGreaterThan(wf.indexOf("  cleanup-smoke:"));
+    const job = wf.slice(start);
+    expect(job).toContain("needs: test");
+    expect(job).toContain("runs-on: ubuntu-latest");
+    expect(job).toContain("--origin http://127.0.0.1:4310");
+    for (const s of ['docker build -t fixture-remote "$PLUGIN_DIR/skills/fixture"', "docker run -d --name fixture-remote -p 8080:8080", "OWNER_PASSWORD=ci-owner-password", "PUBLIC_URL=http://localhost:8080", "http://localhost:8080/healthz", "oauth-protected-resource", "http://localhost:8080/mcp", "/setup", "docker logs fixture-remote"]) {
+      expect(job).toContain(s);
+    }
+    expect(wf).toContain("needs: [smoke, run-smoke]");
+  });
+
   test("builds and runs all five targets", () => {
     for (const t of ["darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64", "windows-x64"]) expect(wf).toContain(`target: ${t}`);
     expect(wf).toContain('bun build.ts "bun-${{ matrix.target }}"');
@@ -308,6 +351,12 @@ describe("generated SKILL.md files", () => {
       const fb = read(join(plugin, "skills/shop-feedback/SKILL.md"));
       expect(fb).not.toMatch(/__[A-Z_]+__/);
       expect(fb).toContain("gh issue create --repo acme/shop-plugin");
+      const deploy = read(join(plugin, "skills/shop-deploy/SKILL.md"));
+      expect(deploy).not.toMatch(/__[A-Z_]+__/);
+      expect(deploy).toContain("name: shop-deploy");
+      expect(deploy).toContain("<!-- version: 0.1.0 -->");
+      expect(read(join(skill, "Dockerfile"))).not.toMatch(/__[A-Z_]+__/);
+      expect(JSON.parse(read(join(skill, "railway.json"))).deploy.healthcheckPath).toBe("/healthz");
       const readme = read(join(plugin, "README.md"));
       expect(readme).not.toMatch(/__[A-Z_]+__/);
       expect(readme).toContain("@acme");
