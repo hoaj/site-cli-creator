@@ -48,7 +48,7 @@ export function buildManifests(info: PluginInfo): Record<keyof typeof MANIFESTS,
     repository: url,
     keywords: [info.plugin],
   };
-  const skills = [`./skills/${info.plugin}-feedback`];
+  const skills = [`./skills/${info.plugin}-deploy`, `./skills/${info.plugin}-feedback`];
   const { homepage: _homepage, ...withoutHomepage } = base;
   return {
     claude: { ...base, skills },

@@ -53,6 +53,10 @@ Every CLI skill's binary is also an MCP server: `skills/<skill>/bin/<skill> mcp`
 
 Claude Code: `claude mcp add <skill> -- /path/to/__PLUGIN__/skills/<skill>/bin/<skill> mcp` (the plugin above is the better fit there: it also brings the skills' guidance). Your session stays on your machine, in the same state dir the CLI uses.
 
+### Remote mode (claude.ai and the phone)
+
+To use a CLI skill from claude.ai or your phone, it has to run on a server you control. Ask your agent to deploy it: the `__PLUGIN__-deploy` skill walks through Railway, one server per CLI skill. You choose an Owner password that signs your clients in (the skill can generate one), give the server your Session on its Setup page (`/setup`), and add the server's `/mcp` address as a custom connector. It is for your own account only.
+
 ## Update
 
 Update the plugin in your agent's plugin manager (Claude Code: `/plugin update __PLUGIN__`). A new version lands in a new folder, so the agent downloads the matching binary on first use. Right after a release, the binary can take a few minutes to build; `install.sh` says so when it is not there yet.

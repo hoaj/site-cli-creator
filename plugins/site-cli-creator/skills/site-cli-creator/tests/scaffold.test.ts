@@ -34,6 +34,10 @@ function makeFakeStarter(root: string) {
     "---\nname: __PLUGIN__-feedback\ndescription: Files issues on __REPO__.\n---\n<!-- version: 9.9.9 -->\n\n# __PLUGIN__ feedback\n",
   );
   write(
+    join(root, "deploy", "SKILL.md"),
+    "---\nname: __PLUGIN__-deploy\ndescription: Deploys a __PLUGIN__ CLI skill from __REPO__.\n---\n<!-- version: 9.9.9 -->\n\n# __PLUGIN__ deploy\n",
+  );
+  write(
     join(root, "skill", "SKILL.md"),
     "---\nname: __SKILL__\ndescription: CLI for __ORIGIN__.\n---\n<!-- version: 9.9.9 -->\n\n# __SKILL__\n\n## Commands\n\n<!-- commands:start -->\n<!-- commands:end -->\n",
   );
@@ -81,7 +85,7 @@ beforeAll(() => {
 afterAll(() => rmSync(work, { recursive: true, force: true }));
 
 describe("new.ts", () => {
-  test("writes manifests, generated.json, README and the Feedback skill", () => {
+  test("writes manifests, generated.json, README, the Deploy skill and the Feedback skill", () => {
     const dir = join(work, "plugin-a");
     const r = run(NEW, newArgs(dir, ["--no-labels"]));
     expect(r.code).toBe(0);
@@ -98,7 +102,7 @@ describe("new.ts", () => {
       homepage: "https://github.com/acme/shop-plugin",
       repository: "https://github.com/acme/shop-plugin",
       keywords: ["shop"],
-      skills: ["./skills/shop-feedback"],
+      skills: ["./skills/shop-deploy", "./skills/shop-feedback"],
     });
     expect(readJson(join(dir, ".cursor-plugin/plugin.json"))).toEqual(claude);
     expect(readJson(join(dir, ".codex-plugin/plugin.json"))).toEqual({ ...claude, skills: "./skills/" });
@@ -127,6 +131,9 @@ describe("new.ts", () => {
     const feedback = readFileSync(join(dir, "skills/shop-feedback/SKILL.md"), "utf8");
     expect(feedback).toContain("name: shop-feedback");
     expect(feedback).toContain("<!-- version: 0.1.0 -->");
+    const deploy = readFileSync(join(dir, "skills/shop-deploy/SKILL.md"), "utf8");
+    expect(deploy).toContain("name: shop-deploy");
+    expect(deploy).toContain("<!-- version: 0.1.0 -->");
     expect(readFileSync(join(dir, "docs/shop-notes.md"), "utf8")).toBe("notes for acme/shop-plugin\n");
     expect(readFileSync(join(dir, "assets/logo.bin"))).toEqual(readFileSync(join(fakeStarter, "plugin/assets/logo.bin")));
     expect(existsSync(join(dir, "node_modules"))).toBe(false);
@@ -304,8 +311,8 @@ describe("add-skill.ts", () => {
     expect(existsSync(join(skill, "cli/src/operations/.gitkeep"))).toBe(true);
     expect(findTokens(skill)).toEqual([]);
 
-    expect(readJson(join(plugin, ".claude-plugin/plugin.json")).skills).toEqual(["./skills/shop-feedback", "./skills/shop-web"]);
-    expect(readJson(join(plugin, ".github/plugin/plugin.json")).skills).toEqual(["./skills/shop-feedback", "./skills/shop-web"]);
+    expect(readJson(join(plugin, ".claude-plugin/plugin.json")).skills).toEqual(["./skills/shop-deploy", "./skills/shop-feedback", "./skills/shop-web"]);
+    expect(readJson(join(plugin, ".github/plugin/plugin.json")).skills).toEqual(["./skills/shop-deploy", "./skills/shop-feedback", "./skills/shop-web"]);
     expect(readJson(join(plugin, ".codex-plugin/plugin.json")).skills).toBe("./skills/");
   });
 
@@ -347,13 +354,14 @@ describe("add-skill.ts", () => {
     const base = ["--dir", plugin, "--origin", "https://www.shop.example", "--auth", "none"];
     expect(run(ADD_SKILL, [...base, "--skill", "shop-web"]).out.error.message).toContain("already exists");
     expect(run(ADD_SKILL, [...base, "--skill", "shop-feedback"]).out.error.message).toContain("Feedback skill");
+    expect(run(ADD_SKILL, [...base, "--skill", "shop-deploy"]).out.error.message).toContain("Deploy skill");
     expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "https://a.example", "--auth", "maybe"]).out.error.message).toContain("login or none");
     expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "not a url", "--auth", "none"]).out.error.message).toContain("--origin");
     expect(run(ADD_SKILL, ["--dir", join(work, "nowhere"), "--skill", "x", "--origin", "https://a.example", "--auth", "none"]).code).toBe(1);
   });
 });
 
-const realStarterReady = ["plugin/package.json", "feedback/SKILL.md", "skill/SKILL.md", "skill/cli/src/site.ts", "skill/cli/src/main.ts"].every(
+const realStarterReady = ["plugin/package.json", "feedback/SKILL.md", "deploy/SKILL.md", "skill/SKILL.md", "skill/cli/src/site.ts", "skill/cli/src/main.ts"].every(
   (f) => existsSync(join(REAL_STARTER, f)),
 );
 
@@ -380,7 +388,11 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
       "README.md",
       ".gitignore",
       "skills/shop-feedback/SKILL.md",
+      "skills/shop-deploy/SKILL.md",
       "skills/shop/SKILL.md",
+      "skills/shop/Dockerfile",
+      "skills/shop/.dockerignore",
+      "skills/shop/railway.json",
       "skills/shop/install.sh",
       "skills/shop/.gitignore",
       "skills/shop/cli/package.json",
@@ -393,6 +405,10 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
       expect(existsSync(join(dir, f)), f).toBe(true);
     }
     expect(findTokens(dir)).toEqual([]);
+    expect(readFileSync(join(dir, "skills/shop/Dockerfile"), "utf8")).toContain("/out/shop");
+    const deploy = readFileSync(join(dir, "skills/shop-deploy/SKILL.md"), "utf8");
+    expect(deploy).toContain("name: shop-deploy");
+    expect(deploy).toMatch(/^---\n[\s\S]*?\n---\n<!-- version: 0\.1\.0 -->\n/);
   });
 
   test("the generated skill's runtime tests pass once the placeholders are filled", () => {
