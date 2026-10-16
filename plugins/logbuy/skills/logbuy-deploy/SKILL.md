@@ -2,7 +2,7 @@
 name: logbuy-deploy
 description: Deploys the logbuy CLI skill as a remote MCP server on a host the user controls (Railway first), so claude.ai and the phone can use it, and walks the user through the Owner password, the Session upload and the connector. Use when the user wants logbuy on claude.ai or on their phone, asks to deploy, host or put the logbuy CLI skill online, or has trouble with its remote server, its Setup page or an expired Session there. Not for using logbuy on the user's own computer (that is the CLI skill itself, or its local `mcp`), for anyone else's account, or for hosting it for other people.
 ---
-<!-- version: 0.5.0 -->
+<!-- version: 0.5.1 -->
 
 # logbuy deploy
 
@@ -10,17 +10,17 @@ Runs this plugin's one CLI skill, `logbuy`, in remote mode (`logbuy mcp --http`)
 
 ## Pick the CLI skill
 
-There is one, `logbuy`. Everything below runs from `plugins/logbuy/skills/logbuy/` in the Owner's checkout of `hoaj/skills`, which holds the `Dockerfile` and `railway.json`.
+There is one, `logbuy`. Everything below runs from `plugins/logbuy/skills/logbuy/` in the Owner's checkout of `hoaj/skills`, which holds the `Dockerfile` and `.dockerignore`. Nothing host-specific lives there.
 
 ## The contract
 
 Any container host works. The image is built from `plugins/logbuy/skills/logbuy/Dockerfile`, with that folder as the build context.
 
 - `OWNER_PASSWORD` (12+ characters) **or** `OWNER_PASSWORD_HASH`. Without one the server refuses to start.
-- `PUBLIC_URL`: the https address clients use. On Railway a generated domain is used automatically.
+- `PUBLIC_URL`: the https address clients use. Some hosts' generated domains are used automatically (Railway's is).
 - Optional: `PORT` (default 8080), `TRUST_PROXY` (a number of proxies; default 1 when `PUBLIC_URL` is https, for one proxy in front, else 0), `EXTRA_REDIRECT_URIS` (comma-separated exact callback URLs; claude.ai's and loopback ones need none).
 - A persistent volume mounted on `/data`. All state lives there; without it every deploy loses the Session and every client's sign-in.
-- Exactly one replica. Health check: `GET /healthz`.
+- Exactly one replica (Railway's default), and a health check on `GET /healthz` (recommended). The host guide says how.
 
 ## The Owner password
 
@@ -32,26 +32,20 @@ Any container host works. The image is built from `plugins/logbuy/skills/logbuy/
 
 It prints the password, then `{"OWNER_PASSWORD_HASH": "..."}`. Never make one up from your own text. Show the password to the Owner **once** and ask them to store it in their password manager before going on. Do not repeat it or type it into a later command. Set `OWNER_PASSWORD_HASH` on the host.
 
-**Option B: the Owner's own password.** They run `bin/logbuy mcp --hash-password` in their own terminal (type it, then Ctrl-D) and give you only the hash. Set `OWNER_PASSWORD_HASH` as in A. A plain `OWNER_PASSWORD` is also allowed; the Owner sets it in the host's own dashboard (on Railway, the service's Variables tab), never by typing it into a command.
+**Option B: the Owner's own password.** They run `bin/logbuy mcp --hash-password` in their own terminal (type it, then Ctrl-D) and give you only the hash. Set `OWNER_PASSWORD_HASH` as in A. A plain `OWNER_PASSWORD` is also allowed; the Owner sets it in the host's own dashboard, never by typing it into a command.
 
 Never write the password into a file in the repo, a commit, a log, or the chat beyond Option A's one display.
 
-It is the sign-in page's password when connecting claude.ai or the phone, and the password of every Setup page action. To rotate it, set a new value and restart the server (on Railway, see step 3 below): every client is signed out and signs in again.
+It is the sign-in page's password when connecting claude.ai or the phone, and the password of every Setup page action. To rotate it, set a new value and restart the server (the host guide says how): every client is signed out and signs in again.
 
-## Railway
+## Pick a host
 
-From `plugins/logbuy/skills/logbuy/`, with the Railway CLI logged in (`railway login`). Run `railway <command> --help` if a flag differs on your version (written against 5.63).
+| Host | Guide |
+|---|---|
+| Railway | [hosts/railway.md](hosts/railway.md) |
+| Any other container host | No guide yet. Build `plugins/logbuy/skills/logbuy/Dockerfile` with that folder as the context, meet the contract above, then carry on from "Give the server a Session". |
 
-1. A project and a service: `railway init --name logbuy`, then `railway add --service logbuy`. For an existing project use `railway link` instead.
-2. A volume on `/data`: `railway volume add --service logbuy --mount-path /data`. If it refuses the name, pass the service ID (from `railway status --json`).
-3. The password variable, with the value on stdin so the shell leaves it alone (a hash holds `$`): `printf '%s' '<hash>' | railway variable set OWNER_PASSWORD_HASH --stdin --service logbuy --skip-deploys`. `--skip-deploys` is only because the first deploy comes later. To rotate, set the new value without `--skip-deploys` (Railway redeploys), or run `railway redeploy --service logbuy` afterwards. A plain `OWNER_PASSWORD` is set by the Owner in the dashboard's Variables tab.
-4. A public address: `railway domain --service logbuy` prints `https://<name>.up.railway.app`. `PUBLIC_URL` follows from it by itself. If the domain is added or changed after a deploy, redeploy (`railway redeploy --service logbuy`) or set `PUBLIC_URL` yourself: Railway gives `RAILWAY_PUBLIC_DOMAIN` only to deployments made after the domain exists.
-5. Deploy: `railway up --service logbuy` uploads this folder and builds the Dockerfile; `railway.json` is read from the folder's root. The first build takes a few minutes. `--detach` returns at once; then watch `railway logs --build --service logbuy`.
-6. Check `https://<domain>/healthz` (it answers `{"ok":true,...}`), then open `https://<domain>/setup`.
-
-A failed health check usually means a missing or invalid password variable, or `PUBLIC_URL`. The server's start-up error names the variable: `railway logs --deployment --service logbuy`.
-
-If Railway's own Claude Code plugin is installed (`railway@railway-skills`), its skill can run these steps; this skill still owns the order and the remote-mode specifics.
+The guide covers the host's steps, in order, from the project to the first check of `/healthz`, and gives the server's https address: `<domain>` below. This skill owns the order around it and the remote-mode specifics.
 
 ## Give the server a Session
 
@@ -67,11 +61,13 @@ The Session is never shown again; the Owner uploads a fresh one when it expires.
 
 Add a custom connector in claude.ai with the URL `https://<domain>/mcp`, and sign in with the Owner password on the page that opens. The phone uses the same account, so it has the connector too. Claude Code can add it as well: `claude mcp add --transport http --scope user <name> https://<domain>/mcp`. The first use opens the sign-in page (Owner password); start it from `/mcp` in Claude Code.
 
+A connector added in claude.ai also shows up in Claude Code (same account) as `claude.ai <name>`. If a local `logbuy mcp` is set up there too, the same Tasks appear twice. Turn the claude.ai one off with `/mcp`, or all claude.ai connectors with `"disableClaudeAiConnectors": true` in `~/.claude/settings.json`.
+
 ## Later
 
-- A new plugin version: `git pull`, then `railway up --service logbuy` again from the same folder. The volume keeps the Session and the sign-ins.
+- A new plugin version: `git pull`, then redeploy from the same folder as the host guide says. The volume keeps the Session and the sign-ins.
 - An expired Session: the tools say so and point at `/setup`. Upload a new one.
-- A new password: as above. Logs: `railway logs --deployment --service logbuy`.
+- A new password: as above. Logs: see the host guide.
 - Drift or a bug in a Task: that is the `logbuy-feedback` skill.
 
 ## When NOT to use

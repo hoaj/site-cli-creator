@@ -2,7 +2,7 @@
 name: logbuy-feedback
 description: Files a problem with the logbuy plugin as a GitHub issue on hoaj/skills (label logbuy), after the user approves the text. Use when a logbuy CLI exits 3 (drift) or 1 (bug), when the plugin cannot do a Task the user needs (a feature request), or when the user says "report this" about it. Not for exit 2 (input), 4 (session) or 5 (network).
 ---
-<!-- version: 0.5.0 -->
+<!-- version: 0.5.1 -->
 
 # logbuy feedback
 

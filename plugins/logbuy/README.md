@@ -48,7 +48,7 @@ Claude Code: `claude mcp add logbuy -- /path/to/skills/plugins/logbuy/skills/log
 
 ### Remote mode (claude.ai and the phone)
 
-To use logbuy from claude.ai or your phone, it has to run on a server you control. Ask your agent to deploy it: the `logbuy-deploy` skill walks through Railway, one server for the `logbuy` CLI skill. You choose an Owner password that signs your clients in (the skill can generate one), give the server your Session on its Setup page (`/setup`), and add the server's `/mcp` address as a custom connector. It is for your own account only.
+To use logbuy from claude.ai or your phone, it has to run on a server you control. Ask your agent to deploy it: the `logbuy-deploy` skill walks through Railway, one server for the `logbuy` CLI skill. You choose an Owner password that signs your clients in (the skill can generate one), give the server your Session on its Setup page (`/setup`), and add the server's `/mcp` address as a custom connector. It is for your own account only. A connector added in claude.ai also shows up in Claude Code; if you run the local `logbuy mcp` there too, turn the claude.ai one off with `/mcp`, or all claude.ai connectors with `"disableClaudeAiConnectors": true` in `~/.claude/settings.json`.
 
 ## Update
 
