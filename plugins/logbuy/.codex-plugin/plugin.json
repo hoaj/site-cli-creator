@@ -1,7 +1,7 @@
 {
   "name": "logbuy",
   "description": "Find deals on Visma LogBuy (mylogbuy.com): search products, show a deal, browse categories.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": {
     "name": "hoaj"
   },

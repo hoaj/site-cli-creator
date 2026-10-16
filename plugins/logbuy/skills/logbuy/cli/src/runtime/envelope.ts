@@ -35,6 +35,17 @@ export class Failure extends Error {
 }
 
 /**
+ * Another Chrome profile (`--from-profile`) is missing or could not be opened, typically because a
+ * Capture still runs on it. An input failure for `login --from-profile`; the silent refresh falls
+ * back to the CLI's own profile instead.
+ */
+export class ProfileUnavailable extends Failure {
+  constructor(message: string) {
+    super("input", message);
+  }
+}
+
+/**
  * A mistake in the plugin's own code or config (site.ts, a Contract, the registry), found by the
  * runtime. It is a bug, and its message is written by the runtime, so it may go into the envelope.
  */
