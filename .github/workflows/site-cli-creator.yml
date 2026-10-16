@@ -200,3 +200,23 @@ jobs:
           if command -v jq > /dev/null; then
             jq -e '.ok == true and ([.operations[] | select(.effect == "write" and .status == "ok")] | length) > 0' check.json > /dev/null
           fi
+
+  # The smoke binaries (~100 MB each) are read only by run-smoke in this same run. Deleting them as
+  # soon as it is done keeps them from filling the account's artifact storage quota (GitHub Free:
+  # 500 MB, metered over the month), which blocked every upload in October 2026.
+  cleanup-smoke:
+    needs: [smoke, run-smoke]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Delete this run's smoke artifacts
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[] | select(.name | startswith("smoke-")) | .id')
+          for id in $ids; do
+            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
+            echo "deleted artifact $id"
+          done
