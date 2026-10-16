@@ -220,3 +220,51 @@ jobs:
             gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
             echo "deleted artifact $id"
           done
+
+  # Remote mode's image, built from a scaffolded fixture plugin the way the Owner builds it on a
+  # host (`docker build` in the CLI skill's folder). There is no Docker on the maintainer's Mac, so
+  # a broken Dockerfile would otherwise first show up on Railway.
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+      - run: bun install --frozen-lockfile
+        working-directory: ${{ env.GENERATOR }}
+      - name: Scaffold the fixture plugin
+        run: |
+          plugin="$RUNNER_TEMP/docker-plugin"
+          skill="$plugin/skills/fixture"
+          bun "$SKILL_DIR/tools/new.ts" --dir "$plugin" --plugin smoke --repo hoaj/smoke-plugin \
+            --description "Smoke test plugin" --maintainer hoaj --no-labels --skip-checks
+          bun "$SKILL_DIR/tools/add-skill.ts" --dir "$plugin" --skill fixture \
+            --origin http://127.0.0.1:4310 --auth none
+          SRC="$skill/cli/src" bun -e '
+            const { copyExpected } = await import(process.env.GITHUB_WORKSPACE + "/" + process.env.SKILL_DIR + "/fixtures/expected/copy.ts");
+            copyExpected("none", process.env.SRC, {
+              plugin: "smoke", skill: "fixture", repo: "hoaj/smoke-plugin",
+              generatorVersion: "0.1.0", origin: "http://127.0.0.1:4310",
+            });'
+          (cd "$skill/cli" && bun install)
+          bun "$SKILL_DIR/tools/regen.ts" --skill-dir "$skill"
+          echo "PLUGIN_DIR=$plugin" >> "$GITHUB_ENV"
+      - name: Build the image
+        run: docker build -t fixture-remote "$PLUGIN_DIR/skills/fixture"
+      - name: Run it and check /healthz, the OAuth metadata and /setup
+        run: |
+          docker run -d --name fixture-remote -p 8080:8080 \
+            -e OWNER_PASSWORD=ci-owner-password -e PUBLIC_URL=http://localhost:8080 fixture-remote
+          for _ in $(seq 1 30); do
+            curl -fsS http://localhost:8080/healthz && break
+            sleep 1
+          done
+          curl -fsS http://localhost:8080/healthz
+          resource=$(curl -fsS http://localhost:8080/.well-known/oauth-protected-resource/mcp | jq -r .resource)
+          test "$resource" = "http://localhost:8080/mcp"
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/setup)" = 200
+      - name: Container logs
+        if: failure()
+        run: docker logs fixture-remote

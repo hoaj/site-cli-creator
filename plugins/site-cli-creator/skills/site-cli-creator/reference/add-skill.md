@@ -24,6 +24,8 @@ bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth
 cd <plugin>/skills/<skill>/cli && bun install
 ```
 
+It also copies the skill's deploy files, `Dockerfile`, `railway.json` and `.dockerignore`, which the plugin's Deploy skill (`<plugin>-deploy`, written by `new`) uses for remote mode. Nothing to fill in by hand.
+
 ## 3. Capture the first Task and confirm `auth`
 
 Run the first Task's Capture (add-task.md step 2). Confirm `auth` from it:

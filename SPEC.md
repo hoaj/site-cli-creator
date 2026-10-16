@@ -11,8 +11,9 @@ Glossary terms (**Task**, **CLI skill**, **Feedback skill**, **Starter code**, *
 | Part | Who runs it | What it is |
 |---|---|---|
 | **site-cli-creator** | the maintainer | a plugin in `hoaj/skills`: the generator skill (SKILL.md, the Starter code, the Capture tool) and `site-cli-creator-feedback` |
-| **Generated plugin** | many users | its own repo, holding one or more CLI skills, one Feedback skill, four manifests and a release workflow |
+| **Generated plugin** | many users | its own repo, holding one or more CLI skills, one Deploy skill, one Feedback skill, four manifests and a release workflow |
 | **CLI skill** | users' agents | `skills/<skill>/`: a SKILL.md and a compiled CLI for one site, with one login or none (§7) |
+| **Deploy skill** | the Owner's agent | `skills/<plugin>-deploy/`: runs a CLI skill in remote mode on a host the Owner controls (Railway first), see **Deploy shape** in §8 |
 | **Feedback skill** | users' agents | `skills/<plugin>-feedback/`: files Drift, bugs and feature requests on the plugin's own repo (§10) |
 
 Every Feedback skill lies next to the plugin it reports on and files issues on that plugin's repo, decided in [Feedback skills next to each plugin](https://github.com/hoaj/skills/issues/24). `site-cli-creator-feedback` files problems with the generator itself (the Capture tool, a mode, the Starter code, misleading guidance) on `hoaj/skills` with the label `site-cli-creator`. It does not forward users' issues from generated plugins, but `fix` offers it when a plugin bug turns out to come from the Starter code (§5).
@@ -25,7 +26,7 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/skills/
 
 | Mode | Trigger | Does |
 |---|---|---|
-| `new` | a new site | copies the Starter code (§5) into a new plugin, writes `generated.json`, creates the repo labels the loop uses (`feature`, `drift`, `bug`, `unverified`, `needs-account`; `fixed-in:*` labels are made by `release.yml`), then runs **add-skill** for the first CLI skill |
+| `new` | a new site | copies the Starter code (§5) into a new plugin, writes `generated.json`, creates the repo labels the loop uses (`feature`, `drift`, `bug`, `unverified`, `needs-account`; `fixed-in:*` labels are made by `release.yml`), writes the Deploy skill (`skills/<plugin>-deploy/`), then runs **add-skill** for the first CLI skill |
 | `add-skill` | a new site or login in an existing plugin | creates `skills/<skill>/`, asks whether the site needs a login and confirms it from the Capture (`auth`, §7), sets up login or `bootstrap`, then runs **add-task** for each Task |
 | `add-task` | a feature request filed by the Feedback skill, or the maintainer | runs the Task loop (§3) once, reusing existing Operations, then opens a PR that the maintainer merges. If the maintainer's account can't perform the Task, the issue is closed with an explanation and the label `needs-account` (§13) |
 | `fix` | a Drift or bug issue | **Drift:** re-captures only the affected Task, updates the Contract, runs `check`, opens a PR that auto-merges when green. If the maintainer's account can't reach the Task, see §13. **Bug:** fixes it in the plugin's own code, wherever it sits, and opens a PR. If the bug came from the Starter code, it also offers an issue through `site-cli-creator-feedback`, so new plugins get the fix (§5) |
@@ -66,10 +67,15 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   generated.json                            GENERATED  {"generatedWith", "maintainer"}, info only (§5, §13)
   skills/<plugin>-feedback/SKILL.md         GENERATED  one per plugin, written once by `new`, then owned
                                                        by the plugin (§10)
+  skills/<plugin>-deploy/SKILL.md           GENERATED  one per plugin, written once by `new`, then owned
+                                                       by the plugin (§8, Deploy shape)
   skills/<skill>/                           one per site and login
     SKILL.md                                GENERATED  see §8
     install.sh                              STARTER    see §9
     .gitignore                              GENERATED  bin/
+    Dockerfile                              STARTER    remote mode's image (§8, Deploy shape)
+    .dockerignore                           STARTER    bin/, captures/, node_modules, tests
+    railway.json                            STARTER    Railway's adapter: Dockerfile build, /healthz check
     captures/<task>/*.shape.json            GENERATED  shape-only Captures (file naming is a spec choice)
     cli/
       package.json                          GENERATED  plugin version and dependency pins
@@ -91,7 +97,7 @@ There is no CLI framework. Routing and flag parsing are about 30 lines in `main.
 
 Decided in [No shared code in generated plugins](https://github.com/hoaj/skills/issues/26), which replaced the template files and `upgrade` from [How do generated plugins pick up template fixes?](https://github.com/hoaj/skills/issues/13).
 
-- **The generator holds tested Starter code:** `main.ts`, `runtime/*`, `build.ts` (with the playwright-core patch), `install.sh`, `release.yml`, the bump script, the version-sync test and the version check workflow (§9).
+- **The generator holds tested Starter code:** `main.ts`, `runtime/*`, `build.ts` (with the playwright-core patch), `install.sh`, the deploy files (`Dockerfile`, `.dockerignore`, `railway.json`), the Deploy skill, `release.yml`, the bump script, the version-sync test and the version check workflow (§9).
 - **`new` copies it once.** From then on it belongs to the plugin, like every other file, and can be changed freely. Nothing ever overwrites a plugin's files from outside. There is no `upgrade` mode.
 - **Labels in §4** say where a file came from, not who owns it: STARTER (copied from the Starter code), GENERATED (written by the generator), AGENT (written by the agent in the Task loop). The plugin owns all of them, including the Feedback skill and every SKILL.md.
 - **A bug in code that came from the Starter code** is fixed by `fix` in the plugin. `fix` also offers an issue through `site-cli-creator-feedback`, so the Starter code is fixed for future plugins. Existing plugins are not touched. They get the fix only if they hit the bug themselves.
@@ -197,7 +203,11 @@ The envelope is everything the Feedback skill needs, and the CLI is responsible 
   - **Setup page** (`/setup`, decided in [How does the Owner give the server a Session, and how is it kept safe?](https://github.com/hoaj/skills/issues/58)): where the Owner gives the server a Session. It shows the site and whether the Session is valid, expired or missing (unchecked when one is stored that was not uploaded here), with when it was uploaded and last checked, never its contents; and, on a host with no volume, a warning that the Session and every client's sign-in vanish on the next deploy. Actions: upload a Session, delete it, and sign out every client (revoke all tokens). Each form asks for the Owner password itself, with the Server sign-in's check and lockout; there are no cookies. A skill with `auth: "none"` has no Session to upload, so its page has only the sign-out action.
   - **Session upload:** the whole `session.json` that `<skill> login` writes, chosen as a file or pasted. A request over 256 KB (declared or read) or a file over 64 KB is refused; the shape is checked (unknown keys, such as `fromProfile`, are dropped); then the server makes the site's reads once with it, as `check` does and through the same one-at-a-time queue as tool calls. A skill whose reads all need input has nothing to try: its Session is stored and shown as unchecked. Only a Session that works is stored (file, mode 0600, in the state dir), so a bad upload never replaces a working one, and the Owner is told why: the site did not accept it, did not respond, or has changed. The Session is never sent back out, and no Session value reaches a response or the log.
   - **Remote tools:** the `login` and `doctor` tools are not listed (Chrome and the host's paths mean nothing to a remote client), `check` has no `writes` and refuses a write Operation, and the instructions say the Owner must give a new Session on the Setup page. A `session` failure's `next` tells the client to ask the Owner to upload a new Session at `<public URL>/setup`, and marks the Session expired on that page until a later call succeeds, which marks it valid again. `GET /` redirects to `/setup`.
-- **Not yet:** no output schemas (a command declares no output schema); the deploy files come in the next step of the map.
+- **Deploy shape**, decided in [How is a remote-mode server deployed and configured on Railway?](https://github.com/hoaj/skills/issues/59), [How do generated plugins get remote mode, and how does logbuy get it?](https://github.com/hoaj/skills/issues/60) and [Deploy files, the Deploy skill, docs and e2e for remote mode](https://github.com/hoaj/skills/issues/65):
+  - **The contract is host-neutral:** a container built from `skills/<skill>/Dockerfile` (that folder is the build context; a Bun stage compiles the binary, a distroless image runs it), the variables `OWNER_PASSWORD` or `OWNER_PASSWORD_HASH`, `PUBLIC_URL`, optional `PORT`, `TRUST_PROXY` and `EXTRA_REDIRECT_URIS`, a persistent volume on `/data`, one replica, and `GET /healthz`. Railway is the first host, through the thin adapter `railway.json`; other hosts get their own adapter and a section in the Deploy skill later.
+  - **The Deploy skill** (`skills/<plugin>-deploy/`, one per plugin, covering every CLI skill) states the contract and the Railway steps, offers to generate the Owner password (shown once, a hash recommended), then guides the Session upload and the claude.ai connector. It is private use: the Owner deploys from their own checkout.
+  - **Always included:** `new` writes the Deploy skill and `add-skill` copies the deploy files, since the remote-mode code is in every binary.
+- **Not yet:** no output schemas (a command declares no output schema).
 
 **SKILL.md** (about 45–60 lines):
 1. Frontmatter with only `name` and `description`. The version goes in an HTML comment below it, because a `version:` key breaks Copilot.
@@ -226,7 +236,7 @@ Decided in [Does Playwright work inside bun compile binaries?](https://github.co
   - **Not in v1:** windows-arm64 and musl Linux. On a platform without a binary, `install.sh` stops with "unsupported platform: `<os>-<arch>`".
 - **Release:** one tag `vX.Y.Z` per plugin, so all CLI skills ship together. Assets are named `<skill>-<target>[.exe]`.
 - **Versioning**, decided in [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/skills/issues/21):
-  - **One bump command** (part of the Starter code). `bun run bump <patch|minor|major>` rewrites every copy of the plugin version: the four manifests, the version comment in each SKILL.md (every CLI skill and the Feedback skill) and each `cli/package.json`. Nobody edits version numbers by hand. A version-sync test fails CI if any copy differs.
+  - **One bump command** (part of the Starter code). `bun run bump <patch|minor|major>` rewrites every copy of the plugin version: the four manifests, the version comment in each SKILL.md (every CLI skill, the Deploy skill and the Feedback skill) and each `cli/package.json`. Nobody edits version numbers by hand. A version-sync test fails CI if any copy differs.
   - **Each generator PR bumps.** `fix`, `add-task` and `add-skill` run the bump in their own PR. `new` starts at `0.1.0`. `fix` is a patch. `add-task` and `add-skill` are minor. Major bumps, such as a renamed or removed command, are done by hand.
   - **Merging releases.** When a PR that changed the version merges to main, `release.yml` tags `vX.Y.Z` and builds and publishes the binaries. An auto-merged Drift fix ships with no human step.
   - **Collisions.** A CI check requires a PR's version to be higher than main's. A stale PR goes red, and the generator rebases and bumps again. Auto-merge waits for green, so two releases never share a number.

@@ -46,6 +46,7 @@ await runTool(async () => {
   const plugin = manifest.name;
   const version = manifest.version;
   if (skill === `${plugin}-feedback`) fail(`"${skill}" is the plugin's Feedback skill`);
+  if (skill === `${plugin}-deploy`) fail(`"${skill}" is the plugin's Deploy skill`);
   const repo = repoFromManifest(manifest.repository);
   const generated = existsSync(join(pluginDir, "generated.json"))
     ? readJson<{ maintainer?: unknown; generatedWith?: unknown }>(join(pluginDir, "generated.json"))
