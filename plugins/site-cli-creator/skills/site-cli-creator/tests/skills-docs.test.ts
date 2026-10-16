@@ -1,6 +1,6 @@
 // Structural tests for the agent-facing skills, manifests and marketplace wiring.
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 // tests/ → skills/site-cli-creator → skills → plugins/site-cli-creator → plugins → repo root
@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.6.0, both skills exist", () => {
+  test("version 0.7.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.6.0");
+      expect(m.version).toBe("0.7.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -49,7 +49,7 @@ describe("manifests", () => {
       const mk = JSON.parse(read(join(REPO, p)));
       const entry = mk.plugins.find((x: { name: string }) => x.name === "site-cli-creator");
       expect(entry).toEqual({ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description });
-      expect(mk.metadata.version).toBe("1.10.0");
+      expect(mk.metadata.version).toBe("1.11.0");
     }
     expect(read(join(REPO, "README.md"))).toContain("[site-cli-creator](./plugins/site-cli-creator)");
   });
@@ -109,15 +109,43 @@ describe("skills", () => {
     for (const s of ["fixed-in", "on its way", "bug: <bug key>", "feature: <skill>: <Task in plain words>", "/issues/new", "Drift is no exception", "gh issue create --repo __REPO__"]) expect(md).toContain(s);
   });
 
-  test("starter deploy SKILL.md states the container contract and the Railway steps, with only plugin-level tokens", () => {
+  test("starter deploy SKILL.md is host-neutral: the contract, a host pick, no Railway commands, with only plugin-level tokens", () => {
     const md = read(skills.starterDeploy);
     expect(md).toMatch(/^---\n[\s\S]*?\n---\n<!-- version: 0\.1\.0 -->\n/);
     expect(frontmatter(md).name).toBe("__PLUGIN__-deploy");
     expect(md.trimEnd().split("\n").length).toBeLessThanOrEqual(140);
     for (const t of ["__SKILL__", "__ORIGIN__", "__AUTH__"]) expect(md).not.toContain(t);
-    for (const s of ["/data", "/healthz", "/setup", "/mcp", "OWNER_PASSWORD_HASH", "--hash-password", "railway up", "openssl rand", "PUBLIC_URL"]) expect(md).toContain(s);
-    const railway = md.slice(md.indexOf("## Railway"));
-    for (const s of ["railway init", "railway volume add", "railway variable set", "railway domain", "railway up", "/data", "/healthz", "/setup"]) expect(railway).toContain(s);
+    for (const s of ["/data", "/healthz", "/setup", "/mcp", "OWNER_PASSWORD_HASH", "--hash-password", "openssl rand", "PUBLIC_URL", "disableClaudeAiConnectors"]) expect(md).toContain(s);
+    expect(md).toMatch(/\]\(hosts\/railway\.md\)/);
+    expect(existsSync(join(dirname(skills.starterDeploy), "hosts/railway.md"))).toBe(true);
+    expect(md).not.toMatch(/`railway /);
+    expect(md).not.toContain("railway.json");
+  });
+
+  test("starter deploy hosts/railway.md holds the verified Railway steps, with only plugin-level tokens", () => {
+    const md = read(join(GEN, "starter/deploy/hosts/railway.md"));
+    for (const t of ["__SKILL__", "__ORIGIN__", "__AUTH__"]) expect(md).not.toContain(t);
+    for (const s of [
+      "railway init",
+      "railway status",
+      "railway volume --service <service-id> add --mount-path /data",
+      "railway variable set",
+      "railway domain status",
+      "healthcheckPath",
+      "railway redeploy",
+      "railway up --service <service-id>",
+      "/healthz",
+      "/setup",
+    ]) expect(md).toContain(s);
+    expect(md).not.toContain("railway volume add --service");
+    expect(md).not.toContain("railway.json");
+  });
+
+  test("the CLI skill's starter folder holds no host-specific file", () => {
+    const names = readdirSync(join(GEN, "starter/skill"));
+    expect(names).toContain("Dockerfile");
+    expect(names).toContain(".dockerignore");
+    for (const n of names) expect(n).not.toMatch(/^railway\.|^fly\.toml$|^render\.yaml$/);
   });
 
   test("starter Dockerfile builds the binary from cli/ and runs mcp --http on a distroless image", () => {
@@ -130,10 +158,6 @@ describe("skills", () => {
     expect(df).toContain("HOME=/data");
     expect(df).toMatch(/^EXPOSE 8080$/m);
     expect(df).toContain('ENTRYPOINT ["/usr/local/bin/__SKILL__", "mcp", "--http"]');
-    const rj = JSON.parse(read(join(GEN, "starter/skill/railway.json")));
-    expect(rj.build).toEqual({ builder: "DOCKERFILE", dockerfilePath: "Dockerfile" });
-    expect(rj.deploy.healthcheckPath).toBe("/healthz");
-    expect(rj.deploy.numReplicas).toBe(1);
     const ignore = read(join(GEN, "starter/skill/.dockerignore")).split("\n");
     for (const f of ["bin/", "captures/", "cli/node_modules/", "cli/dist/", "cli/tests/"]) expect(ignore).toContain(f);
   });
@@ -356,7 +380,8 @@ describe("generated SKILL.md files", () => {
       expect(deploy).toContain("name: shop-deploy");
       expect(deploy).toContain("<!-- version: 0.1.0 -->");
       expect(read(join(skill, "Dockerfile"))).not.toMatch(/__[A-Z_]+__/);
-      expect(JSON.parse(read(join(skill, "railway.json"))).deploy.healthcheckPath).toBe("/healthz");
+      expect(existsSync(join(skill, "railway.json"))).toBe(false);
+      expect(read(join(plugin, "skills/shop-deploy/hosts/railway.md"))).not.toMatch(/__[A-Z_]+__/);
       const readme = read(join(plugin, "README.md"));
       expect(readme).not.toMatch(/__[A-Z_]+__/);
       expect(readme).toContain("@acme");

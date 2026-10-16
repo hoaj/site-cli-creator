@@ -389,10 +389,10 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
       ".gitignore",
       "skills/shop-feedback/SKILL.md",
       "skills/shop-deploy/SKILL.md",
+      "skills/shop-deploy/hosts/railway.md",
       "skills/shop/SKILL.md",
       "skills/shop/Dockerfile",
       "skills/shop/.dockerignore",
-      "skills/shop/railway.json",
       "skills/shop/install.sh",
       "skills/shop/.gitignore",
       "skills/shop/cli/package.json",
@@ -404,6 +404,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     ]) {
       expect(existsSync(join(dir, f)), f).toBe(true);
     }
+    expect(existsSync(join(dir, "skills/shop/railway.json"))).toBe(false);
     expect(findTokens(dir)).toEqual([]);
     expect(readFileSync(join(dir, "skills/shop/Dockerfile"), "utf8")).toContain("/out/shop");
     const deploy = readFileSync(join(dir, "skills/shop-deploy/SKILL.md"), "utf8");

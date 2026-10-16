@@ -2,7 +2,7 @@
 name: logbuy
 description: Use when the user wants an employee-benefit deal from Visma LogBuy (mylogbuy.com), signed in as themselves - finding LogBuy discounts for a product, brand or shop ("is there a LogBuy deal on headphones?"), showing one shop's LogBuy deal in full with its current offer and link, listing LogBuy's deal categories, or browsing the deals in one category. Read-only.
 ---
-<!-- version: 0.5.0 -->
+<!-- version: 0.5.1 -->
 
 # logbuy
 
