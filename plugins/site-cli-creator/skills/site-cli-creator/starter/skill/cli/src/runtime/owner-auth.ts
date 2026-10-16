@@ -6,7 +6,7 @@
 // a reused refresh token signs its client out, a revoke drops both tokens of a pair, and the
 // password fingerprint behind the kill switch is an HMAC with a per-instance salt.
 import { createHash, createHmac, randomBytes } from "node:crypto";
-import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Response } from "express";
 import type { AuthorizationParams, OAuthServerProvider } from "@modelcontextprotocol/sdk/server/auth/provider.js";
@@ -16,7 +16,7 @@ import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthToke
 import { InvalidClientMetadataError, InvalidGrantError, InvalidScopeError, InvalidTokenError } from "@modelcontextprotocol/sdk/server/auth/errors.js";
 import { Failure } from "./envelope";
 import { sameResource, verifyPassword, type OwnerPassword } from "./remote-config";
-import { ensureStateDir } from "./session";
+import { ensureStateDir, writePrivateJson } from "./session";
 
 export { hashPassword, verifyPassword } from "./remote-config";
 
@@ -88,10 +88,7 @@ export class OAuthStore {
   }
 
   private save() {
-    const tmp = `${this.file}.tmp`;
-    writeFileSync(tmp, JSON.stringify(this.data, null, 2), { mode: 0o600 });
-    chmodSync(tmp, 0o600);
-    renameSync(tmp, this.file);
+    writePrivateJson(this.file, this.data);
   }
 }
 
@@ -99,7 +96,8 @@ export class OAuthStore {
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
-export function page(title: string, body: string, head = ""): string {
+/** `style`: extra CSS appended after the base rules, so it wins over them. */
+export function page(title: string, body: string, head = "", style = ""): string {
   return `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="color-scheme" content="light dark">
 <title>${esc(title)}</title>${head}
 <style>
@@ -110,7 +108,7 @@ export function page(title: string, body: string, head = ""): string {
 h1{font-size:24px;margin:0 0 12px}p{margin:0 0 12px}.muted{color:var(--muted)}.error{color:var(--err)}
 label{display:block;font-weight:600;font-size:14px;margin:16px 0 6px}input{width:100%;font:inherit;padding:11px 13px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink)}
 button{width:100%;margin-top:14px;font:inherit;font-weight:700;padding:12px 16px;border:0;border-radius:10px;background:var(--ink);color:var(--bg);cursor:pointer}
-input:focus,button:focus{outline:2px solid var(--ink);outline-offset:2px}
+input:focus,button:focus{outline:2px solid var(--ink);outline-offset:2px}${style}
 </style><body><div class="wrap"><div class="card"><h1>${esc(title)}</h1>${body}</div></div></body></html>`;
 }
 

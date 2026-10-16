@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import site from "./site";
 import { commands, operations } from "./registry";
 import { Client, type Deps } from "./runtime/call";
-import { check, type WriteChecker } from "./runtime/check";
+import { check, findOperation, type WriteChecker } from "./runtime/check";
 import type { Command } from "./runtime/command";
 import { doctor, type Exec } from "./runtime/doctor";
 import { ContractError, DryRun, EXIT, Failure, emit, errorEnvelope, note, type Surface } from "./runtime/envelope";
@@ -256,7 +256,7 @@ const MCP_CONFIRM = z.boolean().optional().describe("send the write; without it 
  */
 function sessionReason(e: unknown, skill: string): string {
   if (e instanceof Failure) {
-    const refused = e.kind === "session" || (e.kind === "drift" && !!e.drifts?.length && e.drifts.every((d) => d.fingerprint.includes(":auth:")));
+    const refused = e.kind === "session" || (e.kind === "drift" && !!e.drifts?.length && e.drifts.every((d) => d.fingerprint.split(":")[3] === "auth"));
     if (refused) return `the site did not accept this Session (signed out or expired). Run \`${skill} login\` on your computer again and upload the new session.json`;
     if (e.kind === "network") return "the site is not responding right now; try again later";
     if (e.kind === "drift") return `the site has changed (Drift), so the Session could not be checked; run \`${skill} check\` on your computer`;
@@ -282,7 +282,11 @@ export async function checkSession(app: App, candidate: Session): Promise<Sessio
       result = await check(client, app.operations, { writes: false, account: accounts[0]!.id });
     }
     const tried = result.operations.filter((r) => r.effect === "read" && r.status === "ok").length;
-    if (tried === 0 && app.operations.some((op) => op.effect === "read")) return { ok: false, reason: "none of the site's reads could be tried with this Session" };
+    // Nothing ran: fine when the reads need input no Session supplies (check's "never checkable" and
+    // "needs input the chain does not supply" skips); not when a value the Session should hold is
+    // missing ("no value for <key>"; a "needs <operation>" skip only follows from another row's).
+    const lacking = result.operations.some((r) => r.effect === "read" && r.status === "skipped" && r.reason?.startsWith("no value for"));
+    if (tried === 0 && lacking) return { ok: false, reason: `this session.json lacks what the site's reads need; upload the file \`${app.site.skill} login\` wrote` };
     return { ok: true, tried };
   } catch (e) {
     return { ok: false, reason: sessionReason(e, app.site.skill) };
@@ -390,13 +394,18 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
   const tools: McpTool[] = [
     ...tasks,
     ...login,
-    tool("check", "Call every read Operation live and validate it against its Contract, to tell whether the site changed; writes: true also checks writes without sending them", checkSchema, { readOnlyHint: true, openWorldHint: true }, "check",
+    tool("check", options.remote ? "Call every read Operation live and validate it against its Contract, to tell whether the site changed" : "Call every read Operation live and validate it against its Contract, to tell whether the site changed; writes: true also checks writes without sending them", checkSchema, { readOnlyHint: true, openWorldHint: true }, "check",
       ({ op, writes, account }) => {
         notWhileSigningIn();
+        // A write is checked by driving its page in Chrome, which a remote server does not have.
+        if (options.remote && op !== undefined && findOperation(app.operations, op).effect === "write") {
+          throw input("checking a write needs Chrome, which a remote server does not have; check reads only");
+        }
         return check(new Client(site, deps, { surface: "mcp" }), app.operations, { op, writes: !!writes, account }, app.checkWrites);
       }),
-    tool("doctor", "Versions, state dir, Chrome, gh status and binary findings, for reports", z.object({}).strict(), { readOnlyHint: true, openWorldHint: false }, "doctor",
-      () => doctor(site, { env: deps.env, exec: app.exec, compiled: compiled() })),
+    // The report (paths, Chrome, gh) describes the server's host, which a remote client cannot act on.
+    ...(options.remote ? [] : [tool("doctor", "Versions, state dir, Chrome, gh status and binary findings, for reports", z.object({}).strict(), { readOnlyHint: true, openWorldHint: false }, "doctor",
+      () => doctor(site, { env: deps.env, exec: app.exec, compiled: compiled() }))]),
   ];
 
   const instructions = [

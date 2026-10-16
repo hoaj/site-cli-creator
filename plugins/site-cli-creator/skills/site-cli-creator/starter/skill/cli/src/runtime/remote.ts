@@ -3,7 +3,6 @@
 // main.ts imports this module only for `--http`, so local mode never loads the SDK or Express.
 import express from "express";
 import type { Server as HttpServer } from "node:http";
-import { Readable } from "node:stream";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelcontextprotocol/sdk/server/auth/router.js";
@@ -46,13 +45,39 @@ const MAX_SESSION_BYTES = 64 * 1024;
 /** What the tool adapter needs to point a client at the Setup page. */
 type SetupInfo = { dir: string; url: string; skill: string; now: () => number };
 
+/** The request body, or null once it passes `cap` bytes (the rest is read and dropped, so the answer can still be sent). */
+function readCapped(req: express.Request, cap: number): Promise<Buffer | null> {
+  return new Promise((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    let total = 0;
+    req.on("data", (chunk: Buffer) => {
+      total += chunk.length;
+      if (total <= cap) return void chunks.push(chunk);
+      chunks.length = 0;
+      req.removeAllListeners("data");
+      req.resume();
+      resolve(null);
+    });
+    req.on("end", () => resolve(Buffer.concat(chunks)));
+    req.on("error", reject);
+  });
+}
+
 /**
  * A `session` failure in remote mode is the Owner's to fix, not the client's: the Setup page then
  * shows the Session as expired (when one was stored), and `next` names that page, not the login tool.
+ * A call that succeeds while the page says expired proves the Session works again (one refused
+ * request does not end a Session for good), so it is marked valid.
  */
-function sessionFailure(output: unknown, setup: SetupInfo): unknown {
+function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknown {
   const error = (output as { error?: { kind?: string; message?: string } } | null)?.error;
-  if (!error || error.kind !== "session") return output;
+  if (!error || error.kind !== "session") {
+    if (code === 0) {
+      const status = readStatus(setup.dir);
+      if (status.state === "expired") writeStatus(setup.dir, { state: "valid", ...(status.uploadedAt && { uploadedAt: status.uploadedAt }), checkedAt: new Date(setup.now()).toISOString() });
+    }
+    return output;
+  }
   const before = readStatus(setup.dir);
   if (before.state !== "missing") {
     writeStatus(setup.dir, { state: "expired", ...(before.uploadedAt && { uploadedAt: before.uploadedAt }), checkedAt: new Date(setup.now()).toISOString(), reason: String(error.message ?? "") });
@@ -73,7 +98,7 @@ function mcpServerFor(info: ServerInfo, tools: McpTool[], serial: <T>(fn: () => 
     if (!tool) throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${req.params.name}`);
     // One call at a time, as over stdio, so two calls never refresh one Session together.
     const { output, code } = await serial(() => tool.call((req.params.arguments ?? {}) as Record<string, unknown>));
-    return toolResult(sessionFailure(output, setup), code) as never;
+    return toolResult(sessionFailure(output, code, setup), code) as never;
   });
   return server;
 }
@@ -170,20 +195,19 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     refuse(res, status, text);
   };
 
+  app.get("/", (_req, res) => void res.redirect(302, "/setup"));
   app.get("/setup", (_req, res) => answer(res, 200));
 
   app.post("/setup/session", async (req, res) => {
     if (o.site.auth !== "login") return refuseUnread(req, res, 400, "This site needs no sign-in, so there is no Session to upload.");
-    const length = Number(req.headers["content-length"]);
-    if (!Number.isFinite(length) || length > MAX_UPLOAD_REQUEST) return refuseUnread(req, res, 413, "That upload is too large for a session.json.");
+    // A declared length over the cap is refused unread; without one (chunked) the body is read up to the cap.
+    const declared = req.headers["content-length"];
+    if (declared !== undefined && !(Number(declared) <= MAX_UPLOAD_REQUEST)) return refuseUnread(req, res, 413, "That upload is too large for a session.json.");
+    const body = await readCapped(req, MAX_UPLOAD_REQUEST);
+    if (!body) return refuseUnread(req, res, 413, "That upload is too large for a session.json.");
     let form: FormData;
     try {
-      form = await new Request("http://local/", {
-        method: "POST",
-        headers: { "content-type": req.headers["content-type"] ?? "" },
-        body: Readable.toWeb(req) as unknown as ReadableStream,
-        duplex: "half",
-      } as RequestInit).formData();
+      form = await new Request("http://local/", { method: "POST", headers: { "content-type": req.headers["content-type"] ?? "" }, body: new Uint8Array(body) }).formData();
     } catch {
       return refuse(res, 400, "The upload could not be read; use the form on this page.");
     }
@@ -207,10 +231,18 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     }
     const at = new Date(clock()).toISOString();
     const { headers, ids, accounts } = parsed.data;
+    if (Object.keys(headers).length === 0) return refuse(res, 400, `This session.json holds no sign-in (no headers); upload the file ${o.site.skill} login wrote.`);
     let checked: SessionCheck;
     try {
-      // Through the same queue as the tool calls, so the check never overlaps a call that refreshes a Session.
-      checked = await serial(() => o.checkSession({ headers, ids, accounts, savedAt: at }));
+      // One turn in the tool calls' queue for the check, the save and the status, so a delete or a
+      // call that refreshes a Session never lands between them.
+      checked = await serial(async () => {
+        const result = await o.checkSession({ headers, ids, accounts, savedAt: at });
+        if (!result.ok) return result;
+        saveSession(o.dir, { headers, ids, accounts, savedAt: at });
+        writeStatus(o.dir, result.tried > 0 ? { state: "valid", uploadedAt: at, checkedAt: at } : { state: "unchecked", uploadedAt: at });
+        return result;
+      });
     } catch {
       note("a Session upload failed inside the server");
       return refuse(res, 500, "The Session could not be checked (an error inside the server).");
@@ -219,12 +251,12 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
       note("Session rejected (the live check failed)");
       return refuse(res, 400, `Not stored: ${checked.reason}.`);
     }
-    await serial(async () => {
-      saveSession(o.dir, { headers, ids, accounts, savedAt: at });
-      writeStatus(o.dir, { state: "valid", uploadedAt: at, checkedAt: at });
-    });
+    if (checked.tried === 0) {
+      note("Session stored (not checked)");
+      return answer(res, 200, { kind: "ok", text: "Session stored, but not checked: none of the site's reads can run without input." });
+    }
     note("Session stored (checked)");
-    answer(res, 200, { kind: "ok", text: checked.tried > 0 ? `Session stored and checked against ${siteName}.` : "Session stored; this skill has no read to check it with." });
+    answer(res, 200, { kind: "ok", text: `Session stored and checked against ${siteName}.` });
   });
 
   app.post("/setup/delete", express.urlencoded({ extended: false, limit: "16kb" }), async (req, res) => {
@@ -276,7 +308,7 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     const s = app.listen(config.port, o.host ?? "0.0.0.0", (err?: Error) => (err ? fail(err) : resolve(s)));
     s.once("error", fail);
   });
-  note(`remote mode: listening on port ${config.port}; clients connect to ${mcpUrl.href}`);
+  note(`remote mode: listening on port ${config.port}; clients connect to ${mcpUrl.href}; the Owner gives it a Session at ${setup.url}`);
   return {
     url: mcpUrl.href,
     store,

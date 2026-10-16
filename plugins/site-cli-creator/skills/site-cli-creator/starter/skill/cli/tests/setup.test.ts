@@ -3,11 +3,13 @@
 // Every response body and log line is collected, and no test ends while one holds a Session value.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { checkSession, mcpTools } from "../src/main";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { z } from "zod";
+import { checkSession, mcpTools, type App } from "../src/main";
+import { BUILTIN_FLAGS } from "../src/runtime/help";
 import { remoteConfig } from "../src/runtime/remote-config";
 import { serveHttp } from "../src/runtime/remote";
-import { persistenceWarning, readStatus } from "../src/runtime/setup";
+import { persistenceWarning, readStatus, statusFile } from "../src/runtime/setup";
 import { sessionFile } from "../src/runtime/session";
 import { fakeFetch, getCustomer, getOrder, happySite, listProducts, json, loginSite, makeApp, makeDeps, makeSite, renameOrder, tempHome, type Recorded } from "./helpers";
 
@@ -43,14 +45,14 @@ function freePort(): number {
 /** The site accepts only the good Session's cookie; otherwise it behaves like happySite. */
 const sessionSite = (req: Recorded) => (req.headers.cookie === `sid=${GOOD}` ? happySite(req) : json({ message: "signed out" }, 401));
 
-type Start = { site?: ReturnType<typeof makeSite>; env?: Record<string, string> };
+type Start = { site?: ReturnType<typeof makeSite>; env?: Record<string, string>; extra?: Partial<App> };
 
 async function start(opts: Start = {}) {
   const port = freePort();
-  const state = { handler: sessionSite };
+  const state: { handler: (req: Recorded) => Response | Promise<Response> } = { handler: sessionSite };
   const f = fakeFetch((req) => state.handler(req));
   const d = makeDeps(f.fetch, home.dir);
-  const app = makeApp(opts.site ?? loginSite(), d.deps);
+  const app = makeApp(opts.site ?? loginSite(), d.deps, opts.extra);
   const config = remoteConfig({ OWNER_PASSWORD: PW, PUBLIC_URL: `http://127.0.0.1:${port}` }, { port });
   const notes: string[] = [];
   const server = await serveHttp({
@@ -156,6 +158,17 @@ describe("the Setup page", () => {
     expect(r.text).toContain("shop login");
   });
 
+  test("the root redirects to /setup, the log and the --http help name it, and the page's CSS wins", async () => {
+    const { base, notes } = await start();
+    const root = await fetch(`${base}/`, { redirect: "manual" });
+    expect(root.status).toBe(302);
+    expect(root.headers.get("location")).toBe("/setup");
+    expect(notes.some((n) => n.includes("listening") && n.includes(`${base}/setup`))).toBe(true);
+    expect(BUILTIN_FLAGS.mcp!.find((f) => f.name === "--http")!.description).toContain("/setup");
+    const html = (await req(`${base}/setup`)).text;
+    expect(html.indexOf(".wrap{max-width:560px}")).toBeGreaterThan(html.indexOf(".wrap{max-width:460px"));
+  });
+
   test("a site that needs no sign-in has no upload form, and an upload is refused", async () => {
     const { base } = await start({ site: makeSite() });
     const page = await req(`${base}/setup`);
@@ -185,6 +198,14 @@ describe("persistenceWarning", () => {
     expect(persistenceWarning({ RAILWAY_ENVIRONMENT: "production", RAILWAY_VOLUME_MOUNT_PATH: "/data" }, "/data/state")).toBeNull();
     expect(persistenceWarning({ RAILWAY_ENVIRONMENT: "production", RAILWAY_VOLUME_MOUNT_PATH: "/data" }, "/data")).toBeNull();
     expect(persistenceWarning({}, "/anywhere")).toBeNull();
+  });
+
+  test("any Railway variable marks the host, and the texts say what to do", () => {
+    for (const name of ["RAILWAY_ENVIRONMENT", "RAILWAY_ENVIRONMENT_NAME", "RAILWAY_ENVIRONMENT_ID", "RAILWAY_PROJECT_ID"]) {
+      expect(persistenceWarning({ [name]: "x" }, "/root/.acme")).toContain("No volume is attached");
+    }
+    expect(persistenceWarning({ RAILWAY_PROJECT_ID: "p" }, "/root/.acme")).toContain("keep this server's state dir (/root/.acme) on it");
+    expect(persistenceWarning({ RAILWAY_PROJECT_ID: "p", RAILWAY_VOLUME_MOUNT_PATH: "/data" }, "/root/.acme")).toContain("Point HOME (or the state dir) at the volume");
   });
 });
 
@@ -283,9 +304,97 @@ describe("the Session upload", () => {
     expect(stored()).toBe(before);
   });
 
+  test("a Session without what the reads need, or without headers, never replaces a working one", async () => {
+    const { base } = await start();
+    await upload(base, { file: sessionJson() });
+    const before = stored();
+    const noIds = await upload(base, { file: sessionJson({ headers: { cookie: `sid=${GOOD}` }, ids: {} }) });
+    expect(noIds.status).toBe(400);
+    expect(noIds.text).toContain("lacks what the site&#39;s reads need");
+    const noHeaders = await upload(base, { file: sessionJson({ headers: {}, ids: { customerId: "C-1" } }) });
+    expect(noHeaders.status).toBe(400);
+    expect(noHeaders.text).toContain("no sign-in (no headers)");
+    expect((await upload(base, { file: sessionJson({ headers: {}, ids: {} }) })).status).toBe(400);
+    expect(stored()).toBe(before);
+    expect(readStatus(home.dir).state).toBe("valid");
+  });
+
+  test("reads that all need input: the Session is stored as unchecked, and the Owner is told", async () => {
+    const { base } = await start({ extra: { operations: [getOrder] } });
+    const r = await upload(base, { file: sessionJson() });
+    expect(r.status).toBe(200);
+    expect(r.text).toContain("not checked");
+    expect(existsSync(sessionFile(home.dir))).toBe(true);
+    const status = readStatus(home.dir);
+    expect(status.state).toBe("unchecked");
+    expect(status.uploadedAt).toBeDefined();
+    expect(status.checkedAt).toBeUndefined();
+    expect((await req(`${base}/setup`)).text).toContain("Session: unchecked");
+  });
+
+  test("a delete fired during a slow check waits its turn: the Session ends deleted", async () => {
+    const { base, state } = await start();
+    let entered!: () => void;
+    const inside = new Promise<void>((r) => (entered = r));
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    state.handler = async (r) => {
+      entered();
+      await gate;
+      return sessionSite(r);
+    };
+    const uploading = upload(base, { file: sessionJson() });
+    await inside;
+    const deleting = action(base, "delete");
+    await Bun.sleep(150);
+    release();
+    expect((await uploading).status).toBe(200);
+    expect((await deleting).status).toBe(200);
+    expect(existsSync(sessionFile(home.dir))).toBe(false);
+    expect(existsSync(statusFile(home.dir))).toBe(false);
+    expect(readStatus(home.dir).state).toBe("missing");
+  });
+
+  test("the files are private and no temporary file is left behind", async () => {
+    const { base } = await start();
+    await signIn(base);
+    await upload(base, { file: sessionJson() });
+    if (process.platform !== "win32") {
+      for (const file of [sessionFile(home.dir), statusFile(home.dir), `${home.dir}/oauth.json`]) expect(statSync(file).mode & 0o777).toBe(0o600);
+    }
+    expect(readdirSync(home.dir).filter((f) => f.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("a chunked upload (no Content-Length) works, and one over 256 KB is 413", async () => {
+    const { base } = await start();
+    const chunked = async (o: Upload) => {
+      const form = new FormData();
+      form.set("password", o.password ?? PW);
+      if (o.file !== undefined) form.set("session_file", new File([o.file], "session.json"));
+      const whole = new Response(form);
+      const type = whole.headers.get("content-type")!;
+      const bytes = new Uint8Array(await whole.arrayBuffer());
+      const half = Math.floor(bytes.length / 2);
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(bytes.slice(0, half));
+          c.enqueue(bytes.slice(half));
+          c.close();
+        },
+      });
+      return req(`${base}/setup/session`, { method: "POST", headers: { "content-type": type }, body, duplex: "half" } as RequestInit);
+    };
+    const ok = await chunked({ file: sessionJson() });
+    expect(ok.status).toBe(200);
+    expect(readStatus(home.dir).state).toBe("valid");
+    const big = await chunked({ file: "x".repeat(300_000) });
+    expect(big.status).toBe(413);
+    expect(big.headers.get("connection")).toBe("close");
+  });
+
   test("a refused first upload leaves no Session and no status behind", async () => {
     const { base } = await start();
-    const r = await upload(base, { file: sessionJson({ headers: { cookie: `sid=${OTHER}` }, ids: {} }) });
+    const r = await upload(base, { file: sessionJson({ headers: { cookie: `sid=${OTHER}` }, ids: { customerId: "C-1" } }) });
     expect(r.status).toBe(400);
     expect(existsSync(sessionFile(home.dir))).toBe(false);
     expect(readStatus(home.dir).state).toBe("missing");
@@ -360,6 +469,43 @@ describe("remote tools", () => {
     expect(page.text).toContain("Session: expired");
     expect(page.text).toContain("has expired");
   });
+
+  test("a call that succeeds after an expired mark marks the Session valid again", async () => {
+    const { base, state } = await start();
+    const token = await signIn(base);
+    await upload(base, { file: sessionJson() });
+    const uploadedAt = readStatus(home.dir).uploadedAt;
+    state.handler = () => json({ message: "signed out" }, 401);
+    expect(textOf(await toolCall(base, token, "products_show")).error.kind).toBe("session");
+    expect(readStatus(home.dir).state).toBe("expired");
+    state.handler = sessionSite;
+    expect((await toolCall(base, token, "products_show")).isError).toBeUndefined();
+    const status = readStatus(home.dir);
+    expect(status).toMatchObject({ state: "valid", uploadedAt });
+    expect(status.checkedAt).toBeDefined();
+    expect((await req(`${base}/setup`)).text).toContain("Session: valid");
+  });
+
+  test("remote check refuses a write Operation (it needs Chrome); local check does not", async () => {
+    let writeChecks = 0;
+    const app = makeApp(loginSite(), makeDeps(fakeFetch(sessionSite).fetch, home.dir).deps, {
+      checkWrites: async () => (writeChecks++, new Map()),
+    });
+    const remote = mcpTools(app, { remote: true }).tools.find((t) => t.name === "check")!;
+    const { output, code } = await remote.call({ op: renameOrder.name });
+    expect(code).toBe(2);
+    expect((output as any).error.kind).toBe("input");
+    expect((output as any).error.message).toContain("needs Chrome");
+    expect(writeChecks).toBe(0);
+    expect(remote.description).not.toContain("writes");
+    expect(mcpTools(app).tools.find((t) => t.name === "check")!.description).toContain("writes: true");
+  });
+
+  test("remote mode lists no doctor; local mode keeps it", () => {
+    const app = makeApp(loginSite(), makeDeps(fakeFetch(happySite).fetch, home.dir).deps);
+    expect(mcpTools(app, { remote: true }).tools.map((t) => t.name)).not.toContain("doctor");
+    expect(mcpTools(app).tools.map((t) => t.name)).toContain("doctor");
+  });
 });
 
 describe("checkSession", () => {
@@ -395,8 +541,23 @@ describe("checkSession", () => {
     expect(await checkSession(app, candidate)).toEqual({ ok: true, tried: 2 });
   });
 
-  test("a skill with no read Operation has nothing to check; reads that cannot be tried fail", async () => {
+  test("nothing to try is not a refusal: no read Operation, or reads that all need input", async () => {
     expect(await checkSession(appWith(sessionSite, { operations: [renameOrder] }), candidate)).toEqual({ ok: true, tried: 0 });
-    expect(await checkSession(appWith(sessionSite, { operations: [getOrder] }), candidate)).toEqual({ ok: false, reason: "none of the site's reads could be tried with this Session" });
+    expect(await checkSession(appWith(sessionSite, { operations: [getOrder] }), candidate)).toEqual({ ok: true, tried: 0 });
+  });
+
+  test("reads that need a value the Session lacks are a refusal, not nothing to try", async () => {
+    const r = await checkSession(appWith(sessionSite), { headers: { cookie: `sid=${GOOD}` }, ids: {}, savedAt: "2026-01-01T00:00:00.000Z" });
+    expect(r).toEqual({ ok: false, reason: "this session.json lacks what the site's reads need; upload the file `shop login` wrote" });
+  });
+
+  test("a Drift at a field named auth is a changed site, not a refused Session", async () => {
+    const odd = { ...getCustomer, response: z.object({ auth: z.string() }) };
+    const r = await checkSession(appWith(sessionSite, { operations: [odd] }), candidate);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/Drift/);
+      expect(r.reason).not.toContain("did not accept");
+    }
   });
 });
