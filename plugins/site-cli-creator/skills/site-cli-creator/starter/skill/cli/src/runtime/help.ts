@@ -51,7 +51,7 @@ export const BUILTIN_FLAGS: Record<string, FlagSpec[]> = {
   version: [],
   doctor: [],
   mcp: [
-    flag("http", "boolean", "remote mode: serve over HTTP behind the Owner's sign-in, for web and phone clients. Needs OWNER_PASSWORD (12+ characters) or OWNER_PASSWORD_HASH, and PUBLIC_URL (https; http only on localhost). Without it, local mode over stdio"),
+    flag("http", "boolean", "remote mode: serve over HTTP behind the Owner's sign-in, for web and phone clients. Needs OWNER_PASSWORD (12+ characters) or OWNER_PASSWORD_HASH, and PUBLIC_URL (https; http only on localhost). The Owner gives the server a Session on its Setup page, <PUBLIC_URL>/setup. Without it, local mode over stdio"),
     flag("port", "number", "the HTTP port in remote mode (default: PORT, else 8080)"),
     flag("hash-password", "boolean", "read the Owner password on stdin and print the OWNER_PASSWORD_HASH to set on the host instead of OWNER_PASSWORD"),
   ],
