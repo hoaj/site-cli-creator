@@ -55,7 +55,7 @@ Claude Code: `claude mcp add <skill> -- /path/to/__PLUGIN__/skills/<skill>/bin/<
 
 ### Remote mode (claude.ai and the phone)
 
-To use a CLI skill from claude.ai or your phone, it has to run on a server you control. Ask your agent to deploy it: the `__PLUGIN__-deploy` skill walks through Railway, one server per CLI skill. You choose an Owner password that signs your clients in (the skill can generate one), give the server your Session on its Setup page (`/setup`), and add the server's `/mcp` address as a custom connector. It is for your own account only.
+To use a CLI skill from claude.ai or your phone, it has to run on a server you control. Ask your agent to deploy it: the `__PLUGIN__-deploy` skill walks through Railway, one server per CLI skill. You choose an Owner password that signs your clients in (the skill can generate one), give the server your Session on its Setup page (`/setup`), and add the server's `/mcp` address as a custom connector. It is for your own account only. A connector added in claude.ai also shows up in Claude Code; if you run the CLI skill's local `mcp` there too, turn the claude.ai one off with `/mcp`, or all claude.ai connectors with `"disableClaudeAiConnectors": true` in `~/.claude/settings.json`.
 
 ## Update
 
