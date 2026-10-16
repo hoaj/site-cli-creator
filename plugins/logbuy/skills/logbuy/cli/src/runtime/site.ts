@@ -125,6 +125,15 @@ export function onSiteDomain(domain: string, host: string): boolean {
   return h === domain || h.endsWith(`.${domain}`);
 }
 
+/** A host name from a login host entry (`login.example.com`, `localhost:4100`, or a URL). */
+export function loginHostName(entry: string): string {
+  try {
+    return new URL(entry.includes("://") ? entry : `http://${entry}`).hostname.toLowerCase();
+  } catch {
+    return entry.toLowerCase();
+  }
+}
+
 export function isLoginHost(site: Site, url: string): boolean {
   try {
     const { host, hostname } = new URL(url);

@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isEntry, parseFlags, run, splitGlobals } from "../src/main";
 import { defineCommand } from "../src/runtime/command";
-import { Failure } from "../src/runtime/envelope";
+import { EXIT, Failure, ProfileUnavailable } from "../src/runtime/envelope";
 import { flagSpecs } from "../src/runtime/help";
 import { loadSession, saveSession } from "../src/runtime/session";
 import { fakeFetch, happySite, json, loginSite, makeApp, makeDeps, makeSite, tempHome } from "./helpers";
@@ -45,6 +45,21 @@ describe("flag parsing", () => {
       ["--kind", "enum", false, false],
     ]);
     expect(specs[4].values).toEqual(["a", "b"]);
+  });
+
+  test("a flag with a default is not required, whatever wraps it (#70: Zod 4 reports it as defaulted)", () => {
+    const withDefaults = flagSpecs(z.object({
+      limit: z.number().default(10),
+      pages: z.coerce.number().int().min(1).max(200).default(10).describe("how many"),
+      query: z.string(),
+      sort: z.enum(["new", "old"]).default("new"),
+    }));
+    expect(withDefaults.map((s) => [s.name, s.required])).toEqual([
+      ["--limit", false],
+      ["--pages", false],
+      ["--query", true],
+      ["--sort", false],
+    ]);
   });
 
   test("presence booleans, --k v, --k=v, numbers, repeated arrays", () => {
@@ -384,6 +399,28 @@ describe("login", () => {
       expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(0);
       expect(seen).toEqual([{ headless: true, fromProfile: source.dir }, { headless: true, fromProfile: undefined }]);
       expect(loadSession(home.dir)!.fromProfile).toBeUndefined();
+    } finally {
+      source.cleanup();
+    }
+  });
+
+  test("the silent refresh skips a --from-profile profile it cannot open, and nothing else (#46)", async () => {
+    const source = tempHome();
+    try {
+      const { fetch } = fakeFetch((req) => (req.headers.authorization === "Bearer t1" ? json({}, 401) : happySite(req)));
+      const { deps } = makeDeps(fetch, home.dir);
+      deps.env = { ...deps.env, SITE_CLI_NONINTERACTIVE: "1" };
+      let seeded: Error = new ProfileUnavailable(`--from-profile: could not open ${source.dir} (in use)`);
+      deps.login = async (_headless, options) => {
+        if (options?.fromProfile) throw seeded;
+        return { authorization: "Bearer t2" };
+      };
+      saveSession(home.dir, { headers: { authorization: "Bearer t1" }, ids: { customerId: "C-1" }, fromProfile: source.dir });
+      expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(0);
+
+      saveSession(home.dir, { headers: { authorization: "Bearer t1" }, ids: { customerId: "C-1" }, fromProfile: source.dir });
+      seeded = new Failure("input", "postLogin: no customer id");
+      expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(EXIT.input);
     } finally {
       source.cleanup();
     }

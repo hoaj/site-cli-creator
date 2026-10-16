@@ -1,9 +1,11 @@
 // State lives in ~/.<plugin>/ for a skill named after its plugin, else ~/.<plugin>-<skill>/ (0700):
 // session.json (0600) and, for login skills, profile/ (the tool-owned Chrome user-data dir).
 // SITE_CLI_HOME overrides the dir (tests).
+import { randomBytes } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { z } from "zod";
 import type { Account } from "./envelope";
 import type { Env } from "./site";
 
@@ -20,6 +22,17 @@ export type Session = {
   fromProfile?: string;
   savedAt: string;
 };
+
+/**
+ * What the Setup page accepts as a Session: the shape `login` writes. Unknown keys are stripped
+ * (`fromProfile` is a path on the Owner's computer, meaningless on a server).
+ */
+export const sessionUploadSchema = z.object({
+  headers: z.record(z.string(), z.string()),
+  ids: z.record(z.string(), z.string()),
+  accounts: z.array(z.object({ id: z.string() })).optional(),
+  savedAt: z.string().optional(),
+});
 
 type Names = { plugin: string; skill: string };
 
@@ -64,6 +77,8 @@ export function ensureStateDir(dir: string): string {
 
 export const sessionFile = (dir: string) => join(dir, "session.json");
 export const profileDir = (dir: string) => join(dir, "profile");
+/** The CLI's own Chrome profile, created (0700) with the state dir around it. */
+export const ensureProfileDir = (site: Names, env: Env = process.env) => ensureStateDir(profileDir(ensureStateDir(stateDir(site, env))));
 
 export function loadSession(dir: string): Session | null {
   const file = sessionFile(dir);
@@ -80,10 +95,14 @@ export function loadSession(dir: string): Session | null {
 export function saveSession(dir: string, session: Omit<Session, "savedAt"> & { savedAt?: string }): Session {
   ensureStateDir(dir);
   const full: Session = { ...session, savedAt: session.savedAt ?? new Date().toISOString() };
-  const file = sessionFile(dir);
-  const tmp = `${file}.${process.pid}.tmp`;
-  writeFileSync(tmp, JSON.stringify(full, null, 2) + "\n", { mode: 0o600 });
+  writePrivateJson(sessionFile(dir), full);
+  return full;
+}
+
+/** A JSON file written atomically (a unique tmp file, then rename) with mode 0600. */
+export function writePrivateJson(file: string, value: unknown): void {
+  const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
+  writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, file);
-  return full;
 }

@@ -39,6 +39,11 @@ export function installHint(platform: string = process.platform): string {
   return "Install Google Chrome from https://www.google.com/chrome/ in its default location, or set SITE_CLI_CHROME to its path.";
 }
 
+/** What to tell the user when findChrome() found nothing. */
+export function chromeNotFound(lookup: ChromeLookup, platform: string = process.platform): string {
+  return `Google Chrome was not found (looked at ${lookup.checked.join(", ") || "no known path on this OS"}). ${installHint(platform)}`;
+}
+
 /** launchPersistentContext options that select the user's Chrome. */
 export function chromeLaunchOptions(lookup: ChromeLookup): { channel?: "chrome"; executablePath?: string } {
   return lookup.override && lookup.path ? { executablePath: lookup.path } : { channel: "chrome" };

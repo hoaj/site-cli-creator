@@ -25,7 +25,7 @@ function defOf(schema: unknown): any {
 }
 
 /** The schema behind wrappers that do not change where a key sits (optional, nullable, default, pipe, lazy…). */
-function unwrap(schema: unknown): unknown {
+export function unwrap(schema: unknown): unknown {
   for (let i = 0; i < 32; i++) {
     const def = defOf(schema);
     if (!def) return schema;
