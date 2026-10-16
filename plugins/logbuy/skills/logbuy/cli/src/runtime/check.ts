@@ -8,10 +8,11 @@ import type { BrowserContext, Request as PwRequest, Route } from "playwright-cor
 import type { Client } from "./call";
 import { ContractError, Failure, type DriftEntry } from "./envelope";
 import { driftFingerprint, errorName, operationSegment, zodDiff } from "./fingerprint";
+import { stripNoise, topLevelDefinitions, type GraphqlType } from "./graphql";
 import { closeContext, launch, launchInMemory, profileState } from "./login";
 import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverCheckedWarning } from "./needs";
 import type { Operation } from "./operation";
-import { ensureStateDir, profileDir, stateDir } from "./session";
+import { ensureProfileDir } from "./session";
 import { effectiveOrigin, isLoginHost, tokenMatches, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
@@ -50,12 +51,17 @@ export function chainOrder(ops: Operation[]): Operation[] {
   return out;
 }
 
+/** The Operation --op names, by its name or (as the Fingerprint writes REST params) its {param} form. */
+export function findOperation(ops: Operation[], name: string): Operation {
+  const target = ops.find((o) => o.name === name) ?? ops.find((o) => operationSegment(o.name) === name);
+  if (!target) throw new Failure("input", `No Operation named "${name}". Operations: ${ops.map((o) => o.name).join(", ")}.`);
+  return target;
+}
+
 /** The Operation named by --op plus every Operation its chain needs. */
 export function withChain(ops: Operation[], name: string): Operation[] {
   const byName = new Map(ops.map((o) => [o.name, o]));
-  // The Fingerprint writes REST params as {param}; accept that form too.
-  const target = byName.get(name) ?? ops.find((o) => operationSegment(o.name) === name);
-  if (!target) throw new Failure("input", `No Operation named "${name}". Operations: ${ops.map((o) => o.name).join(", ")}.`);
+  const target = findOperation(ops, name);
   const keep = new Set<string>();
   const add = (op: Operation) => {
     if (keep.has(op.name)) return;
@@ -67,7 +73,8 @@ export function withChain(ops: Operation[], name: string): Operation[] {
 }
 
 export async function check(client: Client, operations: Operation[], options: CheckOptions, checkWrites?: WriteChecker): Promise<CheckResult> {
-  const selected = chainOrder(options.op ? withChain(operations, options.op) : operations);
+  const target = options.op ? findOperation(operations, options.op) : undefined;
+  const selected = chainOrder(target ? withChain(operations, target.name) : operations);
   const rows: CheckRow[] = [];
   const warnings: string[] = [];
   const drifts: DriftEntry[] = [];
@@ -85,7 +92,7 @@ export async function check(client: Client, operations: Operation[], options: Ch
       continue;
     }
     if (op.effect === "write") {
-      if (options.writes || (options.op !== undefined && (options.op === op.name || options.op === operationSegment(op.name)))) writes.push(op);
+      if (options.writes || op === target) writes.push(op);
       else rows.push({ operation: op.name, effect: "write", status: "skipped", reason: "run check --writes" });
       continue;
     }
@@ -197,26 +204,7 @@ export function parseCaptured(text: string | null, contentType?: string): unknow
   }
 }
 
-// ---- GraphQL documents (mirrors tools/lib/graphql.ts describeQuery; the runtime never imports tools) ----
-
-type GraphqlType = "query" | "mutation" | "subscription";
-
-/** String literals, block strings and comments removed: a mutation word inside them is no definition. */
-const stripNoise = (query: string) => query.replace(/"""[\s\S]*?"""|"(?:[^"\\\n]|\\.)*"|#[^\n]*/g, "");
-
-/** Every operation definition at brace depth 0 (fields named `mutation` inside a selection don't count). */
-function topLevelDefinitions(code: string): { type: GraphqlType; name: string | null }[] {
-  let depth = 0;
-  let top = "";
-  for (const ch of code) {
-    if (ch === "{" || ch === "(") {
-      if (depth === 0) top += " { ";
-      depth++;
-    } else if (ch === "}" || ch === ")") depth = Math.max(0, depth - 1);
-    else if (depth === 0) top += ch;
-  }
-  return [...top.matchAll(/(?:^|\s)(query|mutation|subscription)\b\s*([_A-Za-z][_0-9A-Za-z]*)?/g)].map((m) => ({ type: m[1] as GraphqlType, name: m[2] ?? null }));
-}
+// ---- GraphQL documents ----
 
 /**
  * The operation one GraphQL document runs: the definition its operationName selects, else its only
@@ -338,16 +326,10 @@ export function matchesOperation(site: Site, op: Operation, origin: string, req:
 }
 
 /**
- * A request every part of which is a declared read Operation (a GraphQL batch only if every
- * document in it is). Such requests pass, so pages that load data through POST still render.
+ * A REST request that is a declared read Operation. Such requests pass, so pages that load data
+ * through POST still render. (GraphQL requests never get here: graphqlReadOnly decides them.)
  */
 export function isDeclaredRead(site: Site, reads: Operation[], origin: string, req: Captured): boolean {
-  if (req.url.origin !== new URL(origin).origin) return false;
-  if (site.graphqlPath && req.method === "POST" && req.url.pathname === site.graphqlPath) {
-    const docs = Array.isArray(req.body) ? req.body : [req.body];
-    const gql = reads.filter((op) => op.graphql !== undefined);
-    return docs.length > 0 && docs.every((d) => gql.some((op) => matchesOperation(site, op, origin, { ...req, body: d })));
-  }
   return reads.some((op) => op.rest !== undefined && matchesOperation(site, op, origin, req));
 }
 
@@ -359,7 +341,7 @@ export function isDeclaredRead(site: Site, reads: Operation[], origin: string, r
  */
 export function capturedVariables(op: Operation, req: Captured): unknown {
   if (op.graphql !== undefined) {
-    const docs = Array.isArray(req.body) ? req.body : [req.body];
+    const docs = graphqlDocs(req.body);
     const doc: any = docs.find((d: any) => d?.operationName === op.name) ?? docs[0];
     return doc?.variables ?? {};
   }
@@ -429,14 +411,10 @@ export function chromeWriteChecker(site: Site, env = process.env, fromProfile?: 
     const out = new Map<string, DriftEntry | null>();
     const seeded = site.auth === "login" && fromProfile !== undefined;
     const temp = site.auth === "none" ? mkdtempSync(join(tmpdir(), `${site.skill}-check-`)) : undefined;
-    const profile = temp ?? profileDir(ensureStateDir(stateDir(site, env)));
     let context: BrowserContext | undefined;
     try {
       if (seeded) context = await launchInMemory(site, true, env, await profileState(site, fromProfile, env, { localStorage: true }));
-      else {
-        if (!temp) ensureStateDir(profile);
-        context = await launch(site, profile, true, env);
-      }
+      else context = await launch(site, temp ?? ensureProfileDir(site, env), true, env);
       context.setDefaultTimeout(ACTION_TIMEOUT_MS);
       const origin = effectiveOrigin(site, env);
       const signIn = seeded ? `the sign-in carried over from ${fromProfile}` : "the CLI's Chrome profile";
