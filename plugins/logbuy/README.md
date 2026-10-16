@@ -46,6 +46,10 @@ The `logbuy` binary is also an MCP server: `skills/logbuy/bin/logbuy mcp` serves
 
 Claude Code: `claude mcp add logbuy -- /path/to/skills/plugins/logbuy/skills/logbuy/bin/logbuy mcp` (the plugin above is the better fit there: it also brings the skill's guidance). The first tool call asks you to call the `login` tool, which opens Chrome for you to sign in to LogBuy; the session stays on your machine in `~/.logbuy/`, shared with the CLI.
 
+### Remote mode (claude.ai and the phone)
+
+To use logbuy from claude.ai or your phone, it has to run on a server you control. Ask your agent to deploy it: the `logbuy-deploy` skill walks through Railway, one server for the `logbuy` CLI skill. You choose an Owner password that signs your clients in (the skill can generate one), give the server your Session on its Setup page (`/setup`), and add the server's `/mcp` address as a custom connector. It is for your own account only.
+
 ## Update
 
 Update the plugin in your agent's plugin manager (Claude Code: `/plugin update logbuy`). A new version lands in a new folder, so the agent downloads the matching binary on first use. Right after a release, the binary can take a few minutes to build; `install.sh` says so when it is not there yet.

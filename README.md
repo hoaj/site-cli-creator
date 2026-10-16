@@ -30,7 +30,7 @@ copilot plugin install bankmcp
 |--------|-------|-------------|
 | [bankmcp](./plugins/bankmcp) | `/bankmcp:setup` | Set up your own BankMCP server (read-only bank access for Claude or ChatGPT), locally or on Railway |
 | [site-cli-creator](./plugins/site-cli-creator) | `/site-cli-creator:site-cli-creator`, `/site-cli-creator:site-cli-creator-feedback` | Turn the calls a website makes into a plugin of CLI skills that coding agents can run, with Drift checks and a feedback loop |
-| [logbuy](./plugins/logbuy) | `/logbuy:logbuy`, `/logbuy:logbuy-feedback` | Find deals on Visma LogBuy (mylogbuy.com): search products, show a deal, browse categories. Its CLI binary downloads from this repo's `logbuy-v<version>` releases, so it needs `gh` with access to this repo |
+| [logbuy](./plugins/logbuy) | `/logbuy:logbuy`, `/logbuy:logbuy-deploy`, `/logbuy:logbuy-feedback` | Find deals on Visma LogBuy (mylogbuy.com): search products, show a deal, browse categories. Its CLI binary downloads from this repo's `logbuy-v<version>` releases, so it needs `gh` with access to this repo |
 
 ## Adding a plugin
 

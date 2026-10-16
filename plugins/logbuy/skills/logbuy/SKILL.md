@@ -2,7 +2,7 @@
 name: logbuy
 description: Use when the user wants an employee-benefit deal from Visma LogBuy (mylogbuy.com), signed in as themselves - finding LogBuy discounts for a product, brand or shop ("is there a LogBuy deal on headphones?"), showing one shop's LogBuy deal in full with its current offer and link, listing LogBuy's deal categories, or browsing the deals in one category. Read-only.
 ---
-<!-- version: 0.4.0 -->
+<!-- version: 0.5.0 -->
 
 # logbuy
 
@@ -17,12 +17,12 @@ description: Use when the user wants an employee-benefit deal from Visma LogBuy 
 | Command | Flags | Does |
 |---|---|---|
 | `logbuy category list` |  | The LogBuy deal categories with how many deals each has |
-| `logbuy deal browse` | `--category <category>` a category name, as `category list` shows it<br>`--limit <n>` how many deals (default 10) | LogBuy deals in one category, best match first |
-| `logbuy deal search` | `--query <query>` what to look for, e.g. a product, brand or shop<br>`--limit <n>` how many deals (default 10) | Find LogBuy deals for a product or shop, best match first |
+| `logbuy deal browse` | `--category <category>` a category name, as `category list` shows it<br>`[--limit <n>]` how many deals (default 10) | LogBuy deals in one category, best match first |
+| `logbuy deal search` | `--query <query>` what to look for, e.g. a product, brand or shop<br>`[--limit <n>]` how many deals (default 10) | Find LogBuy deals for a product or shop, best match first |
 | `logbuy deal show` | `--shop <shop>` the shop's name, as `deal search` lists it | One shop's LogBuy deal in full: discount, terms, current offer, link |
 <!-- commands:end -->
 
-Built-ins: `help` (commands, flags, exit codes as JSON), `check [--op <name>] [--writes]`, `doctor`, `version`, and `login` when the site needs one. Global flags: `--account <id>`, `--confirm`.
+Built-ins: `help` (commands, flags, exit codes as JSON; `<command> --help` prints one command's flags), `check [--op <name>] [--writes]`, `doctor`, `version`, and `login` when the site needs one. Global flags: `--account <id>`, `--confirm`.
 
 Run the command the user's question needs. There is no setup step; recover only on failure.
 
