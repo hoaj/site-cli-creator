@@ -52,7 +52,7 @@ export function chainOrder(ops: Operation[]): Operation[] {
 }
 
 /** The Operation --op names, by its name or (as the Fingerprint writes REST params) its {param} form. */
-function findOperation(ops: Operation[], name: string): Operation {
+export function findOperation(ops: Operation[], name: string): Operation {
   const target = ops.find((o) => o.name === name) ?? ops.find((o) => operationSegment(o.name) === name);
   if (!target) throw new Failure("input", `No Operation named "${name}". Operations: ${ops.map((o) => o.name).join(", ")}.`);
   return target;

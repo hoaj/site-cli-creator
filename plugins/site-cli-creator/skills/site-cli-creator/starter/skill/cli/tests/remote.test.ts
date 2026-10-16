@@ -8,7 +8,7 @@ import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
-import { mcpTools, run } from "../src/main";
+import { checkSession, mcpTools, run } from "../src/main";
 import { remoteConfig, type RemoteConfig } from "../src/runtime/remote-config";
 import { OwnerProvider, OAuthStore, hashPassword } from "../src/runtime/owner-auth";
 import { serveHttp } from "../src/runtime/remote";
@@ -43,7 +43,7 @@ async function startRemote(opts: Start = {}) {
   const app = makeApp(makeSite(), d.deps);
   const config = remoteConfig({ OWNER_PASSWORD: PW, PUBLIC_URL: `http://127.0.0.1:${port}`, ...opts.env }, { port });
   const notes: string[] = [];
-  const server = await serveHttp({ ...mcpTools(app), site: app.site, config, dir: home.dir, host: "127.0.0.1", note: (m) => notes.push(m), now: opts.now });
+  const server = await serveHttp({ ...mcpTools(app, { remote: true }), site: app.site, config, dir: home.dir, host: "127.0.0.1", checkSession: (c) => checkSession(app, c), note: (m) => notes.push(m), now: opts.now });
   servers.push(server);
   return { base: `http://127.0.0.1:${port}`, app, deps: d.deps, calls: f.calls, notes, server, config };
 }
@@ -187,7 +187,7 @@ describe("Server sign-in over HTTP", () => {
     expect(tokens.token_type.toLowerCase()).toBe("bearer");
     expect(tokens.expires_in).toBe(3600);
     const list = await (await mcp(base, tokens.access_token, "tools/list")).json();
-    expect(list.result.tools.map((t: any) => t.name)).toEqual(mcpTools(app).tools.map((t) => t.name));
+    expect(list.result.tools.map((t: any) => t.name)).toEqual(mcpTools(app, { remote: true }).tools.map((t) => t.name));
     const call = await (await mcp(base, tokens.access_token, "tools/call", { name: "products_show", arguments: { all: true } })).json();
     const cli = await run(["products", "show", "--all"], makeApp(makeSite(), deps));
     expect(textOf(call.result)).toEqual(cli.output as object);
@@ -212,7 +212,7 @@ describe("Server sign-in over HTTP", () => {
     const d = makeDeps(fakeFetch(happySite).fetch, home.dir);
     const app = { ...makeApp(makeSite(), d.deps), commands: [makeApp(makeSite(), d.deps).commands[0]!] };
     const config = remoteConfig({ OWNER_PASSWORD: PW, PUBLIC_URL: `http://127.0.0.1:${port}` }, { port });
-    servers.push(await serveHttp({ ...mcpTools(app), site: app.site, config, dir: home.dir, host: "127.0.0.1", note: () => {} }));
+    servers.push(await serveHttp({ ...mcpTools(app, { remote: true }), site: app.site, config, dir: home.dir, host: "127.0.0.1", checkSession: (c) => checkSession(app, c), note: () => {} }));
     const base = `http://127.0.0.1:${port}`;
     const client = await (await register(base)).json();
     const html = await (await authorizePage(base, client.client_id, pkce().challenge)).text();
