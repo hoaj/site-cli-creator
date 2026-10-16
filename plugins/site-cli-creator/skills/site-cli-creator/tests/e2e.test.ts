@@ -721,13 +721,27 @@ for (const auth of ["none", "login"] as const) {
       });
       live.add(proc);
       const bodies: string[] = [];
+      const stderrText = new Response(proc.stderr).text();
+      let failed = true;
       try {
+        // Race the wait against the process, so a server that dies at start-up fails at once with its stderr.
         const deadline = Date.now() + 30_000;
-        for (;;) {
-          if (await fetch(`${base}/healthz`).then((r) => r.ok, () => false)) break;
-          if (Date.now() > deadline) throw new Error("the server did not answer /healthz in 30 s");
-          await Bun.sleep(100);
-        }
+        let up = false;
+        const died = proc.exited.then(async (code) => {
+          if (!up) throw new Error(`the server exited with ${code} before /healthz answered: ${await stderrText}`);
+        });
+        died.catch(() => {});
+        const healthy = (async () => {
+          for (;;) {
+            if (await fetch(`${base}/healthz`).then((r) => r.ok, () => false)) return;
+            if (proc.killed || proc.exitCode !== null) return;
+            if (Date.now() > deadline) throw new Error("the server did not answer /healthz in 30 s");
+            await Bun.sleep(100);
+          }
+        })();
+        healthy.catch(() => {});
+        await Promise.race([healthy, died]);
+        up = true;
         const accessToken = await signIn(base, password);
         const call = async (method: string, params?: unknown) => {
           const r = await mcpCall(base, accessToken, method, params);
@@ -763,13 +777,15 @@ for (const auth of ["none", "login"] as const) {
           expect(gone.structuredContent.error.kind).toBe("session");
           expect(gone.structuredContent.error.next).toContain("/setup");
         }
+        failed = false;
       } finally {
         proc.kill("SIGTERM");
-        const [stderr, stdout] = await Promise.all([new Response(proc.stderr).text(), new Response(proc.stdout).text()]);
+        const [stderr, stdout] = await Promise.all([stderrText, new Response(proc.stdout).text()]);
         const code = await proc.exited;
         live.delete(proc);
         bodies.push(stderr, stdout);
-        expect(code, stderr).toBe(0);
+        // Only when the try block passed: otherwise this would mask the original error.
+        if (!failed) expect(code, stderr).toBe(0);
       }
       for (const body of bodies) {
         expect(leaks(body)).toEqual([]);
