@@ -19,6 +19,7 @@ import { ACCOUNT, INVOICES, newStore, SUBSCRIPTIONS, USER } from "../fixtures/si
 import { startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
 import { findChrome } from "../starter/skill/cli/src/runtime/chrome";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
+import { freePort, mcpCall, setupAction, signIn, upload } from "./remote-client";
 
 const TOOLS = join(SKILL_ROOT, "tools");
 const BUN = process.execPath;
@@ -688,6 +689,92 @@ for (const auth of ["none", "login"] as const) {
       expect(failed.structuredContent.error).toMatchObject({ kind: "drift", fingerprint: `${prefix}listSubscriptions:zod:data.listSubscriptions[].price:invalid_type` });
       expect(failed.structuredContent.error.next).toContain(`${PLUGIN}-feedback`);
       expect(leaks(drifted.stdout)).toEqual([]);
+    }, 120_000);
+
+    test("mcp --http serves the same Tasks remotely: sign-in, Setup page upload, tool call", async () => {
+      const password = "e2e-owner-password";
+      const remoteHome = mkdtempSync(join(work, "remote-state-"));
+      const port = freePort();
+      const base = `http://127.0.0.1:${port}`;
+      // The suite's own working Session, taken before the server starts; the server gets it by upload.
+      if (auth === "login") expect((await cli(["subscription", "show"])).code).toBe(0);
+      const sessionText = auth === "login" ? readFileSync(join(home, "session.json"), "utf8") : "";
+      const sessionValues = auth === "login" ? Object.values(JSON.parse(sessionText).headers as Record<string, string>) : [];
+      // One mode sets the plain password, the other a hash made by the compiled binary, as the Deploy skill says.
+      let ownerEnv: Record<string, string> = { OWNER_PASSWORD: password };
+      if (auth === "login") {
+        const hasher = Bun.spawn([binary, "mcp", "--hash-password"], { env: cliEnv() as Record<string, string>, stdin: "pipe", stdout: "pipe", stderr: "pipe" });
+        live.add(hasher);
+        hasher.stdin.write(password);
+        await hasher.stdin.end();
+        const hashed = JSON.parse(await new Response(hasher.stdout).text());
+        expect(await hasher.exited).toBe(0);
+        live.delete(hasher);
+        expect(hashed.OWNER_PASSWORD_HASH).toStartWith("scrypt$");
+        ownerEnv = { OWNER_PASSWORD_HASH: hashed.OWNER_PASSWORD_HASH };
+      }
+      const proc = Bun.spawn([binary, "mcp", "--http", "--port", String(port)], {
+        env: cliEnv({ SITE_CLI_HOME: remoteHome, ...ownerEnv, PUBLIC_URL: base }) as Record<string, string>,
+        stdin: "ignore",
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      live.add(proc);
+      const bodies: string[] = [];
+      try {
+        const deadline = Date.now() + 30_000;
+        for (;;) {
+          if (await fetch(`${base}/healthz`).then((r) => r.ok, () => false)) break;
+          if (Date.now() > deadline) throw new Error("the server did not answer /healthz in 30 s");
+          await Bun.sleep(100);
+        }
+        const accessToken = await signIn(base, password);
+        const call = async (method: string, params?: unknown) => {
+          const r = await mcpCall(base, accessToken, method, params);
+          expect(r.status, r.text).toBe(200);
+          return { ...r.json.result, raw: r.text };
+        };
+        const names = (await call("tools/list")).tools.map((t: { name: string }) => t.name);
+        expect(names).toEqual(["invoice_list", "invoice_show", "note_add", "subscription_show", "check"]);
+
+        const setup = await (await fetch(`${base}/setup`)).text();
+        bodies.push(setup);
+        if (auth === "login") {
+          expect(setup).toContain("Session: missing");
+          const stored = await upload(base, password, sessionText);
+          bodies.push(stored.text);
+          expect(stored.status, stored.text).toBe(200);
+          expect(stored.text).toContain("Session stored and checked");
+        } else {
+          expect(setup).toContain("needs no sign-in");
+        }
+
+        const shown = await call("tools/call", { name: "subscription_show", arguments: { all: true } });
+        expect(shown.isError, JSON.stringify(shown)).toBeUndefined();
+        expect(shown.structuredContent).toEqual((await cli(["subscription", "show", "--all"])).out);
+
+        if (auth === "login") {
+          const deleted = await setupAction(base, "delete", password);
+          bodies.push(deleted.text);
+          expect(deleted.status, deleted.text).toBe(200);
+          const gone = await call("tools/call", { name: "subscription_show" });
+          bodies.push(gone.raw);
+          expect(gone.isError).toBe(true);
+          expect(gone.structuredContent.error.kind).toBe("session");
+          expect(gone.structuredContent.error.next).toContain("/setup");
+        }
+      } finally {
+        proc.kill("SIGTERM");
+        const [stderr, stdout] = await Promise.all([new Response(proc.stderr).text(), new Response(proc.stdout).text()]);
+        const code = await proc.exited;
+        live.delete(proc);
+        bodies.push(stderr, stdout);
+        expect(code, stderr).toBe(0);
+      }
+      for (const body of bodies) {
+        expect(leaks(body)).toEqual([]);
+        for (const v of sessionValues) expect(body).not.toContain(v);
+      }
     }, 120_000);
 
     test("a crashing command exits 1 with the bug key and a stack of src/-relative frames", async () => {

@@ -1,7 +1,7 @@
 #!/usr/bin/env bun
 // bun tools/new.ts --dir <path> --plugin <name> --repo <owner/name>
 //   --description "<text>" --maintainer <login> [--no-labels] [--skip-checks]
-// Scaffolds a plugin from starter/plugin and starter/feedback (SPEC §2 new). Before writing
+// Scaffolds a plugin from starter/plugin, starter/feedback and starter/deploy (SPEC §2 new). Before writing
 // anything it checks the maintainer requirements (SPEC §13); --skip-checks is for tests and CI.
 // STARTER_DIR overrides the Starter code location (tests only).
 
@@ -84,6 +84,7 @@ await runTool(async () => {
   const starter = starterDir();
   const pluginStarter = requireDir(join(starter, "plugin"), "starter/plugin");
   const feedbackStarter = requireDir(join(starter, "feedback"), "starter/feedback");
+  const deployStarter = requireDir(join(starter, "deploy"), "starter/deploy");
   assertWritableDir(dir);
   if (!values["skip-checks"]) {
     progress("checking maintainer requirements (Bun, Chrome, gh, admin on the repo)");
@@ -108,6 +109,11 @@ await runTool(async () => {
   files.push(...copyTemplate(feedbackStarter, join(dir, feedbackRel), tokens).map((f) => join(feedbackRel, f)));
   const feedbackSkillMd = join(dir, feedbackRel, "SKILL.md");
   if (existsSync(feedbackSkillMd)) setSkillMdVersion(feedbackSkillMd, INITIAL_VERSION);
+
+  const deployRel = join("skills", `${plugin}-deploy`);
+  files.push(...copyTemplate(deployStarter, join(dir, deployRel), tokens).map((f) => join(deployRel, f)));
+  const deploySkillMd = join(dir, deployRel, "SKILL.md");
+  if (existsSync(deploySkillMd)) setSkillMdVersion(deploySkillMd, INITIAL_VERSION);
 
   const info: PluginInfo = { plugin, repo: values.repo, description: values.description, maintainer: values.maintainer };
   const manifests: Record<string, unknown> = buildManifests(info);
