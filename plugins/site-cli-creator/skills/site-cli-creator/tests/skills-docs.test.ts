@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.5.0, both skills exist", () => {
+  test("version 0.5.1, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.5.0");
+      expect(m.version).toBe("0.5.1");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -49,7 +49,7 @@ describe("manifests", () => {
       const mk = JSON.parse(read(join(REPO, p)));
       const entry = mk.plugins.find((x: { name: string }) => x.name === "site-cli-creator");
       expect(entry).toEqual({ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description });
-      expect(mk.metadata.version).toBe("1.8.0");
+      expect(mk.metadata.version).toBe("1.8.1");
     }
     expect(read(join(REPO, "README.md"))).toContain("[site-cli-creator](./plugins/site-cli-creator)");
   });
@@ -261,6 +261,16 @@ describe.skipIf(!IN_REPO)(`generator CI workflow${REPO_REASON}`, () => {
       expect(run).toContain(s);
     }
     expect(wf).toContain("--origin http://127.0.0.1:4310");
+  });
+
+  test("the smoke binaries are deleted once run-smoke is done, so they never fill the artifact storage quota", () => {
+    const cleanup = wf.slice(wf.indexOf("  cleanup-smoke:"));
+    expect(wf.indexOf("  cleanup-smoke:")).toBeGreaterThan(wf.indexOf("  run-smoke:"));
+    expect(cleanup).toContain("needs: [smoke, run-smoke]");
+    expect(cleanup).toContain("if: always()");
+    expect(cleanup).toContain("actions: write");
+    expect(cleanup).toContain('startswith("smoke-")');
+    expect(cleanup).toContain("--method DELETE");
   });
 });
 

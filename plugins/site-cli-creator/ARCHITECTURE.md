@@ -50,7 +50,7 @@ The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator'
 | `__OWNER__` | GitHub owner of the plugin repo | `hoaj` |
 | `__DESCRIPTION__` | one-line plugin description | |
 | `__MAINTAINER__` | GitHub login of the maintainer | `hoaj` |
-| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.5.0` |
+| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.5.1` |
 | `__ORIGIN__` | the site origin | `https://www.yousee.dk` |
 | `__AUTH__` | `login` or `none` | |
 
