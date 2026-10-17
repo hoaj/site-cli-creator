@@ -122,8 +122,8 @@ export async function doctor(site: Site, options: DoctorOptions = {}) {
     if (gh.loggedIn) {
       gh.repoAccess = (await run(["gh", "repo", "view", site.repo, "--json", "name"])).code === 0;
       if (!gh.repoAccess) gh.hint = `ask ${site.repo.split("/")[0]} for access to ${site.repo}`;
-    } else gh.hint = "run gh auth login";
-  } else gh.hint = "install GitHub CLI (https://cli.github.com) and run gh auth login";
+    } else gh.hint = "run gh auth login (needed only to report problems with the Feedback skill)";
+  } else gh.hint = "install GitHub CLI (https://cli.github.com) and run gh auth login (needed only to report problems with the Feedback skill)";
 
   let findings: string[] = [];
   if (options.compiled) {
