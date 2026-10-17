@@ -1,5 +1,5 @@
 import { chmodSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
 import { fail } from "./output";
 
 /** The placeholders of ARCHITECTURE §2, without the surrounding underscores. */
@@ -62,7 +62,8 @@ function walk(dir: string, visit: (path: string) => void, root = dir, skip?: (re
   for (const entry of readdirSync(dir, { withFileTypes: true })) {
     if (SKIPPED.has(entry.name)) continue;
     const path = join(dir, entry.name);
-    if (skip?.(relative(root, path))) continue;
+    // `skip` always sees "/" separators, on Windows too (".github/workflows", not ".github\\workflows").
+    if (skip?.(relative(root, path).split(sep).join("/"))) continue;
     if (entry.isDirectory()) walk(path, visit, root, skip);
     else if (entry.isFile()) visit(path);
   }
@@ -71,7 +72,8 @@ function walk(dir: string, visit: (path: string) => void, root = dir, skip?: (re
 /**
  * Copies every file under `src` into `dest`, keeping the lines of `layout` (default standalone),
  * replacing tokens in text contents and in path names, and keeping file modes (install.sh stays
- * executable). `skip` leaves out a path relative to `src` (a folder skips all below it).
+ * executable). `skip` leaves out a path relative to `src`, written with "/" on every OS (a folder
+ * skips all below it).
  * Never overwrites an existing file. Returns the written paths relative to `dest`.
  */
 export function copyTemplate(
