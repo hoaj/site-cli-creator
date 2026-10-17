@@ -11,12 +11,12 @@ Ask in one message, with a proposal for each:
 | Value | Rule | Example |
 |---|---|---|
 | plugin name | kebab-case, usually the site's brand | `yousee` |
-| repo | `owner/name` on GitHub; private unless the user says otherwise | `hoaj/yousee-plugin` |
+| repo | `owner/name` on GitHub; public unless the user says otherwise | `hoaj/yousee-plugin` |
 | description | one line, what agents can do with it | `Read your Mit YouSee subscription and bills.` |
 | maintainer | `gh api user -q .login` | `hoaj` |
 | local folder | where to clone the repo | `~/code/yousee-plugin` |
 
-Public plugins publish a site's internal API shapes; recommend private for any site with a login.
+Public is the default, because then users install the binaries over HTTPS with no `gh` and no GitHub account. A public plugin publishes the site's internal API shapes (never values); if the user does not want that for this site, make it private, and every user then needs `gh`, logged in, with read access.
 
 ## 2. Repo
 
@@ -26,7 +26,7 @@ If the repo does not exist, create and clone it:
 gh repo create <owner/name> --public --clone --description "<description>"   # clones into ./<name>
 ```
 
-Public is the default: users then install the binaries over HTTPS with no `gh` and no GitHub account. A private repo works too, but every user then needs `gh`, logged in, with read access.
+Use `--private` instead only when the user chose a private repo in step 1.
 
 If it exists, clone it. `new.ts` writes only into a folder that holds nothing but `.git`; if the repo already has files (a README, a licence), ask the user whether to start from a fresh empty repo instead. Then run the admin check from the Prerequisites table. Without `ADMIN`, stop: labels, releases and merges need it.
 
@@ -36,7 +36,7 @@ If it exists, clone it. `new.ts` writes only into a folder that holds nothing bu
 bun <gen>/tools/new.ts --dir <local folder> --plugin <name> --repo <owner/name> --description "<description>" --maintainer <login>
 ```
 
-Before writing anything it checks the maintainer requirements (SPEC §13): Bun 1.4 or newer, Google Chrome, `gh` installed and logged in, and admin rights on the repo (`gh api repos/<owner/name> --jq .permissions.admin`). When any is missing it writes nothing and prints `{"error": {"message", "unmet": [{requirement, message}]}}` listing every one; tell the user each fix (a repo that does not exist yet: `gh repo create <owner/name> --private --clone`) and run it again. The site account is not checked: ask for it (step 1 of [add-skill.md](add-skill.md)).
+Before writing anything it checks the maintainer requirements (SPEC §13): Bun 1.4 or newer, Google Chrome, `gh` installed and logged in, and admin rights on the repo (`gh api repos/<owner/name> --jq .permissions.admin`). When any is missing it writes nothing and prints `{"error": {"message", "unmet": [{requirement, message}]}}` listing every one; tell the user each fix (a repo that does not exist yet: `gh repo create <owner/name> --public --clone`) and run it again. The site account is not checked: ask for it (step 1 of [add-skill.md](add-skill.md)).
 
 It copies the Starter code (manifests, release and CI workflows, bump script, version-sync test, Feedback skill and Deploy skill), writes the marketplace files that make the repo its own marketplace (`.claude-plugin/`, `.cursor-plugin/`, `.github/plugin/` and `.agents/plugins/marketplace.json`, named after the plugin), `generated.json` and `README.md`, and creates the labels `feature`, `drift`, `bug`, `unverified` and `needs-account`. Read its JSON output; on an error, stop and report it (`site-cli-creator-feedback` if it is the tool's fault).
 
