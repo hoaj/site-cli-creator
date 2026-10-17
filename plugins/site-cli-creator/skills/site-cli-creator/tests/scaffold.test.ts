@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { copyExpected } from "../fixtures/expected/copy";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 import { unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
-import { findTokens } from "../tools/lib/template";
+import { copyTemplate, findTokens } from "../tools/lib/template";
 
 const NEW = join(SKILL_ROOT, "tools", "new.ts");
 const ADD_SKILL = join(SKILL_ROOT, "tools", "add-skill.ts");
@@ -653,3 +653,25 @@ function cleanEnv(): Record<string, string> {
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith("SITE_CLI_") && k !== "STARTER_DIR") env[k] = v;
   return env;
 }
+
+// Windows smoke (2026-10-18): new.ts skips the Starter's .github/workflows by comparing with
+// ".github/workflows"; Windows' "\" made it copy the workflows twice and refuse to overwrite.
+describe("copyTemplate skip", () => {
+  test("sees nested paths with / on every OS", () => {
+    const src = mkdtempSync(join(tmpdir(), "copy-skip-src-"));
+    const dest = mkdtempSync(join(tmpdir(), "copy-skip-dest-"));
+    try {
+      mkdirSync(join(src, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(src, ".github", "workflows", "ci.yml"), "x");
+      writeFileSync(join(src, "README.md"), "y");
+      const seen: string[] = [];
+      const written = copyTemplate(src, join(dest, "out"), {}, { skip: (rel) => (seen.push(rel), rel === ".github/workflows") });
+      expect(seen).toContain(".github/workflows");
+      expect(seen.every((r) => !r.includes("\\"))).toBe(true);
+      expect(written).toEqual(["README.md"]);
+    } finally {
+      rmSync(src, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+});
