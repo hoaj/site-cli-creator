@@ -14,6 +14,8 @@ gh issue list --repo <owner/name> --state open --label drift
 gh issue list --repo <owner/name> --state open --label bug
 ```
 
+**A plugin in a shared repo** (its `generated.json` has a `pluginDir` other than `.`, such as `plugins/<plugin>`): add `--label <plugin>` to both, since the repo holds other plugins' issues too (an issue filed through the link may lack labels; its title starts with `<plugin>:` or `bug: <plugin>:`). Run every `cd <plugin>` below in that folder, and read release tags as `generated.json`'s `tagPrefix` plus the version (`<plugin>-v1.2.3`); a plugin whose `generated.json` has no `tagPrefix` uses `v`.
+
 Done when the PR is open with a patch bump and `Fixes #<n>`, `check --writes` passed (or the PR is labelled `unverified`), and a Drift PR without `unverified` is merged after green checks.
 
 ## 1. Read the issue
@@ -68,7 +70,7 @@ When the maintainer's account can't reach the failing Task or field (a different
 - correct the Contract from the issue's `diff` alone: field path, Zod issue code, expected and received type names;
 - run `check` anyway, so the rest still passes for the maintainer;
 - label the PR `unverified` and leave it for the maintainer to merge;
-- after the release, comment on the issue: "Fixed in vX.Y.Z without access to an account like yours. Please update the plugin and run `<skill> check --op <operation>`, then tell us whether it passes."
+- after the release, comment on the issue: "Fixed in <tag> without access to an account like yours. Please update the plugin and run `<skill> check --op <operation>`, then tell us whether it passes."
 
 ## 2b. Bug
 
@@ -97,4 +99,4 @@ Fixes #<n>"     # add: --label unverified  when it applies
 
 A green check can be stale: it compared the version with `main` as it was when the PR was pushed. The local `version-check` against a fresh `origin/main` catches a release that landed since, and every push to `main` marks open PRs whose version is no longer above it with a failing `version above main` status. When either fails, another release landed first: `git fetch origin && git rebase origin/main`, resolve the version files to `main`'s, `bun run bump patch`, push with `--force-with-lease`, and watch again.
 
-After the merge, `release.yml` publishes `vX.Y.Z` and labels the issue `fixed-in:vX.Y.Z`. Confirm with `gh run watch` and tell the user the version.
+After the merge, `release.yml` (`<plugin>-release.yml` at the root of a shared repo) publishes `vX.Y.Z` (`<plugin>-vX.Y.Z`) and labels the issue `fixed-in:` plus that tag. Confirm with `gh run watch` and tell the user the version.

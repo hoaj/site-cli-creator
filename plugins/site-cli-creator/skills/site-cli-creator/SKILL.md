@@ -26,7 +26,7 @@ Run these before any mode. Stop at the first failure and tell the user the fix. 
 
 | Mode | Trigger | Read first | Version bump | PR |
 |---|---|---|---|---|
-| `new` | a new site and no plugin yet | [reference/new.md](reference/new.md) | none: starts at `0.1.0` | none: first push to `main` releases `v0.1.0` |
+| `new` | a new site and no plugin yet, in its own repo (`--dir`) or `plugins/<plugin>` of a shared marketplace repo (`--into`) | [reference/new.md](reference/new.md) | none: starts at `0.1.0` | own repo: none, first push to `main` releases `v0.1.0`; shared repo: maintainer merges, releases `<plugin>-v0.1.0` |
 | `add-skill` | another site or another login in an existing plugin | [reference/add-skill.md](reference/add-skill.md) | minor | maintainer merges |
 | `add-task` | a `feature` issue, or the maintainer wants a new Task | [reference/add-task.md](reference/add-task.md) | minor | maintainer merges |
 | `fix` | an issue titled with a Fingerprint (Drift) or `bug: <key>` | [reference/fix.md](reference/fix.md) | patch | Drift: merge when checks are green; bug: maintainer merges |
