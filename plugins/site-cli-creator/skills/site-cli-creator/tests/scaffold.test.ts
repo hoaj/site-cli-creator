@@ -229,7 +229,7 @@ describe("maintainer requirements (SPEC §13)", () => {
     expect(names(probe({ gh: () => "missing" }))).toEqual(["gh", "repo-admin"]);
     const missing = unmetRequirements("acme/shop-plugin", probe({}, { "api repos/acme/shop-plugin": { ok: false, stdout: "", stderr: "gh: Not Found (HTTP 404)" } }));
     expect(missing).toHaveLength(1);
-    expect(missing[0]!.message).toContain("gh repo create acme/shop-plugin --private");
+    expect(missing[0]!.message).toContain("gh repo create acme/shop-plugin --public");
     expect(names(probe({}, { "api repos/acme/shop-plugin": { ok: true, stdout: "false\n", stderr: "" } }))).toEqual(["repo-admin"]);
   });
 

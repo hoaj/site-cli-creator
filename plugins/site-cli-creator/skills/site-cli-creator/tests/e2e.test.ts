@@ -6,7 +6,7 @@
 //   then: login (login mode), Task commands, a write dry run and --confirm, input errors,
 //   every Drift switch, outages, a crashing command (bug key), check (--op, --writes),
 //   the built-ins, the Capture tool + draft-contract against a fresh fixture, and install.sh
-//   with a fake gh that serves the compiled binary as a release asset.
+//   downloading the compiled binary as a public release asset from a local HTTP server.
 //
 // Needs Google Chrome (login, check --writes, Capture). Without it the suites are skipped.
 
@@ -140,25 +140,12 @@ test("the value scanner finds fixture values as whole words only", () => {
   expect(leaks('{"url":"http://127.0.0.1:53990","note":"opens","type":"number","code":"invalid_type"}')).toEqual([]);
 });
 
-// ---- the fake gh for install.sh ---------------------------------------------------------
+// ---- a gh that must not run: a public release downloads over HTTPS -----------------------
 
 const FAKE_GH = `#!/usr/bin/env bash
 echo "gh $*" >>"$E2E_GH_LOG"
-case "$1 $2" in
-  "auth status") exit 0 ;;
-  "release download")
-    shift 2; tag="$1"; shift
-    while [ $# -gt 0 ]; do
-      case "$1" in --pattern) pattern="$2"; shift ;; --dir) dir="$2"; shift ;; --repo) repo="$2"; shift ;; esac
-      shift
-    done
-    if [ "$tag" != "v$E2E_VERSION" ] || [ "$pattern" != "$E2E_ASSET" ] || [ "$repo" != "$E2E_REPO" ]; then
-      echo "release not found" >&2; exit 1
-    fi
-    cp "$E2E_BINARY" "$dir/$pattern" ;;
-  "api repos/"*) exit 0 ;;
-  *) echo "unexpected gh call: $*" >&2; exit 99 ;;
-esac
+echo "gh must not run for a public release" >&2
+exit 99
 `;
 
 // ---- one suite per auth mode -------------------------------------------------------------
@@ -955,33 +942,48 @@ export default defineCommand({
 
     // 10. install.sh -----------------------------------------------------------------------------
 
-    test("install.sh downloads the binary through gh, installs it and it runs", async () => {
+    test("install.sh downloads the public release over HTTPS without gh, installs it and it runs", async () => {
       const fakeBin = join(work, "fake-bin");
       mkdirSync(fakeBin, { recursive: true });
       writeFileSync(join(fakeBin, "gh"), FAKE_GH);
       chmodSync(join(fakeBin, "gh"), 0o755);
       const log = join(work, "gh.log");
       const asset = `${skill}-${HOST.platform}${HOST.exe}`;
-      const sep = process.platform === "win32" ? ";" : ":";
-      const r = await spawn(["bash", join(skillDir, "install.sh")], {
-        env: {
-          ...cleanEnv(),
-          PATH: `${fakeBin}${sep}${process.env.PATH}`,
-          SITE_CLI_INSTALL_UNAME: HOST.uname,
-          SITE_CLI_CHROME: CHROME!,
-          E2E_GH_LOG: log,
-          E2E_VERSION: "0.1.0",
-          E2E_ASSET: asset,
-          E2E_REPO: REPO,
-          E2E_BINARY: binary,
+      const releasePath = `/${REPO}/releases/download/v0.1.0/${asset}`;
+      const requests: string[] = [];
+      // GitHub answers a release asset with a redirect to its storage; curl must follow it.
+      const releases = Bun.serve({
+        port: 0,
+        fetch(req) {
+          const path = new URL(req.url).pathname;
+          requests.push(path);
+          if (path === releasePath) return Response.redirect(new URL(`/storage/${asset}`, req.url).href, 302);
+          if (path === `/storage/${asset}`) return new Response(Bun.file(binary));
+          return new Response("Not Found", { status: 404 });
         },
-        timeout: 120_000,
       });
-      expect(r.code, r.stderr).toBe(0);
+      const sep = process.platform === "win32" ? ";" : ":";
+      try {
+        const r = await spawn(["bash", join(skillDir, "install.sh")], {
+          env: {
+            ...cleanEnv(),
+            PATH: `${fakeBin}${sep}${process.env.PATH}`,
+            SITE_CLI_INSTALL_UNAME: HOST.uname,
+            SITE_CLI_INSTALL_BASE_URL: `http://127.0.0.1:${releases.port}`,
+            SITE_CLI_CHROME: CHROME!,
+            E2E_GH_LOG: log,
+          },
+          timeout: 120_000,
+        });
+        expect(r.code, r.stderr).toBe(0);
+      } finally {
+        releases.stop(true);
+      }
+      expect(requests).toEqual([releasePath, `/storage/${asset}`]);
+      expect(existsSync(log)).toBe(false);
       const installed = join(skillDir, "bin", `${skill}${HOST.exe}`);
       expect(existsSync(installed)).toBe(true);
       expect(statSync(installed).mode & 0o111).not.toBe(0);
-      expect(readFileSync(log, "utf8")).toContain(`gh release download v0.1.0 --repo ${REPO} --pattern ${asset}`);
 
       const version = await cli(["version"], { bin: installed });
       expect(version.code, version.stderr).toBe(0);
