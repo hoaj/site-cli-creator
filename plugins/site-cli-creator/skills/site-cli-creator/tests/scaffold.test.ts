@@ -553,7 +553,10 @@ describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", ()
     expect(ci).toContain('--base main --dir "$PLUGIN_DIR"');
     expect(release).toContain("TAG_PREFIX: shop-v\n");
     expect(release).toContain('tag="$TAG_PREFIX$version"');
-    expect(release).toContain('--title "shop v$VERSION" --generate-notes --latest=false');
+    expect(release).toContain('--title "shop v$VERSION" "${notes[@]}" --latest=false');
+    // Notes start at this plugin's previous tag, never another plugin's release in the repo.
+    expect(release).toContain('grep -E "^${TAG_PREFIX}[0-9]+\\.[0-9]+\\.[0-9]+$"');
+    expect(release).toContain('notes+=(--notes-start-tag "$prev")');
     expect(release).toContain('gh release edit "$TAG" --draft=false --latest=false');
     expect(release).toContain("working-directory: plugins/shop/skills/${{ matrix.skill }}/cli");
     expect(release).toContain('bun "$PLUGIN_DIR/scripts/fixed-in.ts" "$TAG" --repo "$GITHUB_REPOSITORY" --branch main --dir "$PLUGIN_DIR"');

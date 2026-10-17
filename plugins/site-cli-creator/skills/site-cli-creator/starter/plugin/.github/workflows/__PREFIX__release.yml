@@ -126,8 +126,13 @@ jobs:
             exit 0
           fi
           #@standalone gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "$TAG" --generate-notes
-          #@shared # --latest=false: the repo's "Latest" release is not any one plugin's.
-          #@shared gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "__PLUGIN__ v$VERSION" --generate-notes --latest=false
+          #@shared # The notes start at this plugin's previous release, not whichever release of the
+          #@shared # repo GitHub would pick (another plugin's). --latest=false: the repo's "Latest"
+          #@shared # release is not any one plugin's.
+          #@shared prev="$( { gh api "repos/$GITHUB_REPOSITORY/tags" --paginate --jq '.[].name' | grep -E "^${TAG_PREFIX}[0-9]+\.[0-9]+\.[0-9]+$" || true; echo "$TAG"; } | sort -uV | grep -xF -B1 "$TAG" | grep -vxF "$TAG" || true)"
+          #@shared notes=(--generate-notes)
+          #@shared if [ -n "$prev" ]; then notes+=(--notes-start-tag "$prev"); fi
+          #@shared gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "__PLUGIN__ v$VERSION" "${notes[@]}" --latest=false
 
   build:
     needs: [plan, draft]

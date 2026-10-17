@@ -58,13 +58,16 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cl
 Decided in [Template command surface and SKILL.md layout](https://github.com/hoaj/site-cli-creator/issues/6) and [One site per plugin, or several?](https://github.com/hoaj/site-cli-creator/issues/12). A prototype of one CLI skill (the older single-skill layout, reference only, see §5) is on [`prototype/template-command-surface`](https://github.com/hoaj/site-cli-creator/tree/prototype/template-command-surface/prototypes/yousee-plugin-PROTOTYPE).
 
 ```
-<plugin>/                                   own repo, usually private
+<plugin>/                                   own repo, public by default
   .claude-plugin/plugin.json                GENERATED  four manifests with the same fields;
   .cursor-plugin/plugin.json                           Codex uses "skills": "./skills/",
   .codex-plugin/plugin.json                            Copilot has no homepage
   .github/plugin/plugin.json
+  .claude-plugin/marketplace.json           GENERATED  the repo is its own marketplace, listing the plugin at "./";
+  .cursor-plugin/marketplace.json                      also .github/plugin/ and .agents/plugins/ (Codex)
+  .github/workflows/ci.yml                  STARTER    PR tests and "version above main" (§9)
   .github/workflows/release.yml             STARTER    draft release vX.Y.Z → build every skill × target, uploading to the draft → publish
-  generated.json                            GENERATED  {"generatedWith", "maintainer"}, info only (§5, §13)
+  generated.json                            GENERATED  {"generatedWith", "maintainer", "pluginDir", "tagPrefix"} (§5, §13)
   skills/<plugin>-feedback/SKILL.md         GENERATED  one per plugin, written once by `new`, then owned
                                                        by the plugin (§10)
   skills/<plugin>-deploy/SKILL.md           GENERATED  one per plugin, written once by `new`, then owned
@@ -235,7 +238,7 @@ Decided in [Does Playwright work inside bun compile binaries?](https://github.co
 - **Build:** Bun >= 1.4.0, TypeScript, `Bun.build` with `compile`. `build.ts` carries an `onLoad` plugin that rewrites playwright-core's two `require(join(packageRoot, "package.json" | "browsers.json"))` calls in `lib/coreBundle.js` to static `../package.json` and `../browsers.json`. It asserts exactly two hits and sets `external: ["chromium-bidi", "electron"]`. Without the patch, the binary only runs on the build machine.
 - **Targets (v1):** `darwin-arm64`, `darwin-x64`, `linux-x64`, `linux-arm64` and `windows-x64`, cross-compiled on one Ubuntu runner. Decided in [Release targets for v1 and how they're verified](https://github.com/hoaj/site-cli-creator/issues/29):
   - **Verified to run:** darwin-arm64 (local runs), linux-x64 and windows-x64 (CI), linux-arm64 once Chrome is installed (CI).
-  - **darwin-x64** is verified once, in the generator's own CI, by the Starter code's smoke test (`help`, `fetch`, Chrome launch, `route.abort`) on an Intel macOS runner, with the binary re-signed as `install.sh` does. Each runner builds the binary and runs it in one job, with the build's files deleted first, so a binary that leans on the build machine's paths still fails. The full five-target matrix runs on main and on `workflow_dispatch`; a pull request runs linux-x64 only, so a darwin or Windows break shows up after the merge (macOS minutes bill at 10x on a private repo). darwin-arm64 gets the same test on an Apple silicon runner. Plugin releases don't repeat it.
+  - **darwin-x64** is verified once, in the generator's own CI, by the Starter code's smoke test (`help`, `fetch`, Chrome launch, `route.abort`) on an Intel macOS runner, with the binary re-signed as `install.sh` does. Each runner builds the binary and runs it in one job, with the build's files deleted first, so a binary that leans on the build machine's paths still fails. The full five-target matrix runs on main and on `workflow_dispatch`; a pull request runs linux-x64 only, so a darwin or Windows break shows up after the merge (to keep PR runs short). darwin-arm64 gets the same test on an Apple silicon runner. Plugin releases don't repeat it.
   - **Not in v1:** windows-arm64 and musl Linux. On a platform without a binary, `install.sh` stops with "unsupported platform: `<os>-<arch>`".
 - **Release:** one tag `vX.Y.Z` per plugin version (`<plugin>-vX.Y.Z` for a plugin in a shared repo), so all CLI skills ship together. Assets are named `<skill>-<target>[.exe]`.
 - **Versioning**, decided in [Who bumps a plugin's version, and how is the fixed version recorded?](https://github.com/hoaj/site-cli-creator/issues/21):
@@ -304,9 +307,9 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 
 - Building the generator. This spec is where the map ends.
 - Real writes during `check`.
-- Running `check` automatically, on users' machines or on a maintainer schedule (v1).
+- Running `check` automatically on users' machines. A repo of plugins may schedule it itself, outside the generator: hoaj/plugins runs every CLI skill's read-only `check` daily and files Drift with the Feedback skill's titles.
 - Rub-style inspection of the site's JS bundle.
-- Public plugins installed without `gh`, because they would publish a site's internal API shapes. This holds for sites without login too ([Sites without login](https://github.com/hoaj/site-cli-creator/issues/27)).
+- Private plugins installed without `gh`: a private repo's releases need `gh`, logged in, with read access. Public is the default (§9), accepting that a public plugin publishes a site's internal API shapes, never its values ([Generated plugins: install binaries over HTTPS without gh](https://github.com/hoaj/site-cli-creator/issues/78)).
 - Sites behind real bot walls, such as Cloudflare challenges or captchas.
 - Jira as a test case: it was replaced by Mit YouSee.
 

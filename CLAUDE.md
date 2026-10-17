@@ -14,4 +14,4 @@ Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agent
 
 ### Maintainer skills
 
-`maintainer-skills/` holds skills for changing the generator in `plugins/site-cli-creator`. Plugins made with it live in hoaj/plugins. They never ship to plugin users and load here through `.claude/skills/`. `improve-site-cli-creator` fixes and extends the site-cli-creator generator (issues labelled `site-cli-creator`).
+`maintainer-skills/` holds skills for changing the generator in `plugins/site-cli-creator`. They never ship to plugin users and load here through `.claude/skills/`. `improve-site-cli-creator` fixes and extends the site-cli-creator generator (issues labelled `site-cli-creator`). The maintainer's own plugins, made with the generator, live in hoaj/plugins.
