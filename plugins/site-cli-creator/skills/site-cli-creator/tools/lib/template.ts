@@ -41,12 +41,13 @@ const TOKEN_PATTERN = new RegExp(`__(${TOKEN_NAMES.join("|")})__`, "g");
  * `<text>`, at the marker's indentation, in that layout, and disappears in the other. As a comment
  * in YAML and bash, the Starter file stays valid in place.
  */
-const LAYOUT_LINE = /^([ \t]*)#@(shared|standalone)(?: (.*))?\n/gm;
+// \r?\n: a Windows checkout has CRLF endings, and `.` never matches \r. The line keeps its own ending.
+const LAYOUT_LINE = /^([ \t]*)#@(shared|standalone)(?: ([^\r\n]*))?(\r?\n)/gm;
 const LAYOUT_MARKER = /^[ \t]*#@(?:shared|standalone)\b/m;
 
 export function applyLayout(text: string, layout: Layout): string {
-  return text.replace(LAYOUT_LINE, (_line, indent: string, which: string, rest?: string) =>
-    which === layout ? `${rest ? indent + rest : ""}\n` : "",
+  return text.replace(LAYOUT_LINE, (_line, indent: string, which: string, rest: string | undefined, eol: string) =>
+    which === layout ? `${rest ? indent + rest : ""}${eol}` : "",
   );
 }
 

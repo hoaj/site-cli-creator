@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { copyExpected } from "../fixtures/expected/copy";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 import { unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
-import { copyTemplate, findTokens } from "../tools/lib/template";
+import { applyLayout, copyTemplate, findTokens } from "../tools/lib/template";
 
 const NEW = join(SKILL_ROOT, "tools", "new.ts");
 const ADD_SKILL = join(SKILL_ROOT, "tools", "add-skill.ts");
@@ -673,5 +673,15 @@ describe("copyTemplate skip", () => {
       rmSync(src, { recursive: true, force: true });
       rmSync(dest, { recursive: true, force: true });
     }
+  });
+});
+
+// Windows smoke (2026-10-18): a Windows checkout has CRLF endings, and the layout lines stayed.
+describe("applyLayout with CRLF", () => {
+  test("keeps the layout's lines without their marker and drops the other's, keeping CRLF", () => {
+    const text = "a\r\n  #@shared paths: x\r\n  #@standalone gone\r\n#@shared\r\nb\r\n";
+    expect(applyLayout(text, "shared")).toBe("a\r\n  paths: x\r\n\r\nb\r\n");
+    expect(applyLayout(text, "standalone")).toBe("a\r\n  gone\r\nb\r\n");
+    expect(applyLayout("x\n#@shared y\n", "shared")).toBe("x\ny\n");
   });
 });
