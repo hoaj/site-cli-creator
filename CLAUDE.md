@@ -2,7 +2,7 @@
 
 ### Issue tracker
 
-Issues are tracked in GitHub Issues on hoaj/skills (via `gh`). See `docs/agents/issue-tracker.md`.
+Issues are tracked in GitHub Issues on hoaj/site-cli-creator (via `gh`). See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 
@@ -14,4 +14,4 @@ Single-context: one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agent
 
 ### Maintainer skills
 
-`maintainer-skills/` holds skills for changing this repo's plugins. They never ship to plugin users and load here through `.claude/skills/`. `improve-site-cli-creator` fixes and extends the site-cli-creator generator (issues labelled `site-cli-creator`).
+`maintainer-skills/` holds skills for changing the generator in `plugins/site-cli-creator`. Plugins made with it live in hoaj/plugins. They never ship to plugin users and load here through `.claude/skills/`. `improve-site-cli-creator` fixes and extends the site-cli-creator generator (issues labelled `site-cli-creator`).

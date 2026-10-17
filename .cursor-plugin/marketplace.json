@@ -1,0 +1,14 @@
+{
+  "name": "site-cli-creator",
+  "owner": { "name": "Andreas Jørgensen" },
+  "metadata": {
+    "description": "site-cli-creator for Cursor, whose marketplaces cannot list a plugin from another repo. Claude Code and Copilot CLI install it from the hoaj marketplace in hoaj/plugins."
+  },
+  "plugins": [
+    {
+      "name": "site-cli-creator",
+      "source": "./plugins/site-cli-creator",
+      "description": "Turn the calls a website makes into a plugin of CLI skills that coding agents can run, with Drift checks and a feedback loop."
+    }
+  ]
+}
