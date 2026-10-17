@@ -4,11 +4,12 @@ __DESCRIPTION__
 
 A plugin for coding agents (Claude Code, Cursor, Codex, GitHub Copilot CLI). Each CLI skill in `skills/` wraps one site with a small compiled CLI that your agent runs for you. It notices when the site changes (Drift) and, once you agree, reports it here so it gets fixed.
 
-**Maintainer:** [@__MAINTAINER__](https://github.com/__MAINTAINER__). Generated with [site-cli-creator](https://github.com/hoaj/skills/tree/main/plugins/site-cli-creator).
+**Maintainer:** [@__MAINTAINER__](https://github.com/__MAINTAINER__). Generated with [site-cli-creator](https://github.com/hoaj/site-cli-creator/tree/main/plugins/site-cli-creator).
 
 ## Requirements
 
-- [GitHub CLI](https://cli.github.com), logged in (`gh auth login`) with read access to [`__REPO__`](https://github.com/__REPO__). The CLI binaries are downloaded from this repo's releases with your own `gh`.
+- `curl`, which macOS, Linux and Git Bash on Windows already have. The CLI binaries download over HTTPS from this repo's public releases, with no GitHub account.
+- [GitHub CLI](https://cli.github.com), logged in (`gh auth login`), only to report a problem with the Feedback skill, or to install from [`__REPO__`](https://github.com/__REPO__) if it is private (then you also need read access).
 - [Google Chrome](https://www.google.com/chrome/), for CLI skills that sign in to a site or have write commands. The skill tells you when it needs it.
 - macOS (Apple silicon or Intel), Linux (x64 or arm64) or Windows x64. On Windows the install step runs in Git Bash.
 

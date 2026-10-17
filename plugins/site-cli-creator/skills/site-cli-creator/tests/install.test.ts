@@ -50,9 +50,22 @@ case "$1 $2" in
   *) echo "unexpected gh call: $*" >&2; exit 99 ;;
 esac`);
 
+// curl as install.sh calls it: -sSL -o <file> -w '%{http_code}' <url>. CURL_STUB picks the answer.
+const CURL = stub(`
+while [ $# -gt 0 ]; do
+  case "$1" in -o) out="$2"; shift ;; -w) shift ;; -*) ;; *) url="$1" ;; esac
+  shift
+done
+case "$CURL_STUB" in
+  ok) printf 'binary from %s\\n' "$url" >"$out"; printf 200 ;;
+  404) printf 'Not Found' >"$out"; printf 404 ;;
+  *) echo "curl: (6) Could not resolve host: github.com" >&2; exit 6 ;;
+esac`);
+
 const CODESIGN = stub(`[ "$1" = -v ] && [ "$CODESIGN_VALID" != 1 ] && exit 1; exit 0`);
 
-type Setup = { needsChrome?: boolean; withGh?: boolean; skillMd?: string };
+// withCurl defaults to false, so the tests that predate the public download drive the gh path.
+type Setup = { needsChrome?: boolean; withGh?: boolean; withCurl?: boolean; skillMd?: string };
 
 function makeSkill(name: string, opts: Setup = {}) {
   const dir = join(root, name);
@@ -82,6 +95,7 @@ function makeSkill(name: string, opts: Setup = {}) {
     powershell: stub("exit 0"),
   };
   if (opts.withGh !== false) stubs.gh = GH;
+  if (opts.withCurl) stubs.curl = CURL;
   for (const [file, body] of Object.entries(stubs)) {
     writeFileSync(join(path, file), body);
     chmodSync(join(path, file), 0o755);
@@ -129,12 +143,65 @@ describe("install.sh", () => {
     for (const token of ["__SKILL__", "__REPO__", "__OWNER__"]) expect(src).toContain(token);
   });
 
-  test("stops when gh is missing", () => {
+  test("stops when neither curl nor gh is there", () => {
     const r = run("no-gh", { withGh: false });
     expect(r.code).toBe(1);
-    expect(r.stderr).toContain("install GitHub CLI");
+    expect(r.stderr).toContain("neither curl nor GitHub CLI (gh) found");
     expect(r.stderr).toContain("gh auth login");
     expect(existsSync(join(r.skill, "bin"))).toBe(false);
+  });
+
+  describe("public release over HTTPS", () => {
+    const URL = "https://github.com/acme/demo-plugin/releases/download/v1.2.3/demo-darwin-arm64";
+
+    test("downloads with curl and needs no gh at all", () => {
+      const r = run("curl-public", { withCurl: true, withGh: false, env: { CURL_STUB: "ok" } });
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(join(r.skill, "bin", "demo"), "utf8")).toBe(`binary from ${URL}\n`);
+      expect(r.calls.some((c) => c.startsWith("gh "))).toBe(false);
+      expect(r.stdout).toContain("installed demo v1.2.3 (darwin-arm64)");
+    });
+
+    test("does not touch gh when the public download works, even when gh is logged out", () => {
+      const r = run("curl-public-gh-out", { withCurl: true, env: { CURL_STUB: "ok", GH_STUB_AUTH: "fail" } });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.calls.some((c) => c.startsWith("gh "))).toBe(false);
+    });
+
+    test("SITE_CLI_INSTALL_BASE_URL replaces https://github.com", () => {
+      const r = run("curl-base", {
+        withCurl: true,
+        withGh: false,
+        env: { CURL_STUB: "ok", SITE_CLI_INSTALL_BASE_URL: "http://127.0.0.1:9" },
+      });
+      expect(r.code, r.stderr).toBe(0);
+      expect(readFileSync(join(r.skill, "bin", "demo"), "utf8")).toContain(
+        "http://127.0.0.1:9/acme/demo-plugin/releases/download/v1.2.3/demo-darwin-arm64",
+      );
+    });
+
+    test("a 404 with gh logged in falls back to gh (a private repo)", () => {
+      const r = run("curl-404-gh", { withCurl: true, env: { CURL_STUB: "404" } });
+      expect(r.code, r.stderr).toBe(0);
+      expect(r.calls.some((c) => c.startsWith("gh release download v1.2.3 --repo acme/demo-plugin"))).toBe(true);
+      expect(readFileSync(join(r.skill, "bin", "demo"), "utf8")).toBe("binary for v1.2.3 demo-darwin-arm64\n");
+    });
+
+    test("a 404 without gh says the release is still being built or the repo is private", () => {
+      const r = run("curl-404-no-gh", { withCurl: true, withGh: false, env: { CURL_STUB: "404" } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(`release v1.2.3 of acme/demo-plugin was not found at ${URL}`);
+      expect(r.stderr).toContain("try again in a few minutes");
+      expect(r.stderr).toContain("gh auth login");
+      expect(existsSync(join(r.skill, "bin"))).toBe(false);
+    });
+
+    test("a network error passes curl's message through and leaves bin/ alone", () => {
+      const r = run("curl-neterr", { withCurl: true, withGh: false, env: { CURL_STUB: "error" } });
+      expect(r.code).toBe(1);
+      expect(r.stderr).toContain(`could not download ${URL}: curl: (6) Could not resolve host`);
+      expect(existsSync(join(r.skill, "bin"))).toBe(false);
+    });
   });
 
   test("stops when gh is not logged in", () => {

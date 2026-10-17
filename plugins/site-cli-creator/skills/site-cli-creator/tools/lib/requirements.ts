@@ -57,7 +57,7 @@ export function unmetRequirements(repo: string, probe: Probe): Unmet[] {
     unmet.push({
       requirement: "repo-admin",
       message: notFound
-        ? `${repo} does not exist, or this gh account cannot see it. Create it first: gh repo create ${repo} --private --clone`
+        ? `${repo} does not exist, or this gh account cannot see it. Create it first: gh repo create ${repo} --public --clone`
         : `could not read your permissions on ${repo} (gh api repos/${repo} failed: ${firstLine(admin.stderr) || "no output"})`,
     });
   } else if (admin.stdout.trim() !== "true") {

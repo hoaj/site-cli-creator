@@ -23,8 +23,10 @@ Public plugins publish a site's internal API shapes; recommend private for any s
 If the repo does not exist, create and clone it:
 
 ```sh
-gh repo create <owner/name> --private --clone --description "<description>"   # clones into ./<name>
+gh repo create <owner/name> --public --clone --description "<description>"   # clones into ./<name>
 ```
+
+Public is the default: users then install the binaries over HTTPS with no `gh` and no GitHub account. A private repo works too, but every user then needs `gh`, logged in, with read access.
 
 If it exists, clone it. `new.ts` writes only into a folder that holds nothing but `.git`; if the repo already has files (a README, a licence), ask the user whether to start from a fresh empty repo instead. Then run the admin check from the Prerequisites table. Without `ADMIN`, stop: labels, releases and merges need it.
 
