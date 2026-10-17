@@ -1,46 +1,41 @@
-# hoaj/skills
+# site-cli-creator
 
-Personal agent skills for AI coding agents — installable on **Claude Code**, **Cursor**, and **GitHub Copilot CLI**. This repo is both the marketplace catalog and the plugin source.
+A generator for coding agents (**Claude Code**, **Cursor**, **GitHub Copilot CLI**) that turns the calls a website's frontend makes into a plugin of small CLI skills, with Drift checks and a feedback loop: when the site changes, the plugin notices and, once its user agrees, files an issue on its own repo so the maintainer can fix it.
+
+Every CLI skill it generates also runs as an MCP server, locally (`<skill> mcp`) or hosted for one person (`<skill> mcp --http`).
 
 ## Install
 
-Add the marketplace, then install the plugin.
+site-cli-creator ships through the `hoaj` marketplace in [hoaj/plugins](https://github.com/hoaj/plugins), next to the plugins made with it.
 
 ### Claude Code
 
 ```
-/plugin marketplace add hoaj/skills
-/plugin install bankmcp@hoaj-skills
+/plugin marketplace add hoaj/plugins
+/plugin install site-cli-creator@hoaj
 ```
-
-### Cursor
-
-Settings → Plugins → Add marketplace → `hoaj/skills`, then install **bankmcp**.
 
 ### GitHub Copilot CLI
 
 ```
-copilot plugin marketplace add hoaj/skills
-copilot plugin install bankmcp
+copilot plugin marketplace add hoaj/plugins
+copilot plugin install site-cli-creator@hoaj
 ```
 
-## Plugins
+### Cursor
 
-| Plugin | Skill | Description |
-|--------|-------|-------------|
-| [bankmcp](./plugins/bankmcp) | `/bankmcp:setup` | Set up your own BankMCP server (read-only bank access for Claude or ChatGPT), locally or on Railway |
-| [site-cli-creator](./plugins/site-cli-creator) | `/site-cli-creator:site-cli-creator`, `/site-cli-creator:site-cli-creator-feedback` | Turn the calls a website makes into a plugin of CLI skills that coding agents can run, with Drift checks and a feedback loop |
-| [logbuy](./plugins/logbuy) | `/logbuy:logbuy`, `/logbuy:logbuy-deploy`, `/logbuy:logbuy-feedback` | Find deals on Visma LogBuy (mylogbuy.com): search products, show a deal, browse categories. Its CLI binary downloads from this repo's `logbuy-v<version>` releases, so it needs `gh` with access to this repo |
+Cursor's marketplaces cannot list a plugin from another repo, so this repo has a Cursor marketplace of its own: Settings → Plugins → Add marketplace → `hoaj/site-cli-creator`, then install **site-cli-creator**.
 
-## Adding a plugin
+## What is here
 
-Each plugin is its own folder under `plugins/`; `plugins/bankmcp` is the template.
+| Path | What it is |
+|------|------------|
+| [site-cli-creator](./plugins/site-cli-creator) | The plugin: the generator skill (`/site-cli-creator:site-cli-creator`, with its Capture tool, Starter code and modes) and `/site-cli-creator:site-cli-creator-feedback`, which files generator problems here |
+| [SPEC.md](./SPEC.md) | The build spec: what the generator does and why, linking the issues that decided it |
+| [CONTEXT.md](./CONTEXT.md) | The glossary: Task, Capture, Operation, Contract, Drift and the rest |
+| [maintainer-skills/](./maintainer-skills) | Skills for changing the generator. They never ship to users; they load in this repo through `.claude/skills/` |
 
-1. Create `plugins/<plugin>/skills/<skill>/SKILL.md`.
-2. Copy the three manifests from `plugins/bankmcp/` (`.claude-plugin`, `.cursor-plugin`, `.github/plugin`), then change `name`, `description` and the `skills` array.
-3. Add the plugin to each marketplace (`.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.github/plugin/marketplace.json`) and a row to the table above.
-
-A plugin generated with site-cli-creator (like `plugins/logbuy`) also has its own CI and release workflows, `.github/workflows/<plugin>-ci.yml` and `<plugin>-release.yml`, filtered to its folder. Its releases are tagged `<plugin>-vX.Y.Z`, and its issues carry the label `<plugin>`.
+Plugins made with the generator live in [hoaj/plugins](https://github.com/hoaj/plugins), each in its own folder with its own CI, releases (`<plugin>-vX.Y.Z`) and issue label.
 
 ## License
 

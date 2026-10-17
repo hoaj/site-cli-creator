@@ -1,11 +1,11 @@
 ---
 name: site-cli-creator-feedback
-description: Files a problem with the site-cli-creator generator as a GitHub issue on hoaj/skills, after the user approves the text. Use when the Capture tool or another generator tool fails or records wrong shapes, a mode (new, add-skill, add-task, fix) breaks or misleads, a bug in a generated plugin traces back to the Starter code, or the generator's guidance turned out wrong (a bug); or when the generator cannot do what the maintainer needs (a feature request); or when the user says "report this" about site-cli-creator. Not for a generated plugin's own Drift, bugs or feature requests: those go to that plugin's <plugin>-feedback skill.
+description: Files a problem with the site-cli-creator generator as a GitHub issue on hoaj/site-cli-creator, after the user approves the text. Use when the Capture tool or another generator tool fails or records wrong shapes, a mode (new, add-skill, add-task, fix) breaks or misleads, a bug in a generated plugin traces back to the Starter code, or the generator's guidance turned out wrong (a bug); or when the generator cannot do what the maintainer needs (a feature request); or when the user says "report this" about site-cli-creator. Not for a generated plugin's own Drift, bugs or feature requests: those go to that plugin's <plugin>-feedback skill.
 ---
 
 # site-cli-creator feedback
 
-Something in the generator got in the way while building or maintaining a plugin. Write it up and, once the user says yes, open an issue on `hoaj/skills` with the label `site-cli-creator`.
+Something in the generator got in the way while building or maintaining a plugin. Write it up and, once the user says yes, open an issue on `hoaj/site-cli-creator` with the label `site-cli-creator`.
 
 **You report; the generator stays as it is.** Leave the tools, Starter code and skills unedited in this skill. A fix idea goes in the body under *Suggestion*.
 
@@ -35,7 +35,7 @@ Route these elsewhere:
 
 ## 2. Redact
 
-`hoaj/skills` is public. Before anything leaves the machine:
+`hoaj/site-cli-creator` is public. Before anything leaves the machine:
 
 - Keep shapes, type names, field paths, Operation names, HTTP status codes and Fingerprints.
 - Replace site values (names, ids, amounts, addresses, emails, phone numbers), tokens, cookies and header values with `<redacted>`.
@@ -45,10 +45,10 @@ Route these elsewhere:
 ## 3. Search for a duplicate
 
 ```sh
-gh issue list --repo hoaj/skills --label site-cli-creator --state open --search "<tool or symptom>" --json number,title,url
+gh issue list --repo hoaj/site-cli-creator --label site-cli-creator --state open --search "<tool or symptom>" --json number,title,url
 ```
 
-An open match gets a comment with the new facts instead of a new issue (`gh issue comment <n> --repo hoaj/skills --body-file -`). When `gh` is missing or not logged in, skip the search.
+An open match gets a comment with the new facts instead of a new issue (`gh issue comment <n> --repo hoaj/site-cli-creator --body-file -`). When `gh` is missing or not logged in, skip the search.
 
 ## 4. Draft, show, file
 
@@ -65,11 +65,11 @@ Title: `<tool or mode>: <concrete symptom>` for a bug, `feature: <missing capabi
 
 For a feature, use *Intent*, *The gap*, *Workaround*, *Environment*, *Suggestion*.
 
-Show the user the title and body, say it will be public on `hoaj/skills`, and ask whether to file it. File only on a yes; on a correction, show the new text and ask again.
+Show the user the title and body, say it will be public on `hoaj/site-cli-creator`, and ask whether to file it. File only on a yes; on a correction, show the new text and ask again.
 
 ```sh
-gh label create site-cli-creator --repo hoaj/skills --description "site-cli-creator generator" --color 5319E7 2>/dev/null || true
-gh issue create --repo hoaj/skills --label site-cli-creator --title "<title>" --body-file - <<'EOF'
+gh label create site-cli-creator --repo hoaj/site-cli-creator --description "site-cli-creator generator" --color 5319E7 2>/dev/null || true
+gh issue create --repo hoaj/site-cli-creator --label site-cli-creator --title "<title>" --body-file - <<'EOF'
 <body>
 EOF
 ```
@@ -77,7 +77,7 @@ EOF
 Without `gh`, or without permission to file: give the user this link with the title and body URL-encoded, plus the plain text to paste.
 
 ```
-https://github.com/hoaj/skills/issues/new?labels=site-cli-creator&title=<title>&body=<body>
+https://github.com/hoaj/site-cli-creator/issues/new?labels=site-cli-creator&title=<title>&body=<body>
 ```
 
 ## 5. Tell the user

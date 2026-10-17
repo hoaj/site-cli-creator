@@ -6,11 +6,11 @@ import { dirname, join, resolve } from "node:path";
 // tests/ → skills/site-cli-creator → skills → plugins/site-cli-creator → plugins → repo root
 const PLUGIN = resolve(import.meta.dir, "../../..");
 const REPO = resolve(PLUGIN, "../..");
-// The hoaj/skills wiring (bankmcp parity, repo marketplaces, README, workflow) needs the whole
-// repo; a copy of just this plugin runs everything else. CI always checks out the whole repo.
-const IN_REPO = existsSync(join(REPO, ".github/workflows/site-cli-creator.yml")) && existsSync(join(REPO, "plugins/bankmcp"));
-const REPO_REASON = IN_REPO ? "" : " (skipped: not inside the hoaj/skills checkout)";
-if (!IN_REPO && process.env.GITHUB_ACTIONS) throw new Error(`expected the hoaj/skills checkout above ${PLUGIN}`);
+// The hoaj/site-cli-creator wiring (README, workflow, SPEC) needs the whole repo; a copy of just
+// this plugin runs everything else. CI always checks out the whole repo.
+const IN_REPO = existsSync(join(REPO, ".github/workflows/site-cli-creator.yml")) && existsSync(join(REPO, "SPEC.md"));
+const REPO_REASON = IN_REPO ? "" : " (skipped: not inside the hoaj/site-cli-creator checkout)";
+if (!IN_REPO && process.env.GITHUB_ACTIONS) throw new Error(`expected the hoaj/site-cli-creator checkout above ${PLUGIN}`);
 const GEN = join(PLUGIN, "skills/site-cli-creator");
 const TOKENS = new Set(["__PLUGIN__", "__SKILL__", "__REPO__", "__OWNER__", "__DESCRIPTION__", "__MAINTAINER__", "__GENERATOR_VERSION__", "__ORIGIN__", "__AUTH__"]);
 
@@ -30,28 +30,36 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.7.1, both skills exist", () => {
+  test("version 0.8.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.7.1");
+      expect(m.version).toBe("0.8.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
   });
 
-  test.skipIf(!IN_REPO)(`same fields as bankmcp${REPO_REASON}`, () => {
-    const bank = paths.map((p) => JSON.parse(read(join(REPO, "plugins/bankmcp", p))));
-    manifests.forEach((m, i) => expect(Object.keys(m).sort()).toEqual(Object.keys(bank[i]).sort()));
+  test("every manifest has the same fields and points at hoaj/site-cli-creator", () => {
+    manifests.forEach((m) => {
+      expect(Object.keys(m).sort()).toEqual(["author", "description", "homepage", "keywords", "license", "name", "repository", "skills", "version"]);
+      expect(m.repository).toBe("https://github.com/hoaj/site-cli-creator");
+      expect(m.homepage).toBe("https://github.com/hoaj/site-cli-creator/tree/main/plugins/site-cli-creator");
+    });
   });
 
-  test.skipIf(!IN_REPO)(`marketplaces list the plugin with the manifest's description${REPO_REASON}`, () => {
-    for (const p of [".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json", ".github/plugin/marketplace.json"]) {
-      const mk = JSON.parse(read(join(REPO, p)));
-      const entry = mk.plugins.find((x: { name: string }) => x.name === "site-cli-creator");
-      expect(entry).toEqual({ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description });
-      expect(mk.metadata.version).toBe("1.11.1");
+  // Claude Code and Copilot install from the hoaj marketplace in hoaj/plugins. Cursor cannot
+  // list another repo's plugin, so only its marketplace stays here.
+  test.skipIf(!IN_REPO)(`only Cursor's marketplace here; the README installs from the hoaj marketplace${REPO_REASON}`, () => {
+    for (const p of [".claude-plugin/marketplace.json", ".github/plugin/marketplace.json"]) {
+      expect(existsSync(join(REPO, p))).toBe(false);
     }
-    expect(read(join(REPO, "README.md"))).toContain("[site-cli-creator](./plugins/site-cli-creator)");
+    const cursor = JSON.parse(read(join(REPO, ".cursor-plugin/marketplace.json")));
+    expect(cursor.name).toBe("site-cli-creator");
+    expect(cursor.plugins).toEqual([{ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description }]);
+    const readme = read(join(REPO, "README.md"));
+    expect(readme).toContain("/plugin marketplace add hoaj/plugins");
+    expect(readme).toContain("/plugin install site-cli-creator@hoaj");
+    expect(readme).toContain("[site-cli-creator](./plugins/site-cli-creator)");
   });
 });
 
@@ -162,11 +170,12 @@ describe("skills", () => {
     for (const f of ["bin/", "captures/", "cli/node_modules/", "cli/dist/", "cli/tests/"]) expect(ignore).toContain(f);
   });
 
-  test("generator feedback files on hoaj/skills with the site-cli-creator label", () => {
+  test("generator feedback files on hoaj/site-cli-creator with the site-cli-creator label", () => {
     const md = read(skills.generatorFeedback);
-    expect(md).toContain("gh issue create --repo hoaj/skills --label site-cli-creator");
+    expect(md).toContain("gh issue create --repo hoaj/site-cli-creator --label site-cli-creator");
     expect(md).toContain("gh label create site-cli-creator");
-    expect(md).toContain("https://github.com/hoaj/skills/issues/new?labels=site-cli-creator");
+    expect(md).toContain("https://github.com/hoaj/site-cli-creator/issues/new?labels=site-cli-creator");
+    expect(md).not.toContain("hoaj/skills");
   });
 
   test("starter files use only known placeholder tokens", () => {
@@ -357,7 +366,7 @@ describe.skipIf(!IN_REPO)(`generator CI workflow${REPO_REASON}`, () => {
   });
 
   test("no workflow stores artifacts (GitHub Free's storage quota blocked every upload in October 2026) and every job has a timeout", () => {
-    const files = [".github/workflows/site-cli-creator.yml", ".github/workflows/logbuy-ci.yml", ".github/workflows/logbuy-release.yml"].map((f) => join(REPO, f));
+    const files = [join(REPO, ".github/workflows/site-cli-creator.yml")];
     files.push(join(GEN, "starter/plugin/.github/workflows/ci.yml"), join(GEN, "starter/plugin/.github/workflows/release.yml"));
     for (const f of files) {
       const text = read(f);
@@ -374,11 +383,10 @@ describe.skipIf(!IN_REPO)(`generator CI workflow${REPO_REASON}`, () => {
     expect(timeouts(files[0])).toEqual({ test: 20, smoke: 15, docker: 15 });
     expect(timeouts(files[1]).test).toBe(15);
     expect(timeouts(files[2]).build).toBe(15);
-    expect(timeouts(files[4]).build).toBe(15);
   });
 
-  test("releases put binaries on a draft release and publish it last; the Starter's release.yml and logbuy's agree", () => {
-    for (const f of [join(REPO, ".github/workflows/logbuy-release.yml"), join(GEN, "starter/plugin/.github/workflows/release.yml")]) {
+  test("releases put binaries on a draft release and publish it last", () => {
+    for (const f of [join(GEN, "starter/plugin/.github/workflows/release.yml")]) {
       const text = read(f);
       const draft = text.indexOf("gh release create");
       const upload = text.indexOf("gh release upload");
