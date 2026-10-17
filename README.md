@@ -35,7 +35,7 @@ Cursor's marketplaces cannot list a plugin from another repo, so this repo has a
 | [CONTEXT.md](./CONTEXT.md) | The glossary: Task, Capture, Operation, Contract, Drift and the rest |
 | [maintainer-skills/](./maintainer-skills) | Skills for changing the generator. They never ship to users; they load in this repo through `.claude/skills/` |
 
-Plugins made with the generator live in [hoaj/plugins](https://github.com/hoaj/plugins), each in its own folder with its own CI, releases (`<plugin>-vX.Y.Z`) and issue label.
+hoaj's plugins, made with the generator, live in [hoaj/plugins](https://github.com/hoaj/plugins), each in its own folder with its own CI, releases (`<plugin>-vX.Y.Z`) and issue label (`new --into`). A plugin can also get a repo of its own (`new --dir`).
 
 ## License
 
