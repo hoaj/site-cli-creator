@@ -1,48 +1,10 @@
 // A small client for remote mode (`mcp --http`) used by the generator's e2e test: the Owner's
 // Server sign-in (OAuth 2.1 with PKCE), tool calls through /mcp and the Setup page's upload. It
-// is the generator's own test code and never ships to a plugin (not under starter/); the same
-// helpers live in starter/skill/cli/tests/remote.test.ts and setup.test.ts, copied on purpose.
+// is the generator's own test code and never ships to a plugin (not under starter/). The sign-in's
+// building blocks (pkce, register, authorizePage, postLogin, token, freePort) are the Starter's
+// own test helpers; only what the e2e needs on top lives here.
 
-import { createHash, randomBytes } from "node:crypto";
-
-export const CLAUDE_CB = "https://claude.ai/api/mcp/auth_callback";
-
-export function freePort(): number {
-  const s = Bun.serve({ port: 0, fetch: () => new Response() });
-  const port = s.port!;
-  s.stop(true);
-  return port;
-}
-
-export function pkce() {
-  const verifier = randomBytes(32).toString("base64url");
-  return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
-}
-
-export function register(base: string, redirect = CLAUDE_CB) {
-  return fetch(`${base}/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ redirect_uris: [redirect], client_name: "Claude", token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] }),
-  });
-}
-
-export function authorizePage(base: string, clientId: string, challenge: string, redirect = CLAUDE_CB) {
-  const q = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    redirect_uri: redirect,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state: "st-1",
-    resource: `${base}/mcp`,
-  });
-  return fetch(`${base}/authorize?${q}`, { redirect: "manual" });
-}
-
-export function postLogin(base: string, requestId: string, password: string) {
-  return fetch(`${base}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: requestId, password }) });
-}
+import { CLAUDE_CB, authorizePage, pkce, postLogin, register, token } from "../starter/skill/cli/tests/helpers";
 
 export function codeOf(html: string): string {
   const raw = html.match(/http-equiv="refresh" content="0;url=([^"]+)"/)?.[1];
@@ -50,10 +12,6 @@ export function codeOf(html: string): string {
   const code = new URL(raw.replaceAll("&amp;", "&")).searchParams.get("code");
   if (!code) throw new Error("the sign-in redirect has no code");
   return code;
-}
-
-export function token(base: string, body: Record<string, string>) {
-  return fetch(`${base}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) });
 }
 
 /** The whole Server sign-in, as a client like claude.ai does it. Returns the access token. */

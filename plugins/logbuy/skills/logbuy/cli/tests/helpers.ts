@@ -1,4 +1,5 @@
 // Fakes for driving the runtime without a site, Chrome or the user's home dir.
+import { createHash, randomBytes } from "node:crypto";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +11,7 @@ import { defineSite, type SiteConfig } from "../src/runtime/site";
 import type { App } from "../src/main";
 
 export const ORIGIN = "https://shop.example.test";
+export const CLAUDE_CB = "https://claude.ai/api/mcp/auth_callback";
 
 export function tempHome(): { dir: string; cleanup: () => void } {
   const dir = mkdtempSync(join(tmpdir(), "site-cli-test-"));
@@ -177,4 +179,63 @@ export function happySite(req: Recorded): Response {
     if (req.method === "PATCH") return json({ ok: true });
   }
   return json({ message: "nope" }, 404);
+}
+
+// ---- remote mode (`mcp --http`): ports and the Server sign-in's building blocks ----
+
+/** A port that was free a moment ago; another process can still take it before the caller listens. */
+export function freePort(): number {
+  const s = Bun.serve({ port: 0, fetch: () => new Response() });
+  const port = s.port!;
+  s.stop(true);
+  return port;
+}
+
+/**
+ * Starts a server on a fresh freePort() and tries again (up to `attempts`) on a new port when the
+ * start failed because the port was taken in the meantime: `start` must throw an error that names
+ * it (the in-process server's "already in use", a spawned binary's stderr with EADDRINUSE).
+ */
+export async function withFreePort<T>(start: (port: number) => Promise<T>, attempts = 5): Promise<T> {
+  for (let n = 1; ; n++) {
+    try {
+      return await start(freePort());
+    } catch (err) {
+      if (n >= attempts || !/EADDRINUSE|address in use|already in use/i.test(String((err as Error)?.message ?? err))) throw err;
+    }
+  }
+}
+
+export function pkce() {
+  const verifier = randomBytes(32).toString("base64url");
+  return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
+}
+
+export function register(base: string, redirect = CLAUDE_CB) {
+  return fetch(`${base}/register`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ redirect_uris: [redirect], client_name: "Claude", token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] }),
+  });
+}
+
+export function authorizePage(base: string, clientId: string, challenge: string, opts: { redirect?: string; resource?: string } = {}) {
+  const q = new URLSearchParams({
+    response_type: "code",
+    client_id: clientId,
+    redirect_uri: opts.redirect ?? CLAUDE_CB,
+    code_challenge: challenge,
+    code_challenge_method: "S256",
+    state: "st-1",
+    resource: opts.resource ?? `${base}/mcp`,
+  });
+  return fetch(`${base}/authorize?${q}`, { redirect: "manual" });
+}
+
+export function postLogin(base: string, requestId: string, password: string) {
+  return fetch(`${base}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: requestId, password }) });
+}
+
+export function token(base: string, body: Record<string, string>) {
+  return fetch(`${base}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) });
 }

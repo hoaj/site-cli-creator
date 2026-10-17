@@ -2,15 +2,23 @@ name: site-cli-creator
 
 # The generator's CI (SPEC §5, §9): its own tests, then a platform smoke test of
 # the Starter code's compiled CLI on every release target.
+# Cost: the repo is private on GitHub Free and macOS minutes bill at 10x. A PR branch runs once
+# (pull_request; `push` is main only) and only on linux-x64; main and workflow_dispatch run all
+# five targets. Before merging a change to build.ts, install.sh, release.yml or main.ts, run the
+# full matrix on the branch: gh workflow run site-cli-creator.yml --ref <branch>.
 on:
   push:
+    branches: [main]
     paths:
       - plugins/site-cli-creator/**
       - .github/workflows/site-cli-creator.yml
+      - .github/scripts/scaffold-fixture.sh
+  workflow_dispatch:
   pull_request:
     paths:
       - plugins/site-cli-creator/**
       - .github/workflows/site-cli-creator.yml
+      - .github/scripts/scaffold-fixture.sh
 
 permissions:
   contents: read
@@ -27,6 +35,7 @@ env:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -51,14 +60,27 @@ jobs:
       - run: bun test
         working-directory: ${{ env.GENERATOR }}
 
-  # Scaffold a plugin with the generator's own tools, the way `new` and
-  # `add-skill` do, and cross-compile its CLI for one target per matrix entry.
+  # Per target, on that target's own runner: scaffold a plugin with the generator's own tools
+  # (scaffold-fixture.sh), build its CLI, then run the binary with no node_modules: help,
+  # version, the hidden `selftest` (plain fetch, Chrome launch, route.abort), a Task command
+  # against the fixture site, and `check --writes`, which launches Chrome headless and
+  # intercepts the write with route.abort (SPEC §9). Nothing is uploaded: no artifacts.
   smoke:
     needs: test
-    runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
+      fail-fast: false
       matrix:
-        target: [darwin-x64, darwin-arm64, linux-x64, linux-arm64, windows-x64]
+        # `strategy.matrix` can read `github`, so the event picks the matrix here. A job-level `if`
+        # cannot read `matrix`, and a step-level `if` would still start a macOS runner for every
+        # skipped target. Trade-off: on a PR only linux-x64 runs, so a darwin, windows or arm64
+        # break shows up after the merge, on main (or earlier: workflow_dispatch on the branch).
+        # macos-13 was GitHub's last generic Intel image and is retired; macos-15-intel replaces it.
+        include: ${{ fromJSON(github.event_name == 'pull_request' && '[{"os":"ubuntu-latest","target":"linux-x64"}]' || '[{"os":"macos-15-intel","target":"darwin-x64"},{"os":"macos-latest","target":"darwin-arm64"},{"os":"ubuntu-latest","target":"linux-x64"},{"os":"ubuntu-24.04-arm","target":"linux-arm64"},{"os":"windows-latest","target":"windows-x64"}]') }}
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -67,76 +89,23 @@ jobs:
       - run: bun install --frozen-lockfile
         working-directory: ${{ env.GENERATOR }}
       - name: Scaffold the fixture plugin
-        run: |
-          plugin="$RUNNER_TEMP/smoke-plugin"
-          skill="$plugin/skills/fixture"
-          bun "$SKILL_DIR/tools/new.ts" --dir "$plugin" --plugin smoke --repo hoaj/smoke-plugin \
-            --description "Smoke test plugin" --maintainer hoaj --no-labels --skip-checks
-          bun "$SKILL_DIR/tools/add-skill.ts" --dir "$plugin" --skill fixture \
-            --origin http://127.0.0.1:4310 --auth none
-          # The fixture's agent-written files, with the placeholders add-skill fills.
-          SRC="$skill/cli/src" bun -e '
-            const { copyExpected } = await import(process.env.GITHUB_WORKSPACE + "/" + process.env.SKILL_DIR + "/fixtures/expected/copy.ts");
-            copyExpected("none", process.env.SRC, {
-              plugin: "smoke", skill: "fixture", repo: "hoaj/smoke-plugin",
-              generatorVersion: "0.1.0", origin: "http://127.0.0.1:4310",
-            });'
-          (cd "$skill/cli" && bun install)
-          bun "$SKILL_DIR/tools/regen.ts" --skill-dir "$skill"
-          echo "CLI_DIR=$skill/cli" >> "$GITHUB_ENV"
-      - name: Build fixture-${{ matrix.target }}
-        working-directory: ${{ env.CLI_DIR }}
+        run: bash .github/scripts/scaffold-fixture.sh "$RUNNER_TEMP/smoke-plugin"
+      # A binary must not depend on the build machine's paths (build.ts patches playwright-core's
+      # package.json and browsers.json lookups for this). The old cross-build proved it by running
+      # on another machine; building and running on one runner proves it only if nothing of the
+      # build is left behind. So only the binary moves to a clean folder, then the scaffolded
+      # plugin (with its CLI's node_modules) and the generator's node_modules are deleted.
+      - name: Build fixture-${{ matrix.target }}, keep only the binary
+        env:
+          TARGET: ${{ matrix.target }}
         run: |
           ext=""
-          if [ "${{ matrix.target }}" = windows-x64 ]; then ext=".exe"; fi
-          mkdir -p "$RUNNER_TEMP/dist"
-          bun build.ts "bun-${{ matrix.target }}" "$RUNNER_TEMP/dist/fixture-${{ matrix.target }}$ext"
-          ls -la "$RUNNER_TEMP/dist"
-      - uses: actions/upload-artifact@v7
-        with:
-          name: smoke-${{ matrix.target }}
-          path: ${{ runner.temp }}/dist/
-          if-no-files-found: error
-          # Only run-smoke in this same run reads them; a day keeps ~100 MB binaries from filling the storage quota.
-          retention-days: 1
-
-  # Each binary on its own platform, with no node_modules: help, version, the
-  # hidden `selftest` (plain fetch, Chrome launch, route.abort), a Task command
-  # against the fixture site, and `check --writes`, which launches Chrome
-  # headless and intercepts the write with route.abort (SPEC §9).
-  run-smoke:
-    needs: smoke
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # macos-13 was GitHub's last generic Intel image and is retired; macos-15-intel replaces it.
-          - os: macos-15-intel
-            target: darwin-x64
-          - os: macos-latest
-            target: darwin-arm64
-          - os: ubuntu-latest
-            target: linux-x64
-          - os: ubuntu-24.04-arm
-            target: linux-arm64
-          - os: windows-latest
-            target: windows-x64
-    runs-on: ${{ matrix.os }}
-    defaults:
-      run:
-        shell: bash
-    steps:
-      # Only the fixture site, which has no dependencies; the binary gets no node_modules.
-      - uses: actions/checkout@v7
-        with:
-          sparse-checkout: ${{ env.SKILL_DIR }}/fixtures/site
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-      - uses: actions/download-artifact@v8
-        with:
-          name: smoke-${{ matrix.target }}
-          path: bin
+          if [ "$TARGET" = windows-x64 ]; then ext=".exe"; fi
+          mkdir -p "$RUNNER_TEMP/smoke-bin" "$RUNNER_TEMP/smoke-run"
+          (cd "$RUNNER_TEMP/smoke-plugin/skills/fixture/cli" && bun build.ts "bun-$TARGET" "$RUNNER_TEMP/smoke-bin/fixture-$TARGET$ext")
+          rm -rf "$RUNNER_TEMP/smoke-plugin" "$GENERATOR/node_modules"
+          test ! -e "$RUNNER_TEMP/smoke-plugin"
+          ls -la "$RUNNER_TEMP/smoke-bin"
       # The arm64 runner image ships no Google Chrome; macOS and Windows runners have it.
       - name: Install Google Chrome (linux-arm64)
         if: matrix.target == 'linux-arm64'
@@ -145,8 +114,9 @@ jobs:
           sudo apt-get install -y ./chrome.deb
           rm chrome.deb
       - name: Prepare the binary as install.sh does
+        working-directory: ${{ runner.temp }}/smoke-run
         run: |
-          bin="bin/fixture-${{ matrix.target }}"
+          bin="$RUNNER_TEMP/smoke-bin/fixture-${{ matrix.target }}"
           if [ "$RUNNER_OS" = Windows ]; then
             bin="$bin.exe"
             powershell -NoProfile -Command "Unblock-File -Path '$bin'" || true
@@ -161,6 +131,7 @@ jobs:
           test ! -e node_modules
           echo "BIN=$bin" >> "$GITHUB_ENV"
       - name: help, version, fetch, Chrome launch and route.abort
+        working-directory: ${{ runner.temp }}/smoke-run
         run: |
           is_json_object() {
             if command -v jq > /dev/null; then
@@ -173,14 +144,14 @@ jobs:
             local out="$1"
             shift
             echo "::group::$*"
-            "./$BIN" "$@" > "$out"
+            "$BIN" "$@" > "$out"
             is_json_object "$out"
             cat "$out"
             echo "::endgroup::"
           }
           run help.json help
           run version.json version
-          bun "$SKILL_DIR/fixtures/site/server.ts" --auth none --port 4310 > server.log 2>&1 &
+          bun "$GITHUB_WORKSPACE/$SKILL_DIR/fixtures/site/server.ts" --auth none --port 4310 > server.log 2>&1 &
           server=$!
           trap 'kill "$server" 2>/dev/null || true' EXIT
           for _ in $(seq 1 50); do
@@ -201,32 +172,13 @@ jobs:
             jq -e '.ok == true and ([.operations[] | select(.effect == "write" and .status == "ok")] | length) > 0' check.json > /dev/null
           fi
 
-  # The smoke binaries (~100 MB each) are read only by run-smoke in this same run. Deleting them as
-  # soon as it is done keeps them from filling the account's artifact storage quota (GitHub Free:
-  # 500 MB, metered over the month), which blocked every upload in October 2026.
-  cleanup-smoke:
-    needs: [smoke, run-smoke]
-    if: always()
-    runs-on: ubuntu-latest
-    permissions:
-      actions: write
-    steps:
-      - name: Delete this run's smoke artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          ids=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/artifacts?per_page=100" --jq '.artifacts[] | select(.name | startswith("smoke-")) | .id')
-          for id in $ids; do
-            gh api --method DELETE "repos/$GITHUB_REPOSITORY/actions/artifacts/$id"
-            echo "deleted artifact $id"
-          done
-
   # Remote mode's image, built from a scaffolded fixture plugin the way the Owner builds it on a
   # host (`docker build` in the CLI skill's folder). There is no Docker on the maintainer's Mac, so
   # a broken Dockerfile would otherwise first show up on Railway.
   docker:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -236,21 +188,8 @@ jobs:
         working-directory: ${{ env.GENERATOR }}
       - name: Scaffold the fixture plugin
         run: |
-          plugin="$RUNNER_TEMP/docker-plugin"
-          skill="$plugin/skills/fixture"
-          bun "$SKILL_DIR/tools/new.ts" --dir "$plugin" --plugin smoke --repo hoaj/smoke-plugin \
-            --description "Smoke test plugin" --maintainer hoaj --no-labels --skip-checks
-          bun "$SKILL_DIR/tools/add-skill.ts" --dir "$plugin" --skill fixture \
-            --origin http://127.0.0.1:4310 --auth none
-          SRC="$skill/cli/src" bun -e '
-            const { copyExpected } = await import(process.env.GITHUB_WORKSPACE + "/" + process.env.SKILL_DIR + "/fixtures/expected/copy.ts");
-            copyExpected("none", process.env.SRC, {
-              plugin: "smoke", skill: "fixture", repo: "hoaj/smoke-plugin",
-              generatorVersion: "0.1.0", origin: "http://127.0.0.1:4310",
-            });'
-          (cd "$skill/cli" && bun install)
-          bun "$SKILL_DIR/tools/regen.ts" --skill-dir "$skill"
-          echo "PLUGIN_DIR=$plugin" >> "$GITHUB_ENV"
+          bash .github/scripts/scaffold-fixture.sh "$RUNNER_TEMP/docker-plugin"
+          echo "PLUGIN_DIR=$RUNNER_TEMP/docker-plugin" >> "$GITHUB_ENV"
       - name: Build the image
         run: docker build -t fixture-remote "$PLUGIN_DIR/skills/fixture"
       - name: Run it and check /healthz, the OAuth metadata and /setup

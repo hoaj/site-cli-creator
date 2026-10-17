@@ -150,6 +150,7 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
     const problems = siteProblems(site);
     if (problems.length) throw new ContractError(`site.ts: ${problems.join("; ")}`);
     const { words, flags, account, confirm } = splitGlobals(argv);
+    const commandWords = words.slice(0, 2).join(" ");
     const deps = defaultDeps(app);
     moveLegacyStateDir(site, deps);
     const client = new Client(site, deps, { confirm });
@@ -160,9 +161,9 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
       rest = flags.slice(1);
     }
     // A Task command wins over a built-in of the same first word (`mcp list`): built-ins take no second word.
-    if (words.length >= 2 && app.commands.some((c) => c.name === words.slice(0, 2).join(" "))) builtin = "";
+    if (words.length >= 2 && app.commands.some((c) => c.name === commandWords)) builtin = "";
     // `<command> --help`: that command's entry from help, and nothing runs (no sign-in, no call).
-    const asked = commandHelp(site, app.commands, words.slice(0, 2).join(" ")) ?? commandHelp(site, app.commands, words[0] ?? "");
+    const asked = commandHelp(site, app.commands, commandWords) ?? commandHelp(site, app.commands, words[0] ?? "");
     if (asked && wantsHelp(asked.flags, rest)) {
       commandName = asked.name;
       return ok(asked);
@@ -210,8 +211,7 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
       return ok({ loggedIn: true, fromProfile: true, stateDir: client.dir, ids: Object.keys(session.ids) });
     }
 
-    const name = words.slice(0, 2).join(" ");
-    const command = app.commands.find((c) => c.name === name);
+    const command = app.commands.find((c) => c.name === commandWords);
     if (!command) throw input(`unknown command "${words.join(" ") || flags[0]}"; run \`${site.skill} help\``);
     commandName = command.name;
     if (words.length > 2) throw input(`unexpected argument "${words[2]}"`);

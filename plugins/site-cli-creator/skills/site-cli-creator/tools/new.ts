@@ -105,15 +105,12 @@ await runTool(async () => {
   };
 
   const files = copyTemplate(pluginStarter, dir, tokens);
-  const feedbackRel = join("skills", `${plugin}-feedback`);
-  files.push(...copyTemplate(feedbackStarter, join(dir, feedbackRel), tokens).map((f) => join(feedbackRel, f)));
-  const feedbackSkillMd = join(dir, feedbackRel, "SKILL.md");
-  if (existsSync(feedbackSkillMd)) setSkillMdVersion(feedbackSkillMd, INITIAL_VERSION);
-
-  const deployRel = join("skills", `${plugin}-deploy`);
-  files.push(...copyTemplate(deployStarter, join(dir, deployRel), tokens).map((f) => join(deployRel, f)));
-  const deploySkillMd = join(dir, deployRel, "SKILL.md");
-  if (existsSync(deploySkillMd)) setSkillMdVersion(deploySkillMd, INITIAL_VERSION);
+  for (const [starterSkill, suffix] of [[feedbackStarter, "feedback"], [deployStarter, "deploy"]] as const) {
+    const rel = join("skills", `${plugin}-${suffix}`);
+    files.push(...copyTemplate(starterSkill, join(dir, rel), tokens).map((f) => join(rel, f)));
+    const skillMd = join(dir, rel, "SKILL.md");
+    if (existsSync(skillMd)) setSkillMdVersion(skillMd, INITIAL_VERSION);
+  }
 
   const info: PluginInfo = { plugin, repo: values.repo, description: values.description, maintainer: values.maintainer };
   const manifests: Record<string, unknown> = buildManifests(info);

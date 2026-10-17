@@ -2,7 +2,6 @@
 // the Owner password on every action, over real HTTP against an in-test server and a fake site.
 // Every response body and log line is collected, and no test ends while one holds a Session value.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createHash, randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import { checkSession, mcpTools, type App } from "../src/main";
@@ -11,10 +10,9 @@ import { remoteConfig } from "../src/runtime/remote-config";
 import { serveHttp } from "../src/runtime/remote";
 import { persistenceWarning, readStatus, statusFile } from "../src/runtime/setup";
 import { sessionFile } from "../src/runtime/session";
-import { fakeFetch, getCustomer, getOrder, happySite, listProducts, json, loginSite, makeApp, makeDeps, makeSite, renameOrder, tempHome, type Recorded } from "./helpers";
+import { CLAUDE_CB, authorizePage, fakeFetch, getCustomer, getOrder, happySite, listProducts, json, loginSite, makeApp, makeDeps, makeSite, pkce, postLogin, register, renameOrder, tempHome, token, withFreePort, type Recorded } from "./helpers";
 
 const PW = "correct horse battery";
-const CLAUDE_CB = "https://claude.ai/api/mcp/auth_callback";
 const GOOD = "GOOD-SESSION-VALUE";
 const OTHER = "OTHER-SESSION-VALUE";
 const goodSession = { headers: { cookie: `sid=${GOOD}` }, ids: { customerId: "C-1" } };
@@ -35,20 +33,14 @@ afterEach(async () => {
   home.cleanup();
 });
 
-function freePort(): number {
-  const s = Bun.serve({ port: 0, fetch: () => new Response() });
-  const port = s.port!;
-  s.stop(true);
-  return port;
-}
-
 /** The site accepts only the good Session's cookie; otherwise it behaves like happySite. */
 const sessionSite = (req: Recorded) => (req.headers.cookie === `sid=${GOOD}` ? happySite(req) : json({ message: "signed out" }, 401));
 
 type Start = { site?: ReturnType<typeof makeSite>; env?: Record<string, string>; extra?: Partial<App> };
 
-async function start(opts: Start = {}) {
-  const port = freePort();
+const start = (opts: Start = {}) => withFreePort((port) => startOn(port, opts));
+
+async function startOn(port: number, opts: Start) {
   const state: { handler: (req: Recorded) => Response | Promise<Response> } = { handler: sessionSite };
   const f = fakeFetch((req) => state.handler(req));
   const d = makeDeps(f.fetch, home.dir);
@@ -98,29 +90,15 @@ const stored = () => readFileSync(sessionFile(home.dir), "utf8");
 
 // --- the Server sign-in, as a client like claude.ai does it ---
 
-const pkce = () => {
-  const verifier = randomBytes(32).toString("base64url");
-  return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
-};
-
 async function signIn(base: string) {
-  const client = await (await fetch(`${base}/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ redirect_uris: [CLAUDE_CB], client_name: "Claude", token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] }),
-  })).json();
+  const client = await (await register(base)).json();
   const { verifier, challenge } = pkce();
-  const q = new URLSearchParams({ response_type: "code", client_id: client.client_id, redirect_uri: CLAUDE_CB, code_challenge: challenge, code_challenge_method: "S256", state: "st-1", resource: `${base}/mcp` });
-  const page = await (await fetch(`${base}/authorize?${q}`, { redirect: "manual" })).text();
+  const page = await (await authorizePage(base, client.client_id, challenge)).text();
   const requestId = page.match(/name="request" value="([^"]+)"/)![1]!;
-  const done = await (await fetch(`${base}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: requestId, password: PW }) })).text();
+  const done = await (await postLogin(base, requestId, PW)).text();
   const raw = done.match(/http-equiv="refresh" content="0;url=([^"]+)"/)![1]!;
   const code = new URL(raw.replaceAll("&amp;", "&")).searchParams.get("code")!;
-  const res = await fetch(`${base}/token`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({ grant_type: "authorization_code", code, code_verifier: verifier, client_id: client.client_id, redirect_uri: CLAUDE_CB, resource: `${base}/mcp` }),
-  });
+  const res = await token(base, { grant_type: "authorization_code", code, code_verifier: verifier, client_id: client.client_id, redirect_uri: CLAUDE_CB, resource: `${base}/mcp` });
   expect(res.status).toBe(200);
   return (await res.json()).access_token as string;
 }

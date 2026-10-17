@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.7.0, both skills exist", () => {
+  test("version 0.7.1, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.7.0");
+      expect(m.version).toBe("0.7.1");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -49,7 +49,7 @@ describe("manifests", () => {
       const mk = JSON.parse(read(join(REPO, p)));
       const entry = mk.plugins.find((x: { name: string }) => x.name === "site-cli-creator");
       expect(entry).toEqual({ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description });
-      expect(mk.metadata.version).toBe("1.11.0");
+      expect(mk.metadata.version).toBe("1.11.1");
     }
     expect(read(join(REPO, "README.md"))).toContain("[site-cli-creator](./plugins/site-cli-creator)");
   });
@@ -305,39 +305,96 @@ describe.skipIf(!IN_REPO)(`generator CI workflow${REPO_REASON}`, () => {
     expect(existsSync(join(PLUGIN, "tsconfig.json"))).toBe(true);
   });
 
-  test("the docker job builds the fixture plugin's Dockerfile and checks the running container, after cleanup-smoke", () => {
-    const start = wf.indexOf("  docker:");
-    expect(start).toBeGreaterThan(wf.indexOf("  cleanup-smoke:"));
-    const job = wf.slice(start);
+  test("the docker job builds the fixture plugin's Dockerfile and checks the running container", () => {
+    const job = wf.slice(wf.indexOf("  docker:"));
     expect(job).toContain("needs: test");
     expect(job).toContain("runs-on: ubuntu-latest");
-    expect(job).toContain("--origin http://127.0.0.1:4310");
+    expect(job).toContain("scaffold-fixture.sh");
     for (const s of ['docker build -t fixture-remote "$PLUGIN_DIR/skills/fixture"', "docker run -d --name fixture-remote -p 8080:8080", "OWNER_PASSWORD=ci-owner-password", "PUBLIC_URL=http://localhost:8080", "http://localhost:8080/healthz", "oauth-protected-resource", "http://localhost:8080/mcp", "/setup", "docker logs fixture-remote"]) {
       expect(job).toContain(s);
     }
-    expect(wf).toContain("needs: [smoke, run-smoke]");
   });
 
-  test("builds and runs all five targets", () => {
-    for (const t of ["darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64", "windows-x64"]) expect(wf).toContain(`target: ${t}`);
-    expect(wf).toContain('bun build.ts "bun-${{ matrix.target }}"');
+  test("smoke and docker scaffold the fixture with the one shared script", () => {
+    const script = read(join(REPO, ".github/scripts/scaffold-fixture.sh"));
+    for (const s of ["tools/new.ts", "tools/add-skill.ts", "--origin http://127.0.0.1:4310", "copyExpected", "bun install", "tools/regen.ts"]) expect(script).toContain(s);
+    expect(wf.match(/bash \.github\/scripts\/scaffold-fixture\.sh/g)?.length).toBe(2);
+    expect(wf).not.toContain("tools/new.ts");
   });
-  test("run-smoke covers help, version, fetch, Chrome launch and route.abort (SPEC §9)", () => {
-    const run = wf.slice(wf.indexOf("  run-smoke:"));
+
+  test("smoke builds and runs each target on its own runner, with all five targets off a pull request and linux-x64 on one", () => {
+    const smoke = wf.slice(wf.indexOf("  smoke:"), wf.indexOf("  docker:"));
+    expect(wf).not.toContain("run-smoke");
+    expect(smoke).toContain("runs-on: ${{ matrix.os }}");
+    expect(smoke).toContain("github.event_name == 'pull_request' && '[{\"os\":\"ubuntu-latest\",\"target\":\"linux-x64\"}]'");
+    for (const t of ["darwin-x64", "darwin-arm64", "linux-x64", "linux-arm64", "windows-x64"]) expect(smoke).toContain(`"target":"${t}"`);
+    for (const os of ["macos-15-intel", "macos-latest", "ubuntu-24.04-arm", "windows-latest"]) expect(smoke).toContain(`"os":"${os}"`);
+    expect(smoke).toContain('bun build.ts "bun-$TARGET"');
+  });
+
+  test("smoke deletes the scaffolded plugin and the generator's node_modules before it runs the binary, which has no node_modules beside it", () => {
+    const smoke = wf.slice(wf.indexOf("  smoke:"), wf.indexOf("  docker:"));
+    const rm = smoke.indexOf('rm -rf "$RUNNER_TEMP/smoke-plugin" "$GENERATOR/node_modules"');
+    expect(rm).toBeGreaterThan(smoke.indexOf("bun build.ts"));
+    expect(rm).toBeLessThan(smoke.indexOf("test ! -e node_modules"));
+    expect(rm).toBeLessThan(smoke.indexOf("run help.json help"));
+    expect(smoke).toContain('"$RUNNER_TEMP/smoke-bin/fixture-$TARGET$ext"');
+  });
+
+  test("smoke covers help, version, fetch, Chrome launch and route.abort (SPEC §9)", () => {
+    const run = wf.slice(wf.indexOf("  smoke:"), wf.indexOf("  docker:"));
     for (const s of ["run help.json help", "run version.json version", `fixtures/site/server.ts" --auth none --port 4310`, "run selftest.json selftest --url", "run show.json subscription show", "run check.json check --writes", "codesign --force --sign -", "Unblock-File", "google-chrome-stable_current_arm64.deb", "test ! -e node_modules"]) {
       expect(run).toContain(s);
     }
-    expect(wf).toContain("--origin http://127.0.0.1:4310");
+    expect(read(join(REPO, ".github/scripts/scaffold-fixture.sh"))).toContain("--origin http://127.0.0.1:4310");
   });
 
-  test("the smoke binaries are deleted once run-smoke is done, so they never fill the artifact storage quota", () => {
-    const cleanup = wf.slice(wf.indexOf("  cleanup-smoke:"));
-    expect(wf.indexOf("  cleanup-smoke:")).toBeGreaterThan(wf.indexOf("  run-smoke:"));
-    expect(cleanup).toContain("needs: [smoke, run-smoke]");
-    expect(cleanup).toContain("if: always()");
-    expect(cleanup).toContain("actions: write");
-    expect(cleanup).toContain('startswith("smoke-")');
-    expect(cleanup).toContain("--method DELETE");
+  test("the workflow runs on pull requests, on main and by hand, and never on a PR branch push", () => {
+    const on = wf.slice(wf.indexOf("\non:"), wf.indexOf("\npermissions:"));
+    expect(on).toMatch(/push:\n {4}branches: \[main\]/);
+    expect(on).toContain("workflow_dispatch:");
+    expect(on).toContain("pull_request:");
+  });
+
+  test("no workflow stores artifacts (GitHub Free's storage quota blocked every upload in October 2026) and every job has a timeout", () => {
+    const files = [".github/workflows/site-cli-creator.yml", ".github/workflows/logbuy-ci.yml", ".github/workflows/logbuy-release.yml"].map((f) => join(REPO, f));
+    files.push(join(GEN, "starter/plugin/.github/workflows/ci.yml"), join(GEN, "starter/plugin/.github/workflows/release.yml"));
+    for (const f of files) {
+      const text = read(f);
+      expect(text).not.toContain("upload-artifact");
+      expect(text).not.toContain("download-artifact");
+      expect(text).not.toContain("actions: write");
+      const on = text.slice(text.indexOf("\non:"), text.indexOf("\npermissions:"));
+      expect(on).toMatch(/push:\n {4}branches: \[main\]/);
+    }
+    const timeouts = (f: string) => Object.fromEntries([..."test smoke docker build".split(" ")].flatMap((job) => {
+      const m = read(f).match(new RegExp(`\\n  ${job}:\\n[\\s\\S]*?timeout-minutes: (\\d+)`));
+      return m ? [[job, Number(m[1])]] : [];
+    }));
+    expect(timeouts(files[0])).toEqual({ test: 20, smoke: 15, docker: 15 });
+    expect(timeouts(files[1]).test).toBe(15);
+    expect(timeouts(files[2]).build).toBe(15);
+    expect(timeouts(files[4]).build).toBe(15);
+  });
+
+  test("releases put binaries on a draft release and publish it last; the Starter's release.yml and logbuy's agree", () => {
+    for (const f of [join(REPO, ".github/workflows/logbuy-release.yml"), join(GEN, "starter/plugin/.github/workflows/release.yml")]) {
+      const text = read(f);
+      const draft = text.indexOf("gh release create");
+      const upload = text.indexOf("gh release upload");
+      const edit = text.indexOf("gh release edit");
+      expect(text).toContain("--draft --target \"$GITHUB_SHA\"");
+      expect(text).toContain("--generate-notes");
+      expect(text).toContain('gh release upload "$TAG" "dist/$SKILL-$TARGET$ext" --clobber');
+      expect(text).toContain("--draft=false");
+      expect(draft).toBeGreaterThan(-1);
+      expect(upload).toBeGreaterThan(draft);
+      expect(edit).toBeGreaterThan(upload);
+      expect(text).toContain("needs: [plan, build]");
+      expect(text).toContain("needs: [plan, publish]");
+      expect(text).toContain("already released");
+      expect(text).toContain("without a version bump");
+    }
   });
 });
 

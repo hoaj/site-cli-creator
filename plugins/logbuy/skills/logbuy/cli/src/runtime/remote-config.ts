@@ -1,6 +1,6 @@
 // What `mcp --http` (remote mode) reads from its environment, checked before anything listens,
-// and the Owner password's hash and check. No dependencies beyond node:crypto, so run() can use
-// it without loading the SDK or Express (runtime/remote.ts).
+// and the Owner password's hash and check. It never loads the MCP SDK or Express (runtime/remote.ts
+// does), so run() can use it for `mcp --http` checks and `--hash-password` without them.
 import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 import { Failure } from "./envelope";
 import type { Env } from "./site";
