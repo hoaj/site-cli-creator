@@ -1,25 +1,14 @@
 {
-  "name": "hoaj-skills",
+  "name": "site-cli-creator",
   "owner": { "name": "Andreas Jørgensen" },
   "metadata": {
-    "description": "Personal agent skills by hoaj",
-    "version": "1.11.1"
+    "description": "site-cli-creator for Cursor, whose marketplaces cannot list a plugin from another repo. Claude Code and Copilot CLI install it from the hoaj marketplace in hoaj/plugins."
   },
   "plugins": [
-    {
-      "name": "bankmcp",
-      "source": "./plugins/bankmcp",
-      "description": "Set up your own BankMCP server (read-only bank access for Claude or ChatGPT), locally or on Railway."
-    },
     {
       "name": "site-cli-creator",
       "source": "./plugins/site-cli-creator",
       "description": "Turn the calls a website makes into a plugin of CLI skills that coding agents can run, with Drift checks and a feedback loop."
-    },
-    {
-      "name": "logbuy",
-      "source": "./plugins/logbuy",
-      "description": "Find deals on Visma LogBuy (mylogbuy.com): search products, show a deal, browse categories."
     }
   ]
 }

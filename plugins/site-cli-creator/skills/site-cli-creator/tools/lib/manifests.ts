@@ -89,7 +89,7 @@ export function addSkillToManifests(pluginDir: string, skill: string): string[] 
 }
 
 /**
- * Same shape as hoaj/skills' own marketplaces, with the plugin at "./". No version: the bump
+ * Same shape as hoaj/site-cli-creator' own marketplaces, with the plugin at "./". No version: the bump
  * script and version-sync test own every version pin, and a marketplace needs none.
  */
 export function buildMarketplaces(info: PluginInfo): Record<keyof typeof MARKETPLACES, Record<string, unknown>> {

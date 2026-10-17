@@ -1,6 +1,0 @@
-bin/
-captures/
-cli/node_modules/
-cli/dist/
-cli/tests/
-*.log
