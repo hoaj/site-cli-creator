@@ -26,7 +26,10 @@ export function progress(message: string): void {
   process.stderr.write(`${message}\n`);
 }
 
-export function printJson(value: unknown): void {
+/** The first line of an error message or a command's stderr (leading blank lines skipped), for one-line notes. */
+export const firstLine = (text: string): string => text.trim().split("\n")[0] ?? "";
+
+function printJson(value: unknown): void {
   process.stdout.write(`${JSON.stringify(value, null, 2)}\n`);
 }
 

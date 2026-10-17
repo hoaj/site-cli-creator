@@ -1,5 +1,4 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { readJson, writeJson } from "./manifests";
 import { fail } from "./output";
 
@@ -50,9 +49,9 @@ export function repoFromManifest(repository: unknown): string {
   return m[1] as string;
 }
 
-/** An http(s) URL's origin; `flag` names the flag in the error. */
-export function parseOrigin(raw: string, flag = "origin"): string {
-  return parseHttpUrl(raw, flag).origin;
+/** An http(s) URL's origin (--origin). */
+export function parseOrigin(raw: string): string {
+  return parseHttpUrl(raw, "origin").origin;
 }
 
 export function parseHttpUrl(raw: string, flag: string): URL {

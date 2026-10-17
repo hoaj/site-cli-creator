@@ -3,8 +3,9 @@
 // (requirement 1) is a question the agent asks, not a check.
 import { existsSync } from "node:fs";
 import { findChrome } from "../../starter/skill/cli/src/runtime/chrome";
+import { firstLine } from "./output";
 
-export const MIN_BUN = "1.4.0";
+const MIN_BUN = "1.4.0";
 
 export type Unmet = { requirement: "bun" | "chrome" | "gh" | "gh-auth" | "repo-admin"; message: string };
 
@@ -68,7 +69,6 @@ export function unmetRequirements(repo: string, probe: Probe): Unmet[] {
   return unmet;
 }
 
-const firstLine = (s: string) => s.trim().split("\n")[0] ?? "";
 
 export function systemProbe(): Probe {
   return {

@@ -9,7 +9,7 @@ import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelconte
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { Failure } from "./envelope";
-import { inputSchema, toolResult, type McpTool, type ServerInfo } from "./mcp";
+import { listedTools, toolResult, type McpTool, type ServerInfo } from "./mcp";
 import { OAuthStore, OwnerProvider, failedPage, returningPage, signedInPage } from "./owner-auth";
 import { redirectAllowed, type RemoteConfig } from "./remote-config";
 import { saveSession, sessionUploadSchema, type Session } from "./session";
@@ -41,6 +41,7 @@ const CLIENT_ORIGINS = ["https://claude.ai"];
 /** The Setup page's upload: a request of at most this size, holding a session.json of at most the second. */
 const MAX_UPLOAD_REQUEST = 256 * 1024;
 const MAX_SESSION_BYTES = 64 * 1024;
+const TOO_LARGE = "That upload is too large for a session.json.";
 
 /** What the tool adapter needs to point a client at the Setup page. */
 type SetupInfo = { dir: string; url: string; skill: string; now: () => number };
@@ -63,6 +64,11 @@ function readCapped(req: express.Request, cap: number): Promise<Buffer | null> {
   });
 }
 
+/** Writes the Setup status of a Session checked at `at`, keeping the upload time it had. */
+function checkedStatus(dir: string, at: string, state: "valid" | "expired", uploadedAt?: string, reason?: string): void {
+  writeStatus(dir, { state, ...(uploadedAt && { uploadedAt }), checkedAt: at, ...(reason !== undefined && { reason }) });
+}
+
 /**
  * A `session` failure in remote mode is the Owner's to fix, not the client's: the Setup page then
  * shows the Session as expired (when one was stored), and `next` names that page, not the login tool.
@@ -74,13 +80,13 @@ function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknow
   if (!error || error.kind !== "session") {
     if (code === 0) {
       const status = readStatus(setup.dir);
-      if (status.state === "expired") writeStatus(setup.dir, { state: "valid", ...(status.uploadedAt && { uploadedAt: status.uploadedAt }), checkedAt: new Date(setup.now()).toISOString() });
+      if (status.state === "expired") checkedStatus(setup.dir, new Date(setup.now()).toISOString(), "valid", status.uploadedAt);
     }
     return output;
   }
   const before = readStatus(setup.dir);
   if (before.state !== "missing") {
-    writeStatus(setup.dir, { state: "expired", ...(before.uploadedAt && { uploadedAt: before.uploadedAt }), checkedAt: new Date(setup.now()).toISOString(), reason: String(error.message ?? "") });
+    checkedStatus(setup.dir, new Date(setup.now()).toISOString(), "expired", before.uploadedAt, String(error.message ?? ""));
   }
   const next = `Ask the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json). Do not retry until they have.`;
   return { error: { ...error, next } };
@@ -90,9 +96,7 @@ function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknow
 function mcpServerFor(info: ServerInfo, tools: McpTool[], serial: <T>(fn: () => Promise<T>) => Promise<T>, setup: SetupInfo) {
   const byName = new Map(tools.map((t) => [t.name, t]));
   const server = new Server({ name: info.name, version: info.version }, { capabilities: { tools: { listChanged: false } }, instructions: info.instructions });
-  server.setRequestHandler(ListToolsRequestSchema, async () => ({
-    tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: inputSchema(t.schema) as never, annotations: t.annotations })),
-  }));
+  server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: listedTools(tools) as never }));
   server.setRequestHandler(CallToolRequestSchema, async (req) => {
     const tool = byName.get(req.params.name);
     if (!tool) throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${req.params.name}`);
@@ -107,12 +111,13 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
   const { config, note } = o;
   const base = config.publicUrl;
   const mcpUrl = new URL("/mcp", base);
+  const siteName = new URL(o.site.origin).host;
   const store = new OAuthStore(o.dir);
   const provider = new OwnerProvider({
     store,
     password: config.password,
     mcpUrl,
-    siteName: new URL(o.site.origin).host,
+    siteName,
     serverName: o.info.name,
     // A tool with a confirm argument writes (the same rule the server instructions give clients).
     writes: o.tools.some((t) => "confirm" in t.schema.shape),
@@ -133,6 +138,8 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
   const setup: SetupInfo = { dir: o.dir, url: new URL("setup", base).href, skill: o.site.skill, now: clock };
 
   const app = express();
+  const urlForm = express.urlencoded({ extended: false, limit: "16kb" });
+  const ipOf = (req: express.Request) => req.ip ?? "unknown";
   // req.ip feeds the lockout and the SDK's rate limits: trust X-Forwarded-For only from the proxies in front.
   app.set("trust proxy", config.trustProxy);
   app.disable("x-powered-by");
@@ -158,10 +165,10 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     clientRegistrationOptions: { clientSecretExpirySeconds: 0 },
   }));
 
-  app.post("/login", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  app.post("/login", urlForm, (req, res) => {
     res.set("Cache-Control", "no-store");
     const { request, password } = req.body as Record<string, string | undefined>;
-    const result = provider.completeLogin(String(request ?? ""), String(password ?? ""), req.ip ?? "unknown");
+    const result = provider.completeLogin(String(request ?? ""), String(password ?? ""), ipOf(req));
     // A page that forwards at once rather than a redirect: the form leaves the screen, so a second
     // press cannot post it again, and Chrome applies form-action to redirects after a form post.
     if ("redirect" in result) return void res.status(200).type("html").send(returningPage(result.redirect));
@@ -173,7 +180,6 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
 
   // --- the Setup page: the Owner gives the server a Session; every action asks for the Owner password ---
 
-  const siteName = new URL(o.site.origin).host;
   const answer = (res: express.Response, status: number, notice?: SetupPage["notice"]) =>
     void res
       .status(status)
@@ -182,7 +188,7 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
       .send(setupPage({ serverName: o.info.name, siteName, auth: o.site.auth, status: readStatus(o.dir), warning: persistenceWarning(o.env ?? {}, o.dir), notice, skill: o.site.skill }));
   const refuse = (res: express.Response, status: number, text: string) => answer(res, status, { kind: "error", text });
   const ownerOnly = (req: express.Request, res: express.Response, password: unknown): boolean => {
-    const checked = provider.checkOwnerPassword(typeof password === "string" ? password : "", req.ip ?? "unknown");
+    const checked = provider.checkOwnerPassword(typeof password === "string" ? password : "", ipOf(req));
     if ("ok" in checked) return true;
     refuse(res, 401, checked.error);
     return false;
@@ -202,9 +208,9 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     if (o.site.auth !== "login") return refuseUnread(req, res, 400, "This site needs no sign-in, so there is no Session to upload.");
     // A declared length over the cap is refused unread; without one (chunked) the body is read up to the cap.
     const declared = req.headers["content-length"];
-    if (declared !== undefined && !(Number(declared) <= MAX_UPLOAD_REQUEST)) return refuseUnread(req, res, 413, "That upload is too large for a session.json.");
+    if (declared !== undefined && !(Number(declared) <= MAX_UPLOAD_REQUEST)) return refuseUnread(req, res, 413, TOO_LARGE);
     const body = await readCapped(req, MAX_UPLOAD_REQUEST);
-    if (!body) return refuseUnread(req, res, 413, "That upload is too large for a session.json.");
+    if (!body) return refuseUnread(req, res, 413, TOO_LARGE);
     let form: FormData;
     try {
       form = await new Request("http://local/", { method: "POST", headers: { "content-type": req.headers["content-type"] ?? "" }, body: new Uint8Array(body) }).formData();
@@ -240,7 +246,8 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
         const result = await o.checkSession({ headers, ids, accounts, savedAt: at });
         if (!result.ok) return result;
         saveSession(o.dir, { headers, ids, accounts, savedAt: at });
-        writeStatus(o.dir, result.tried > 0 ? { state: "valid", uploadedAt: at, checkedAt: at } : { state: "unchecked", uploadedAt: at });
+        if (result.tried > 0) checkedStatus(o.dir, at, "valid", at);
+        else writeStatus(o.dir, { state: "unchecked", uploadedAt: at });
         return result;
       });
     } catch {
@@ -259,14 +266,14 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
     answer(res, 200, { kind: "ok", text: `Session stored and checked against ${siteName}.` });
   });
 
-  app.post("/setup/delete", express.urlencoded({ extended: false, limit: "16kb" }), async (req, res) => {
+  app.post("/setup/delete", urlForm, async (req, res) => {
     if (!ownerOnly(req, res, req.body?.password)) return;
     await serial(async () => clearSession(o.dir));
     note("Session deleted");
     answer(res, 200, { kind: "ok", text: "Session deleted." });
   });
 
-  app.post("/setup/signout", express.urlencoded({ extended: false, limit: "16kb" }), (req, res) => {
+  app.post("/setup/signout", urlForm, (req, res) => {
     if (!ownerOnly(req, res, req.body?.password)) return;
     provider.revokeAll();
     note("every client signed out from the Setup page");

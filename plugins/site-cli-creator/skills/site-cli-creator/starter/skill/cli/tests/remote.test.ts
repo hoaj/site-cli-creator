@@ -1,7 +1,7 @@
 // Remote mode (`mcp --http`): the Owner's Server sign-in (OAuth 2.1, one user) in front of the same
 // tools as local mode, over real HTTP against an in-test server and a fake site.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { createHash, randomBytes } from "node:crypto";
+import { createHash } from "node:crypto";
 import { readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { Client as McpClient } from "@modelcontextprotocol/sdk/client/index.js";
@@ -9,14 +9,13 @@ import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/
 import type { OAuthClientProvider } from "@modelcontextprotocol/sdk/client/auth.js";
 import { UnauthorizedError } from "@modelcontextprotocol/sdk/client/auth.js";
 import { checkSession, mcpTools, run } from "../src/main";
-import { remoteConfig, type RemoteConfig } from "../src/runtime/remote-config";
-import { OwnerProvider, OAuthStore, hashPassword } from "../src/runtime/owner-auth";
+import { hashPassword, remoteConfig, type RemoteConfig } from "../src/runtime/remote-config";
+import { OwnerProvider, OAuthStore } from "../src/runtime/owner-auth";
 import { serveHttp } from "../src/runtime/remote";
 import { saveSession } from "../src/runtime/session";
-import { fakeFetch, happySite, makeApp, makeDeps, makeSite, tempHome } from "./helpers";
+import { CLAUDE_CB, authorizePage, fakeFetch, happySite, makeApp, makeDeps, makeSite, pkce, postLogin, register, tempHome, token, withFreePort } from "./helpers";
 
 const PW = "correct horse battery";
-const CLAUDE_CB = "https://claude.ai/api/mcp/auth_callback";
 
 let home: ReturnType<typeof tempHome>;
 const servers: Array<{ close(): Promise<void> }> = [];
@@ -26,69 +25,31 @@ afterEach(async () => {
   home.cleanup();
 });
 
-function freePort(): number {
-  const s = Bun.serve({ port: 0, fetch: () => new Response() });
-  const port = s.port!;
-  s.stop(true);
-  return port;
-}
+type Start = { env?: Record<string, string>; now?: () => number; port?: number; readOnly?: boolean };
 
-type Start = { env?: Record<string, string>; now?: () => number; port?: number };
+/** On a fresh port (tried again if it was taken meanwhile), unless the test names one. */
+const startRemote = (opts: Start = {}) => (opts.port ? startOn(opts.port, opts) : withFreePort((port) => startOn(port, opts)));
 
-async function startRemote(opts: Start = {}) {
-  const port = opts.port ?? freePort();
+async function startOn(port: number, opts: Start) {
   const f = fakeFetch(happySite);
   const d = makeDeps(f.fetch, home.dir);
   saveSession(home.dir, { headers: {}, ids: { customerId: "C-1" } });
-  const app = makeApp(makeSite(), d.deps);
+  const full = makeApp(makeSite(), d.deps);
+  const app = opts.readOnly ? { ...full, commands: [full.commands[0]!] } : full;
   const config = remoteConfig({ OWNER_PASSWORD: PW, PUBLIC_URL: `http://127.0.0.1:${port}`, ...opts.env }, { port });
   const notes: string[] = [];
   const server = await serveHttp({ ...mcpTools(app, { remote: true }), site: app.site, config, dir: home.dir, host: "127.0.0.1", checkSession: (c) => checkSession(app, c), note: (m) => notes.push(m), now: opts.now });
   servers.push(server);
-  return { base: `http://127.0.0.1:${port}`, app, deps: d.deps, calls: f.calls, notes, server, config };
-}
-
-const pkce = () => {
-  const verifier = randomBytes(32).toString("base64url");
-  return { verifier, challenge: createHash("sha256").update(verifier).digest("base64url") };
-};
-
-async function register(base: string, redirect = CLAUDE_CB) {
-  return fetch(`${base}/register`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ redirect_uris: [redirect], client_name: "Claude", token_endpoint_auth_method: "none", grant_types: ["authorization_code", "refresh_token"], response_types: ["code"] }),
-  });
-}
-
-async function authorizePage(base: string, clientId: string, challenge: string, opts: { redirect?: string; resource?: string } = {}) {
-  const q = new URLSearchParams({
-    response_type: "code",
-    client_id: clientId,
-    redirect_uri: opts.redirect ?? CLAUDE_CB,
-    code_challenge: challenge,
-    code_challenge_method: "S256",
-    state: "st-1",
-    resource: opts.resource ?? `${base}/mcp`,
-  });
-  return fetch(`${base}/authorize?${q}`, { redirect: "manual" });
+  return { port, base: `http://127.0.0.1:${port}`, app, deps: d.deps, calls: f.calls, notes, server, config };
 }
 
 const requestIdOf = (html: string) => html.match(/name="request" value="([^"]+)"/)?.[1];
-
-async function postLogin(base: string, requestId: string, password: string) {
-  return fetch(`${base}/login`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams({ request: requestId, password }) });
-}
 
 function codeOf(html: string): { code: string; state: string | null } {
   const raw = html.match(/http-equiv="refresh" content="0;url=([^"]+)"/)?.[1];
   if (!raw) throw new Error(`no redirect in sign-in answer:\n${html}`);
   const url = new URL(raw.replaceAll("&amp;", "&"));
   return { code: url.searchParams.get("code")!, state: url.searchParams.get("state") };
-}
-
-async function token(base: string, body: Record<string, string>) {
-  return fetch(`${base}/token`, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, body: new URLSearchParams(body) });
 }
 
 /** The whole Server sign-in, as a client like claude.ai does it. */
@@ -208,12 +169,7 @@ describe("Server sign-in over HTTP", () => {
   });
 
   test("with no write tools, the sign-in page says the tools only read", async () => {
-    const port = freePort();
-    const d = makeDeps(fakeFetch(happySite).fetch, home.dir);
-    const app = { ...makeApp(makeSite(), d.deps), commands: [makeApp(makeSite(), d.deps).commands[0]!] };
-    const config = remoteConfig({ OWNER_PASSWORD: PW, PUBLIC_URL: `http://127.0.0.1:${port}` }, { port });
-    servers.push(await serveHttp({ ...mcpTools(app, { remote: true }), site: app.site, config, dir: home.dir, host: "127.0.0.1", checkSession: (c) => checkSession(app, c), note: () => {} }));
-    const base = `http://127.0.0.1:${port}`;
+    const { base } = await startRemote({ readOnly: true });
     const client = await (await register(base)).json();
     const html = await (await authorizePage(base, client.client_id, pkce().challenge)).text();
     expect(html).toContain("only read");
@@ -308,13 +264,12 @@ describe("review fixes", () => {
   });
 
   test("a redirect removed from the allowlist no longer gets codes, even for a saved client", async () => {
-    const port = freePort();
     const extra = "https://tool.example/cb";
-    const first = await startRemote({ port, env: { EXTRA_REDIRECT_URIS: extra } });
+    const first = await startRemote({ env: { EXTRA_REDIRECT_URIS: extra } });
     const client = await (await register(first.base, extra)).json();
     await first.server.close();
     servers.splice(servers.indexOf(first.server), 1);
-    const again = await startRemote({ port });
+    const again = await startRemote({ port: first.port });
     const res = await authorizePage(again.base, client.client_id, pkce().challenge, { redirect: extra });
     expect(res.status).toBe(400);
     expect(requestIdOf(await res.text())).toBeUndefined();
@@ -420,8 +375,7 @@ describe("Server sign-in security", () => {
   });
 
   test("changing the Owner password signs every client out; the file holds no password fingerprint an attacker can test", async () => {
-    const port = freePort();
-    const first = await startRemote({ port });
+    const first = await startRemote();
     const { tokens } = await signIn(first.base);
     await first.server.close();
     servers.splice(servers.indexOf(first.server), 1);
@@ -430,7 +384,7 @@ describe("Server sign-in security", () => {
     expect(raw).not.toContain(PW);
     expect(raw).not.toContain(createHash("sha256").update(PW).digest("hex"));
     expect(statSync(file).mode & 0o777).toBe(0o600);
-    const again = await startRemote({ port, env: { OWNER_PASSWORD: "another long password" } });
+    const again = await startRemote({ port: first.port, env: { OWNER_PASSWORD: "another long password" } });
     expect((await mcp(again.base, tokens.access_token, "tools/list")).status).toBe(401);
     expect(again.notes.join("\n")).toMatch(/password changed/i);
   });

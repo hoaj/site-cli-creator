@@ -2,7 +2,7 @@
 name: logbuy-deploy
 description: Deploys the logbuy CLI skill as a remote MCP server on a host the user controls (Railway first), so claude.ai and the phone can use it, and walks the user through the Owner password, the Session upload and the connector. Use when the user wants logbuy on claude.ai or on their phone, asks to deploy, host or put the logbuy CLI skill online, or has trouble with its remote server, its Setup page or an expired Session there. Not for using logbuy on the user's own computer (that is the CLI skill itself, or its local `mcp`), for anyone else's account, or for hosting it for other people.
 ---
-<!-- version: 0.5.1 -->
+<!-- version: 0.5.2 -->
 
 # logbuy deploy
 
