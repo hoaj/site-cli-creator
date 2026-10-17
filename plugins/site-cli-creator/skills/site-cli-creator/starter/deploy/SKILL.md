@@ -11,6 +11,7 @@ Runs one of this plugin's CLI skills in remote mode (`<skill> mcp --http`) on a 
 ## Pick the CLI skill
 
 The folders under `skills/` that have a `cli/` folder. Ask the Owner which one if there are several. Everything below runs from `skills/<skill>/`, which holds the `Dockerfile` and `.dockerignore`. Nothing host-specific lives there.
+#@shared The plugin shares its repo with other plugins: in the Owner's checkout of `__REPO__` it is the folder `__PLUGIN_DIR__`, so `skills/<skill>/` here and in the host guides means `__PLUGIN_DIR__/skills/<skill>/`.
 
 ## The contract
 
@@ -26,7 +27,7 @@ Any container host works. The image is built from `skills/<skill>/Dockerfile`, w
 
 12+ characters. Two options; offer A.
 
-**Option A (recommended): generate.** Generate it with a CSPRNG and hash it in one command, so the password passes through the chat only once. `bin/<skill>` is missing until `bash install.sh` has run; that downloads the binary from the plugin's latest release. With no release yet, build it: `cd cli && bun install && bun build.ts <bun-target> ../bin/<skill>` (targets: `bun-darwin-arm64`, `bun-darwin-x64`, `bun-linux-x64`, `bun-linux-arm64`, `bun-windows-x64`).
+**Option A (recommended): generate.** Generate it with a CSPRNG and hash it in one command, so the password passes through the chat only once. `bin/<skill>` is missing until `bash install.sh` has run; that downloads the binary for this plugin version (release `__PREFIX__v<version>`). With no release yet, build it: `cd cli && bun install && bun build.ts <bun-target> ../bin/<skill>` (targets: `bun-darwin-arm64`, `bun-darwin-x64`, `bun-linux-x64`, `bun-linux-arm64`, `bun-windows-x64`).
 
 `pw=$(openssl rand -base64 24) && printf 'Owner password: %s\n' "$pw" && printf '%s' "$pw" | bin/<skill> mcp --hash-password`
 

@@ -12,7 +12,7 @@ const IN_REPO = existsSync(join(REPO, ".github/workflows/site-cli-creator.yml"))
 const REPO_REASON = IN_REPO ? "" : " (skipped: not inside the hoaj/site-cli-creator checkout)";
 if (!IN_REPO && process.env.GITHUB_ACTIONS) throw new Error(`expected the hoaj/site-cli-creator checkout above ${PLUGIN}`);
 const GEN = join(PLUGIN, "skills/site-cli-creator");
-const TOKENS = new Set(["__PLUGIN__", "__SKILL__", "__REPO__", "__OWNER__", "__DESCRIPTION__", "__MAINTAINER__", "__GENERATOR_VERSION__", "__ORIGIN__", "__AUTH__"]);
+const TOKENS = new Set(["__PLUGIN__", "__SKILL__", "__REPO__", "__OWNER__", "__DESCRIPTION__", "__MAINTAINER__", "__GENERATOR_VERSION__", "__ORIGIN__", "__AUTH__", "__PREFIX__", "__PLUGIN_DIR__", "__MARKETPLACE__"]);
 
 const read = (p: string) => readFileSync(p, "utf8");
 
@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.8.0, both skills exist", () => {
+  test("version 0.9.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.8.0");
+      expect(m.version).toBe("0.9.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -367,7 +367,7 @@ describe.skipIf(!IN_REPO)(`generator CI workflow${REPO_REASON}`, () => {
 
   test("no workflow stores artifacts (GitHub Free's storage quota blocked every upload in October 2026) and every job has a timeout", () => {
     const files = [join(REPO, ".github/workflows/site-cli-creator.yml")];
-    files.push(join(GEN, "starter/plugin/.github/workflows/ci.yml"), join(GEN, "starter/plugin/.github/workflows/release.yml"));
+    files.push(join(GEN, "starter/plugin/.github/workflows/__PREFIX__ci.yml"), join(GEN, "starter/plugin/.github/workflows/__PREFIX__release.yml"));
     for (const f of files) {
       const text = read(f);
       expect(text).not.toContain("upload-artifact");
@@ -386,7 +386,7 @@ describe.skipIf(!IN_REPO)(`generator CI workflow${REPO_REASON}`, () => {
   });
 
   test("releases put binaries on a draft release and publish it last", () => {
-    for (const f of [join(GEN, "starter/plugin/.github/workflows/release.yml")]) {
+    for (const f of [join(GEN, "starter/plugin/.github/workflows/__PREFIX__release.yml")]) {
       const text = read(f);
       const draft = text.indexOf("gh release create");
       const upload = text.indexOf("gh release upload");

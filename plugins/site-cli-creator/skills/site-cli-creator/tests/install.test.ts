@@ -65,7 +65,7 @@ esac`);
 const CODESIGN = stub(`[ "$1" = -v ] && [ "$CODESIGN_VALID" != 1 ] && exit 1; exit 0`);
 
 // withCurl defaults to false, so the tests that predate the public download drive the gh path.
-type Setup = { needsChrome?: boolean; withGh?: boolean; withCurl?: boolean; skillMd?: string };
+type Setup = { needsChrome?: boolean; withGh?: boolean; withCurl?: boolean; skillMd?: string; prefix?: string };
 
 function makeSkill(name: string, opts: Setup = {}) {
   const dir = join(root, name);
@@ -77,7 +77,8 @@ function makeSkill(name: string, opts: Setup = {}) {
   const script = readFileSync(STARTER_INSTALL, "utf8")
     .replaceAll("__SKILL__", "demo")
     .replaceAll("__REPO__", "acme/demo-plugin")
-    .replaceAll("__OWNER__", "acme");
+    .replaceAll("__OWNER__", "acme")
+    .replaceAll("__PREFIX__", opts.prefix ?? "");
   writeFileSync(join(skill, "install.sh"), script);
   writeFileSync(
     join(skill, "SKILL.md"),
@@ -140,7 +141,7 @@ function run(name: string, opts: Run = {}) {
 describe("install.sh", () => {
   test("the starter keeps its placeholders", () => {
     const src = readFileSync(STARTER_INSTALL, "utf8");
-    for (const token of ["__SKILL__", "__REPO__", "__OWNER__"]) expect(src).toContain(token);
+    for (const token of ["__SKILL__", "__REPO__", "__OWNER__", "__PREFIX__"]) expect(src).toContain(token);
   });
 
   test("stops when neither curl nor gh is there", () => {
@@ -178,6 +179,15 @@ describe("install.sh", () => {
       expect(readFileSync(join(r.skill, "bin", "demo"), "utf8")).toContain(
         "http://127.0.0.1:9/acme/demo-plugin/releases/download/v1.2.3/demo-darwin-arm64",
       );
+    });
+
+    test("a plugin in a shared repo downloads from its own prefixed tag, over HTTPS and through gh", () => {
+      const pub = run("curl-prefix", { withCurl: true, withGh: false, prefix: "demo-", env: { CURL_STUB: "ok" } });
+      expect(pub.code, pub.stderr).toBe(0);
+      expect(readFileSync(join(pub.skill, "bin", "demo"), "utf8")).toBe(`binary from ${URL.replace("/v1.2.3/", "/demo-v1.2.3/")}\n`);
+      const priv = run("curl-prefix-gh", { withCurl: true, prefix: "demo-", env: { CURL_STUB: "404" } });
+      expect(priv.code, priv.stderr).toBe(0);
+      expect(priv.calls.some((c) => c.startsWith("gh release download demo-v1.2.3 --repo acme/demo-plugin"))).toBe(true);
     });
 
     test("a 404 with gh logged in falls back to gh (a private repo)", () => {

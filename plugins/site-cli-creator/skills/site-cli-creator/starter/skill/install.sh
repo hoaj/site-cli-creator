@@ -6,7 +6,7 @@
 #   1. curl or GitHub CLI (gh) present
 #   2. Google Chrome present, when this skill needs it
 #   3. this platform has a release binary
-#   4. download __SKILL__-<target>[.exe] from release v<version>: over HTTPS with curl, which
+#   4. download __SKILL__-<target>[.exe] from release __PREFIX__v<version>: over HTTPS with curl, which
 #      needs no login (a public repo); when that finds nothing and gh is logged in, with
 #      `gh release download` (a private repo the user can see)
 #   5. macOS: strip quarantine, ad-hoc sign if the signature is invalid.
@@ -24,6 +24,8 @@ set -euo pipefail
 
 SKILL="__SKILL__"
 REPO="__REPO__"
+# Release tags are v<version>, or <plugin>-v<version> in a repo that holds other plugins too.
+TAG_PREFIX="__PREFIX__v"
 OWNER="__OWNER__"
 SUPPORTED="darwin-arm64 darwin-x64 linux-x64 linux-arm64 windows-x64"
 
@@ -151,7 +153,7 @@ version="$(first_match "$SKILL_DIR/SKILL.md" '^<!-- version: ([0-9]+\.[0-9]+\.[0
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
 mkdir "$tmp/dl"
-tag="v$version"
+tag="$TAG_PREFIX$version"
 binary="$tmp/dl/$asset"
 url="${SITE_CLI_INSTALL_BASE_URL:-https://github.com}/$REPO/releases/download/$tag/$asset"
 
