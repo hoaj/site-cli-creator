@@ -2,8 +2,8 @@ import { existsSync, readdirSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fail } from "./output";
 
-export const COMMANDS_START = "<!-- commands:start -->";
-export const COMMANDS_END = "<!-- commands:end -->";
+const COMMANDS_START = "<!-- commands:start -->";
+const COMMANDS_END = "<!-- commands:end -->";
 
 /** The modules regen imports: *.ts in a folder, tests and declarations left out, sorted by file name. */
 export function moduleFiles(dir: string): string[] {
@@ -80,7 +80,7 @@ type HelpFlag = {
   value: string;
   description?: string;
 };
-export type HelpCommand = { name: string; summary: string; flags: HelpFlag[]; write: boolean };
+type HelpCommand = { name: string; summary: string; flags: HelpFlag[]; write: boolean };
 
 function normalizeFlag(raw: unknown, key?: string): HelpFlag | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -159,7 +159,6 @@ export function cliPaths(skillDir: string) {
   const cli = join(skillDir, "cli");
   return {
     cli,
-    src: join(cli, "src"),
     operations: join(cli, "src", "operations"),
     commands: join(cli, "src", "commands"),
     registry: join(cli, "src", "registry.ts"),

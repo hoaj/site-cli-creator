@@ -45,7 +45,10 @@ jobs:
         with:
           fetch-depth: 0
       - id: version
-        name: Read the plugin version and look for its tag
+        name: Read the plugin version and look for its release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           version="$(jq -r .version .claude-plugin/plugin.json)"
           tag="$TAG_PREFIX$version"
@@ -70,7 +73,9 @@ jobs:
             echo "::error::main changed logbuy CLI code in $tag without a version bump: open a PR that runs \`bun run bump patch\` in $PLUGIN_DIR. Changed: $(echo "$changed" | tr '\n' ' ')"
             exit 1
           fi
-          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null; then
+          # A published release has its tag. A draft (a run that failed before `publish`) has
+          # none and this job's read-only token cannot see it: `draft` reuses it.
+          if git rev-parse --verify --quiet "refs/tags/$tag" >/dev/null || [ "$(gh release view "$tag" --json isDraft --jq .isDraft 2>/dev/null || true)" = false ]; then
             echo "$tag is already released: nothing to do"
             echo "release=false" >>"$GITHUB_OUTPUT"
           else
@@ -83,12 +88,53 @@ jobs:
           echo "skills=$skills" >>"$GITHUB_OUTPUT"
           echo "CLI skills: $skills"
 
-  build:
+  # The binaries go straight onto a draft release (no workflow artifacts: GitHub Free's storage
+  # quota blocked every upload in October 2026). A draft is invisible to everyone else and has no
+  # tag; `publish` flips it only when every build succeeded. A failed run leaves the draft, and
+  # the next run of the version reuses it. Serialised per version, since GitHub allows two drafts
+  # with one tag name.
+  draft:
     needs: plan
     if: needs.plan.outputs.release == 'true' && needs.plan.outputs.skills != '[]'
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
-      contents: read
+      contents: write
+    concurrency:
+      group: logbuy-draft-${{ needs.plan.outputs.tag }}
+      cancel-in-progress: false
+    outputs:
+      go: ${{ steps.draft.outputs.go }}
+    steps:
+      - id: draft
+        name: Create the draft release unless one exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
+        run: |
+          state="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)"
+          if [ "$state" = false ]; then
+            echo "$TAG was published by an earlier run of the same version: nothing to do"
+            echo "go=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$state" = true ]; then
+            echo "reusing the draft of $TAG from an earlier run"
+          else
+            # --latest=false: the repo's "Latest" release is not any one plugin's.
+            gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "logbuy v$VERSION" --generate-notes --latest=false
+          fi
+          echo "go=true" >>"$GITHUB_OUTPUT"
+
+  build:
+    needs: [plan, draft]
+    if: needs.draft.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
     strategy:
       fail-fast: true
       matrix:
@@ -104,8 +150,11 @@ jobs:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install dependencies
         run: if [ -f bun.lock ]; then bun install --frozen-lockfile; else bun install; fi
-      - name: Build
+      - name: Build and upload to the draft release
         env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ needs.plan.outputs.tag }}
           SKILL: ${{ matrix.skill }}
           TARGET: ${{ matrix.target }}
         run: |
@@ -113,41 +162,32 @@ jobs:
           if [ "$TARGET" = windows-x64 ]; then ext=".exe"; fi
           bun build.ts "bun-$TARGET" "dist/$SKILL-$TARGET$ext"
           ls -la dist
-      - uses: actions/upload-artifact@v7
-        with:
-          name: bin-${{ matrix.skill }}-${{ matrix.target }}
-          path: plugins/logbuy/skills/${{ matrix.skill }}/cli/dist/${{ matrix.skill }}-${{ matrix.target }}*
-          if-no-files-found: error
-          retention-days: 1
+          # --clobber: a rerun of a failed run replaces what an earlier attempt uploaded.
+          gh release upload "$TAG" "dist/$SKILL-$TARGET$ext" --clobber
 
   publish:
     needs: [plan, build]
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     permissions:
       contents: write
     concurrency:
       group: logbuy-publish-${{ needs.plan.outputs.tag }}
       cancel-in-progress: false
     steps:
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: bin-*
-          path: dist
-          merge-multiple: true
-      - name: Create release
+      - name: Publish the draft release
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
-          VERSION: ${{ needs.plan.outputs.version }}
         run: |
-          ls -la dist
-          if gh release view "$TAG" >/dev/null 2>&1; then
+          if [ "$(gh release view "$TAG" --json isDraft --jq .isDraft)" = false ]; then
             echo "$TAG was published by an earlier run of the same version: nothing to do"
             exit 0
           fi
+          gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)\t\(.name)"'
           # --latest=false: the repo's "Latest" release is not any one plugin's.
-          gh release create "$TAG" dist/* --target "$GITHUB_SHA" --title "logbuy v$VERSION" --generate-notes --latest=false
+          gh release edit "$TAG" --draft=false --latest=false
 
   fixed-in:
     needs: [plan, publish]

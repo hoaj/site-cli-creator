@@ -6,7 +6,7 @@ import { z } from "zod";
 import { render } from "./envelope";
 
 /** Protocol versions this server speaks, newest first. A client asking for another gets the first. */
-export const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
+const PROTOCOL_VERSIONS = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 
 export type ToolAnnotations = { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean };
 
@@ -33,6 +33,10 @@ export function inputSchema(schema: z.ZodObject): Record<string, unknown> {
   const { $schema: _, ...json } = z.toJSONSchema(schema, { io: "input", unrepresentable: "any" }) as Record<string, unknown>;
   return json;
 }
+
+/** The tools as `tools/list` shows them (stdio and remote mode alike). */
+export const listedTools = (tools: McpTool[]) =>
+  tools.map((t) => ({ name: t.name, description: t.description, inputSchema: inputSchema(t.schema), annotations: t.annotations }));
 
 /** A tool's output as MCP content: the JSON as text (the CLI's own rendering), an object also as structured content. */
 export function toolResult(output: unknown, code: number) {
@@ -72,9 +76,7 @@ export function createMcpServer(info: ServerInfo, tools: McpTool[]) {
         case "ping":
           return reply(id, {});
         case "tools/list":
-          return reply(id, {
-            tools: tools.map((t) => ({ name: t.name, description: t.description, inputSchema: inputSchema(t.schema), annotations: t.annotations })),
-          });
+          return reply(id, { tools: listedTools(tools) });
         case "tools/call": {
           const tool = typeof params.name === "string" ? byName.get(params.name) : undefined;
           if (!tool) return failure(id, -32602, `Unknown tool: ${String(params.name)}`);

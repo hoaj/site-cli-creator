@@ -18,11 +18,9 @@ import { Failure } from "./envelope";
 import { sameResource, verifyPassword, type OwnerPassword } from "./remote-config";
 import { ensureStateDir, writePrivateJson } from "./session";
 
-export { hashPassword, verifyPassword } from "./remote-config";
-
-export const ACCESS_TTL = 60 * 60; // 1 hour
-export const REFRESH_TTL = 90 * 24 * 60 * 60; // 90 days, renewed by rotation
-export const CODE_TTL = 10 * 60;
+const ACCESS_TTL = 60 * 60; // 1 hour
+const REFRESH_TTL = 90 * 24 * 60 * 60; // 90 days, renewed by rotation
+const CODE_TTL = 10 * 60;
 const LOGIN_TTL = 30 * 60; // an open sign-in page
 const DONE_TTL = 30 * 60; // a used sign-in page, so a re-submit gets a calm answer
 const LOCK_WINDOW = 15 * 60;

@@ -3,7 +3,7 @@
 // (ids, emails, numbers) collapse into a "record" so they can't leak either.
 
 /** What every observed string looked like, never the string: digits only, an ISO date, an ISO date-time. */
-export type StringFormat = "numeric" | "date" | "datetime";
+type StringFormat = "numeric" | "date" | "datetime";
 
 export type Shape =
   | { type: "string"; format?: StringFormat }
@@ -26,7 +26,7 @@ function digitCount(s: string): number {
 const DOTTED_NAME = /[A-Za-z]\.[A-Za-z]/;
 const FILE_EXTENSION = /\.(?:m?js|css|html?|json|xml|txt|ico|png|jpe?g|gif|svg|webp|avif|woff2?|ttf|map|php|aspx?|jsp|cgi|pdf|csv|ics)$/i;
 
-export function isDottedName(text: string): boolean {
+function isDottedName(text: string): boolean {
   return DOTTED_NAME.test(text) && !FILE_EXTENSION.test(text);
 }
 
@@ -49,7 +49,7 @@ export function isValueLikeKey(key: string): boolean {
 }
 
 /** The format class of a string (never the string): numeric (`"399.00"`), ISO date, ISO date-time. */
-export function stringFormat(value: string): StringFormat | undefined {
+function stringFormat(value: string): StringFormat | undefined {
   if (/^-?\d+(?:[.,]\d+)?$/.test(value)) return "numeric";
   if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return "date";
   if (/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}/.test(value)) return "datetime";
@@ -167,7 +167,7 @@ export function mergeShapes(a: Shape, b: Shape): Shape {
 }
 
 /** The same shape with every string format class dropped. */
-export function withoutFormats(shape: Shape): Shape {
+function withoutFormats(shape: Shape): Shape {
   switch (shape.type) {
     case "string":
       return { type: "string" };

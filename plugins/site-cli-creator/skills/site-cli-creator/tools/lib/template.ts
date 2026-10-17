@@ -3,7 +3,7 @@ import { join, relative } from "node:path";
 import { fail } from "./output";
 
 /** The placeholders of ARCHITECTURE §2, without the surrounding underscores. */
-export const TOKEN_NAMES = [
+const TOKEN_NAMES = [
   "PLUGIN",
   "SKILL",
   "REPO",
@@ -14,7 +14,7 @@ export const TOKEN_NAMES = [
   "ORIGIN",
   "AUTH",
 ] as const;
-export type TokenName = (typeof TOKEN_NAMES)[number];
+type TokenName = (typeof TOKEN_NAMES)[number];
 export type Tokens = Partial<Record<TokenName, string>>;
 
 const SKIPPED = new Set(["node_modules", ".DS_Store", "bin"]);
