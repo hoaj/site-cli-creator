@@ -15,7 +15,7 @@ File paths are under `plugins/site-cli-creator/skills/site-cli-creator/` unless 
 | Generator docs | `SKILL.md`, `reference/*.md`, `plugins/site-cli-creator/ARCHITECTURE.md` | `tests/skills-docs.test.ts` (flags in docs match each tool's usage, links resolve) | an instruction that misleads; a missing site pattern |
 | Generator feedback skill | `plugins/site-cli-creator/skills/site-cli-creator-feedback/SKILL.md` | `tests/skills-docs.test.ts` | labels, redaction |
 | Fixture site | `fixtures/site/**`, `fixtures/expected/**` | `tests/fixture-site.test.ts`, `tests/e2e.test.ts` | a real-site pattern the fixture lacks |
-| Generator CI | `.github/workflows/site-cli-creator.yml` (repo root) | `tests/skills-docs.test.ts` ("generator CI workflow"), and the workflow's own run | a smoke target failing |
+| Generator CI | `.github/workflows/site-cli-creator.yml`, `.github/scripts/scaffold-fixture.sh` (both at the repo root) | `tests/skills-docs.test.ts` ("generator CI workflow"), and the workflow's own run | a smoke target failing |
 
 ## Green gate
 

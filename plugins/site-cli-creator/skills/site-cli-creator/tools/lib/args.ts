@@ -61,7 +61,7 @@ export function parseFlags<S extends Spec>(
   return { values: values as Values<S>, positionals: parsed.positionals };
 }
 
-export const KEBAB = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
+const KEBAB = /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/;
 
 export function requireKebab(flag: string, value: string): string {
   if (!KEBAB.test(value)) fail(`--${flag} must be kebab-case (a-z, 0-9, dashes), got "${value}"`);

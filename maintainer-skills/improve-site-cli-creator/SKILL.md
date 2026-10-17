@@ -86,7 +86,7 @@ Every PR that changes `plugins/site-cli-creator` bumps its version: patch for fi
 
 Commit one issue per commit (`site-cli-creator: <summary> (#n)`), push, open a PR titled `site-cli-creator <version>: <summary>`. The body lists each issue as `Fixes #n` with one line on what changed, the cold-read result, and **Starter code reach**: a Starter code change reaches only plugins created after the release, so list the generated plugins whose `generated.json` `generatedWith` is older (the maintainer knows their repos; `gh search code generatedWith --owner <owner> --filename generated.json` finds the ones on GitHub) and whether they should port the change by hand. No Starter change: write "Starter code reach: none".
 
-Watch CI: `gh run watch <id> --repo hoaj/skills --exit-status`. All jobs, including the five run-smoke platforms, must be green.
+Watch CI: `gh run watch <id> --repo hoaj/skills --exit-status`. All jobs must be green. A PR runs the smoke test on linux-x64 only; the five-platform matrix runs on main and on `workflow_dispatch`. Before merging a change to `build.ts`, `install.sh`, `release.yml` or `main.ts`, run it on the branch with `gh workflow run site-cli-creator.yml --ref <branch>` and watch it.
 
 Merge only when the maintainer says so: remove your worktree first (`git worktree remove ../skills-<slug>`), then `gh pr merge <n> --merge --delete-branch`.
 
@@ -96,8 +96,8 @@ Tell the maintainer the PR, the new version, the issues it closes, the cold-read
 
 ## Gotchas
 
-- **Windows binaries:** `import.meta.main` is false in a binary built with the `Bun.build` API's `compile` option on Windows. The Starter `main.ts` guards with `isEntry()`. Keep it, and keep run-smoke on windows-latest green.
+- **Windows binaries:** `import.meta.main` is false in a binary built with the `Bun.build` API's `compile` option on Windows. The Starter `main.ts` guards with `isEntry()`. Keep it, and keep the smoke job on windows-latest green.
 - **No real site data in this repo.** Reports carry shapes only; tests use the fixture site's fake data or values they plant themselves.
-- **CI is the only Windows and Intel-Mac test bed.** A change to `build.ts`, `install.sh`, `release.yml` or `main.ts` is done only when run-smoke passes on all five targets.
+- **CI is the only Windows and Intel-Mac test bed.** A change to `build.ts`, `install.sh`, `release.yml` or `main.ts` is done only when the smoke job passes on all five targets (a PR runs linux-x64 only: dispatch the full matrix on the branch with `gh workflow run site-cli-creator.yml --ref <branch>`).
 
 A worked round (0.2.0, issues #33–#39, PR #40): [references/worked-example.md](references/worked-example.md).

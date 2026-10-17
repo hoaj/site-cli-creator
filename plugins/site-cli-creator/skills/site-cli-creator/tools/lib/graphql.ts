@@ -1,11 +1,9 @@
 import { stripNoise, topLevelDefinitions, type GraphqlType } from "../../starter/skill/cli/src/runtime/graphql";
 import { parseJson, shapeOf, type Shape } from "./shape";
 
-export type GraphqlOperationType = GraphqlType;
-
 export type GraphqlCall = {
   operationName: string | null;
-  operationType: GraphqlOperationType;
+  operationType: GraphqlType;
   /** Query text with string literals, long number literals and comments redacted. */
   query: string | null;
   /** Persisted queries send a hash instead of the text. */
@@ -39,7 +37,7 @@ export function redactQuery(query: string): string {
 export function describeQuery(
   query: string,
   operationName?: string | null,
-): { type: GraphqlOperationType; name: string | null } {
+): { type: GraphqlType; name: string | null } {
   const defs = topLevelDefinitions(stripNoise(query));
   const named = operationName ? defs.find((d) => d.name === operationName) : undefined;
   if (named) return named;
@@ -57,13 +55,13 @@ export function isGraphqlPath(path: string): boolean {
  * `query`, `mutation`, `subscription` or `fragment` and a selection set. A search word
  * (`?query=pizza`) is not, so it stays an ordinary value.
  */
-export function isGraphqlDocument(text: string): boolean {
+function isGraphqlDocument(text: string): boolean {
   const code = stripNoise(text).trim();
   return /^(?:\{|(?:query|mutation|subscription|fragment)\b[^{}]*\{)/.test(code) && code.endsWith("}");
 }
 
 /** Where a request goes: on a GraphQL path any `query` is a document; elsewhere it must look like one. */
-export type GraphqlContext = { graphqlPath?: boolean };
+type GraphqlContext = { graphqlPath?: boolean };
 
 function fromObject(body: Record<string, unknown>, ctx: GraphqlContext = {}): GraphqlCall | null {
   const text = typeof body.query === "string" ? body.query : null;

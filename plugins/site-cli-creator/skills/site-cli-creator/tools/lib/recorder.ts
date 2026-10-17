@@ -22,7 +22,7 @@ import {
 } from "./shape";
 
 /** Header values kept verbatim: they describe the protocol, never the user. */
-export const HEADER_VALUE_ALLOWLIST = new Set([
+const HEADER_VALUE_ALLOWLIST = new Set([
   "content-type",
   "accept",
   "x-requested-with",
@@ -43,13 +43,13 @@ export type RequestInfo = {
   resourceType: string;
 };
 
-export type ResponseInfo = {
+type ResponseInfo = {
   status: number;
   headers: Record<string, string>;
   body: Buffer | null;
 };
 
-export type ResponseShape = {
+type ResponseShape = {
   status: number;
   contentType?: string;
   /** Response header names; values only for the allowlist. Set-Cookie is listed in `setCookies` instead. */
@@ -60,7 +60,7 @@ export type ResponseShape = {
 };
 
 /** The true-or-absent flags an OperationShape may carry, in the order the Capture writes them. */
-export const MARKERS = ["effectUnknown", "loginFlow", "navigation", "allowedRead", "serverAction", "rsc"] as const;
+const MARKERS = ["effectUnknown", "loginFlow", "navigation", "allowedRead", "serverAction", "rsc"] as const;
 
 /** The markers set on `op`, as `{name: true}`. */
 export function markers(op: Partial<Record<(typeof MARKERS)[number], true>>): Partial<Record<(typeof MARKERS)[number], true>> {
@@ -252,7 +252,7 @@ function httpHost(url: string): string | null {
   }
 }
 
-export type RecorderOptions = {
+type RecorderOptions = {
   origin: string;
   /** Login hosts named in site.ts or with --login-host: their requests are sign-in steps. */
   loginHosts?: string[];

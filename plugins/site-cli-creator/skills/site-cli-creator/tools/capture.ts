@@ -13,7 +13,7 @@ import { pathToFileURL } from "node:url";
 import { chromium, type BrowserContext, type Page, type Request } from "playwright-core";
 import { parseFlags, requireKebab } from "./lib/args";
 import { writeJson } from "./lib/manifests";
-import { fail, progress, runTool } from "./lib/output";
+import { fail, firstLine, progress, runTool } from "./lib/output";
 import { CaptureRecorder, markers, shapeFileNames, type Planned } from "./lib/recorder";
 import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
 import { redactPath } from "./lib/shape";
@@ -65,7 +65,7 @@ async function launch(profile: string, headless: boolean): Promise<BrowserContex
       handleSIGTERM: false,
     });
   } catch (error) {
-    fail(`could not start Google Chrome: ${(error as Error).message.split("\n")[0]}`);
+    fail(`could not start Google Chrome: ${firstLine((error as Error).message)}`);
   }
 }
 
@@ -321,8 +321,8 @@ await runTool(async () => {
   try {
     await page.goto(startUrl);
   } catch (error) {
-    if (script) scriptError = new Error(`could not open --url: ${(error as Error).message.split("\n")[0]}`);
-    else progress(`could not open --url (${(error as Error).message.split("\n")[0]}); navigate in the browser`);
+    if (script) scriptError = new Error(`could not open --url: ${firstLine((error as Error).message)}`);
+    else progress(`could not open --url (${firstLine((error as Error).message)}); navigate in the browser`);
   }
   if (script && !scriptError) {
     const finished = script(page).then(
@@ -364,7 +364,7 @@ await runTool(async () => {
   const operations = recorder.operations();
   const dir = join(skillDir, "captures", task);
   if (operations.length === 0) {
-    const why = scriptError ? `--script failed: ${scriptError.message.split("\n")[0]}; ` : "";
+    const why = scriptError ? `--script failed: ${firstLine(scriptError.message)}; ` : "";
     fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was`);
   }
   const files = shapeFileNames(operations, new URL(origin).hostname);
@@ -394,7 +394,7 @@ await runTool(async () => {
   };
   writeJson(join(dir, "index.json"), index);
 
-  if (scriptError) fail(`--script failed: ${scriptError.message.split("\n")[0]} (shapes so far written to ${dir})`);
+  if (scriptError) fail(`--script failed: ${firstLine(scriptError.message)} (shapes so far written to ${dir})`);
   const blockedElsewhere = [...recorder.blockedElsewhere].sort();
   const hints: string[] = [];
   if (values.write && !recorder.wrote) {

@@ -19,7 +19,8 @@ import { ACCOUNT, INVOICES, newStore, SUBSCRIPTIONS, USER } from "../fixtures/si
 import { startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
 import { findChrome } from "../starter/skill/cli/src/runtime/chrome";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
-import { freePort, mcpCall, setupAction, signIn, upload } from "./remote-client";
+import { withFreePort } from "../starter/skill/cli/tests/helpers";
+import { mcpCall, setupAction, signIn, upload } from "./remote-client";
 
 const TOOLS = join(SKILL_ROOT, "tools");
 const BUN = process.execPath;
@@ -694,8 +695,6 @@ for (const auth of ["none", "login"] as const) {
     test("mcp --http serves the same Tasks remotely: sign-in, Setup page upload, tool call", async () => {
       const password = "e2e-owner-password";
       const remoteHome = mkdtempSync(join(work, "remote-state-"));
-      const port = freePort();
-      const base = `http://127.0.0.1:${port}`;
       // The suite's own working Session, taken before the server starts; the server gets it by upload.
       if (auth === "login") expect((await cli(["subscription", "show"])).code).toBe(0);
       const sessionText = auth === "login" ? readFileSync(join(home, "session.json"), "utf8") : "";
@@ -713,17 +712,17 @@ for (const auth of ["none", "login"] as const) {
         expect(hashed.OWNER_PASSWORD_HASH).toStartWith("scrypt$");
         ownerEnv = { OWNER_PASSWORD_HASH: hashed.OWNER_PASSWORD_HASH };
       }
-      const proc = Bun.spawn([binary, "mcp", "--http", "--port", String(port)], {
-        env: cliEnv({ SITE_CLI_HOME: remoteHome, ...ownerEnv, PUBLIC_URL: base }) as Record<string, string>,
-        stdin: "ignore",
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      live.add(proc);
-      const bodies: string[] = [];
-      const stderrText = new Response(proc.stderr).text();
-      let failed = true;
-      try {
+      // A start that dies with the port already taken (freePort frees it before this binds) is tried again on a new port.
+      const launch = async (port: number) => {
+        const base = `http://127.0.0.1:${port}`;
+        const proc = Bun.spawn([binary, "mcp", "--http", "--port", String(port)], {
+          env: cliEnv({ SITE_CLI_HOME: remoteHome, ...ownerEnv, PUBLIC_URL: base }) as Record<string, string>,
+          stdin: "ignore",
+          stdout: "pipe",
+          stderr: "pipe",
+        });
+        live.add(proc);
+        const stderrText = new Response(proc.stderr).text();
         // Race the wait against the process, so a server that dies at start-up fails at once with its stderr.
         const deadline = Date.now() + 30_000;
         let up = false;
@@ -740,8 +739,20 @@ for (const auth of ["none", "login"] as const) {
           }
         })();
         healthy.catch(() => {});
-        await Promise.race([healthy, died]);
+        try {
+          await Promise.race([healthy, died]);
+        } catch (err) {
+          proc.kill("SIGKILL");
+          live.delete(proc);
+          throw err;
+        }
         up = true;
+        return { proc, base, stderrText };
+      };
+      const { proc, base, stderrText } = await withFreePort(launch);
+      const bodies: string[] = [];
+      let failed = true;
+      try {
         const accessToken = await signIn(base, password);
         const call = async (method: string, params?: unknown) => {
           const r = await mcpCall(base, accessToken, method, params);

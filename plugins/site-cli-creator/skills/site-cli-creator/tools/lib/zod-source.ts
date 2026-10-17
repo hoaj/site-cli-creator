@@ -11,7 +11,7 @@ function pad(level: number): string {
 }
 
 /** A place only ever seen as null: its type is unknown, so the draft says so instead of locking in `z.null()`. */
-export const ONLY_NULL = "z.unknown().nullable() /* TODO: only null was seen; decide the type */";
+const ONLY_NULL = "z.unknown().nullable() /* TODO: only null was seen; decide the type */";
 
 const FORMAT_NOTE = { numeric: "numeric string", date: "ISO date string", datetime: "ISO date-time string" } as const;
 
