@@ -514,6 +514,25 @@ describe("Capture safety", () => {
       fields: { sub: { type: "string", format: "numeric" }, account_ref: { type: "string" }, email: { type: "string" }, exp: { type: "number" } },
     });
     expect(bearerClaims("Bearer opaque-token")).toBeUndefined();
+    // Claim names are schema, never collapsed into a record (#86): dotted and namespaced names stay; a claim
+    // name that is itself a value (an email) becomes :id. Nested objects keyed by data still collapse.
+    const idp = `${b64({ alg: "RS256" })}.${b64({
+      iss: "https://login.example.dk",
+      sub: SECRETS.uuid,
+      "pi.sri": "x7Yq",
+      "https://example.dk/claims/roles": ["user"],
+      ciam_id: SECRETS.customerId,
+      individualId: "99812345",
+      authorization_details: [{ type: "account", locations: ["x"] }],
+      households: { [SECRETS.uuid]: "owner" },
+      [SECRETS.email]: true,
+    })}.c2ln`;
+    const claims = bearerClaims(`Bearer ${idp}`) as { type: string; fields: Record<string, { type: string }> };
+    expect(claims.type).toBe("object");
+    expect(Object.keys(claims.fields)).toEqual(["iss", "sub", "pi.sri", "https://example.dk/claims/roles", "ciam_id", "individualId", "authorization_details", "households", ":id"]);
+    expect(claims.fields.households!.type).toBe("record");
+    expect(claims.fields[":id"]).toEqual({ type: "boolean" });
+    assertNoSecrets(JSON.stringify(claims));
     expect(setCookieNames(`csrf_token=${SECRETS.cookie}; Path=/\nsid=x; HttpOnly`)).toEqual(["csrf_token", "sid"]);
 
     const r = new CaptureRecorder({ origin });
