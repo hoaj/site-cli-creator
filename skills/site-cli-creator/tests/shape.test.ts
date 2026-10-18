@@ -536,6 +536,11 @@ describe("Capture safety", () => {
     expect(r.signInSuspect("https://login.example.com/api/begin")).toBe("login.example.com"); // named like a sign-in host
     expect(r.signInSuspect(`${origin}/api/notes`)).toBeUndefined(); // the site's own host
     expect(r.signInSuspect("https://www.google-analytics.com/g/collect")).toBeUndefined();
+    // The site's own subdomains: a page loaded there is just the site, so only a sign-in name makes one a suspect
+    // (an explore walk submits forms on purpose, and every such write is aborted).
+    r.notePageHost("https://shop.example.com/cart");
+    expect(r.signInSuspect("https://shop.example.com/api/cart")).toBeUndefined();
+    expect(r.signInSuspect("https://example.com/api/collect")).toBeUndefined();
     const declared = new CaptureRecorder({ origin, loginHosts: ["idp.partner.net"] });
     declared.notePageHost("https://idp.partner.net/start");
     expect(declared.signInSuspect("https://idp.partner.net/api/begin")).toBeUndefined();
