@@ -30,6 +30,22 @@ function isDottedName(text: string): boolean {
   return DOTTED_NAME.test(text) && !FILE_EXTENSION.test(text);
 }
 
+/** The words and numbers of a name: `getMSISDNList` → get, MSISDN, List; `oauth2Login` → oauth, 2, Login. */
+const NAME_PARTS = /[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+/g;
+
+/**
+ * A per-session random token that appears nowhere else in the traffic (PingFederate's `/as/aB3dE5fGh1/resume`):
+ * 8 or more letters and digits that split into many one- and two-character runs, where a camelCase name
+ * splits into words (`getMSISDNList`, `eSIMsForUser`, `oauth2Login` stay names).
+ */
+function looksRandom(segment: string): boolean {
+  if (segment.length < 8 || !/^[A-Za-z0-9]+$/.test(segment)) return false;
+  const parts = segment.match(NAME_PARTS) ?? [];
+  const average = segment.length / parts.length;
+  if (/\d/.test(segment) && /[A-Za-z]/.test(segment)) return parts.length >= 4 && average < 3;
+  return parts.length >= 5 && average <= 2;
+}
+
 /** A URL path segment that carries data rather than naming a resource. */
 export function isIdLike(segment: string): boolean {
   if (segment === "") return false;
@@ -39,6 +55,7 @@ export function isIdLike(segment: string): boolean {
   if (digitCount(segment) >= 4) return true;
   if (segment.length >= 16 && /\d/.test(segment)) return true;
   if (segment.length >= 24 && /^[\w-]+=*$/.test(segment)) return true; // base64url tokens
+  if (looksRandom(segment)) return true;
   return /[^\w.~-]/.test(segment); // spaces, plus signs, commas: free text
 }
 

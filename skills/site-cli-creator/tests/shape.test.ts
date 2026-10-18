@@ -125,6 +125,10 @@ describe("redactPath", () => {
     ["/api/users/jens.hansen/invoices", "/api/users/:id/invoices"],
     ["/static/app.js", "/static/app.js"],
     ["/.well-known/openid-configuration", "/.well-known/openid-configuration"],
+    // A per-session random segment that appears nowhere else in the traffic (#87): PingFederate's resume path.
+    ["/as/aB3dE5fGh1/resume/as/authorization.ping", "/as/:id/resume/as/:id"],
+    ["/as/QxAbKfPzRt/resume/as/authorization.ping", "/as/:id/resume/as/:id"],
+    ["/flow/k3q9zx7mw2/next", "/flow/:id/next"],
     ["/", "/"],
   ])("%s → %s", (input, expected) => {
     expect(redactPath(input)).toBe(expected);
@@ -132,6 +136,10 @@ describe("redactPath", () => {
 
   test("names stay names", () => {
     for (const seg of ["ecare", "oauth2", "v1", "listFtpdProducts", "post-login", "i18n"]) expect(isIdLike(seg)).toBe(false);
+    // camelCase names with acronyms and digits are not random (#87).
+    for (const seg of ["eSIMsForUser", "oauth2Login", "XMLHttpRequest", "getMSISDNList", "iOSDevices", "s3Bucket", "myYouSee", "openIdConnect", "PaymentMethods", "base64Encoded", "ipv4Address", "x509Certs", "authorization", "subscriptions"]) {
+      expect({ seg, idLike: isIdLike(seg) }).toEqual({ seg, idLike: false });
+    }
   });
 });
 
