@@ -26,7 +26,7 @@ Run these before any mode. Stop at the first failure and tell the user the fix. 
 
 | Mode | Trigger | Read first | Version bump | PR |
 |---|---|---|---|---|
-| `new` | a new site and no plugin yet | [reference/new.md](reference/new.md) | none: starts at `0.1.0` | none: first push to `main` releases `v0.1.0` |
+| `new` | a new site and no plugin yet, in its own repo (`--dir`) or `plugins/<plugin>` of a shared marketplace repo (`--into`) | [reference/new.md](reference/new.md) | none: starts at `0.1.0` | own repo: none, first push to `main` releases `v0.1.0`; shared repo: maintainer merges, releases `<plugin>-v0.1.0` |
 | `add-skill` | another site or another login in an existing plugin | [reference/add-skill.md](reference/add-skill.md) | minor | maintainer merges |
 | `add-task` | a `feature` issue, or the maintainer wants a new Task | [reference/add-task.md](reference/add-task.md) | minor | maintainer merges |
 | `fix` | an issue titled with a Fingerprint (Drift) or `bug: <key>` | [reference/fix.md](reference/fix.md) | patch | Drift: merge when checks are green; bug: maintainer merges |
@@ -68,7 +68,7 @@ Every mode that adds or changes a Task runs this loop. Steps are in [reference/a
 Run from anywhere; paths are absolute or relative to the shell's directory. Every tool prints JSON, and `--help` prints its flags with their meaning. A `next` field in the output is a command to run next. Quote every value that holds a space (`--description "Read your bills"`): an unquoted multi-word value is refused as an unexpected argument.
 
 ```sh
-bun <gen>/tools/new.ts --dir <path> --plugin <name> --repo <owner/name> --description "<text>" --maintainer <login> [--no-labels] [--skip-checks]
+bun <gen>/tools/new.ts --dir <path> | --into <repo root> --plugin <name> --repo <owner/name> --description "<text>" --maintainer <login> [--no-labels] [--skip-checks]
 bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none
 bun <gen>/tools/capture.ts --skill-dir <skill> --task <slug> --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]
 bun <gen>/tools/draft-contract.ts <skill>/captures/<task>/<operation>.shape.json [--name <op>] [--out <file.ts>]
@@ -105,7 +105,7 @@ Every mode that opens a PR bumps in that PR with `bun run bump`: `fix` patch, `a
 
 ## Pull requests
 
-- Branch `<mode>/<short-slug>`; title `<mode>: <what changed>`; body lists Tasks, Operations and Contracts touched, the `check` result, and `Fixes #<n>` for every issue it resolves (the release labels those issues `fixed-in:vX.Y.Z`).
+- Branch `<mode>/<short-slug>`; title `<mode>: <what changed>`; body lists Tasks, Operations and Contracts touched, the `check` result, and `Fixes #<n>` for every issue it resolves (the release labels those issues `fixed-in:vX.Y.Z`, `fixed-in:<plugin>-vX.Y.Z` in a shared repo).
 - Merge automatically only a Drift `fix` without `unverified`, and only after `gh pr checks <n> --watch --fail-fast` and a fresh `bun run version-check origin/main` both pass: then `gh pr merge <n> --squash --delete-branch` (details in [reference/fix.md](reference/fix.md)). Everything else waits for the maintainer.
 - A generator problem (a tool fails, this guidance misleads, Starter code is wrong): offer `site-cli-creator-feedback`.
 

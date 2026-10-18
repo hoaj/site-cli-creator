@@ -1,20 +1,35 @@
-# Pull requests: run every test (version sync, runtime) and require the PR's plugin version to
-# be above main's, so two merges never release the same number. A push to main re-checks every
-# open PR against the new main: a PR whose version no longer is above it goes red (a failing
-# "version above main" status), so a stale green result never lets it merge (SPEC §9).
-name: ci
+# __PLUGIN__'s CI. Pull requests: run every test (version sync, runtime) and require the PR's
+# plugin version to be above main's, so two merges never release the same number. A push to main
+# re-checks every open PR against the new main: a PR whose version no longer is above it goes red
+# (a failing "version above main" status), so a stale green result never lets it merge (SPEC §9).
+# PLUGIN_DIR is the plugin's folder in the repo: "." when the plugin is the repo, else
+# plugins/<plugin> in a repo that holds other plugins too (then this runs only when it changes).
+name: __PREFIX__ci
 
 on:
   pull_request:
+    #@shared paths:
+    #@shared   - __PLUGIN_DIR__/**
+    #@shared   - .github/workflows/__PREFIX__ci.yml
   push:
     branches: [main]
+    #@shared paths:
+    #@shared   - __PLUGIN_DIR__/**
+    #@shared   - .github/workflows/__PREFIX__ci.yml
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.sha }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
+
+env:
+  PLUGIN_DIR: __PLUGIN_DIR__
+
+defaults:
+  run:
+    working-directory: __PLUGIN_DIR__
 
 jobs:
   test:
@@ -61,4 +76,4 @@ jobs:
       - name: Mark open PRs whose version is no longer above main's
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bun scripts/stale-prs.ts --repo "$GITHUB_REPOSITORY" --base main
+        run: bun scripts/stale-prs.ts --repo "$GITHUB_REPOSITORY" --base main --dir "$PLUGIN_DIR"

@@ -5,7 +5,7 @@ import { dirname, join } from "node:path";
 import { copyExpected } from "../fixtures/expected/copy";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
 import { unmetRequirements, versionAtLeast, type Gh, type Probe } from "../tools/lib/requirements";
-import { findTokens } from "../tools/lib/template";
+import { applyLayout, copyTemplate, findTokens } from "../tools/lib/template";
 
 const NEW = join(SKILL_ROOT, "tools", "new.ts");
 const ADD_SKILL = join(SKILL_ROOT, "tools", "add-skill.ts");
@@ -126,7 +126,7 @@ describe("new.ts", () => {
       plugins: [{ name: "shop", source: { source: "local", path: "./" }, policy: { installation: "AVAILABLE", authentication: "ON_INSTALL" }, category: "Productivity" }],
     });
 
-    expect(readJson(join(dir, "generated.json"))).toEqual({ generatedWith: generatorVersion(), maintainer: "octo" });
+    expect(readJson(join(dir, "generated.json"))).toEqual({ generatedWith: generatorVersion(), maintainer: "octo", pluginDir: ".", tagPrefix: "v" });
     expect(readFileSync(join(dir, "README.md"), "utf8")).toContain("Maintainer: @octo (repo acme/shop-plugin, owner acme)");
     const feedback = readFileSync(join(dir, "skills/shop-feedback/SKILL.md"), "utf8");
     expect(feedback).toContain("name: shop-feedback");
@@ -332,7 +332,7 @@ describe("add-skill.ts", () => {
   });
 
   test("--help prints usage and every flag's meaning, exit 0", () => {
-    for (const [tool, flags] of [[NEW, ["--dir", "--plugin", "--repo", "--description", "--maintainer", "--no-labels", "--skip-checks"]], [ADD_SKILL, ["--dir", "--skill", "--origin", "--auth"]]] as const) {
+    for (const [tool, flags] of [[NEW, ["--dir", "--into", "--plugin", "--repo", "--description", "--maintainer", "--no-labels", "--skip-checks"]], [ADD_SKILL, ["--dir", "--skill", "--origin", "--auth"]]] as const) {
       const r = run(tool, ["--help"]);
       expect(r.code).toBe(0);
       expect(Object.keys(r.out.flags)).toEqual([...flags]);
@@ -464,9 +464,224 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
   }, 900_000);
 });
 
+// A plugin added to a repo that holds several plugins and one marketplace (hoaj/plugins): the
+// plugin in plugins/<plugin>/, its workflows at the repo root, tags and labels named after it.
+describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", () => {
+  const env = { STARTER_DIR: REAL_STARTER };
+  const MARKETS = [".claude-plugin/marketplace.json", ".cursor-plugin/marketplace.json", ".github/plugin/marketplace.json"];
+  // Hand-formatted, as a maintainer writes it: new.ts must keep the formatting and the other entries.
+  const market = `{
+  "name": "acme",
+  "owner": { "name": "Acme", "url": "https://github.com/acme" },
+  "metadata": { "description": "Acme's plugins", "version": "1.0.0" },
+  "plugins": [
+    {
+      "name": "other",
+      "source": "./plugins/other",
+      "description": "Another plugin.",
+      "category": "shopping"
+    }
+  ]
+}
+`;
+  const otherCi = "name: other-ci\non:\n  push:\n    branches: [main]\njobs: {}\n";
+
+  function monorepo(name: string, markets = MARKETS): string {
+    const root = join(work, name);
+    for (const m of markets) write(join(root, m), market);
+    write(join(root, "plugins/other/.claude-plugin/plugin.json"), JSON.stringify({ name: "other", version: "1.2.3" }));
+    write(join(root, ".github/workflows/other-ci.yml"), otherCi);
+    mkdirSync(join(root, ".git"), { recursive: true });
+    return root;
+  }
+  const intoArgs = (root: string, extra: string[] = []) => [
+    "--into", root, "--plugin", "shop", "--repo", "acme/plugins", "--description", "Shop things.", "--maintainer", "octo", "--skip-checks", ...extra,
+  ];
+
+  let root: string;
+  let created: Result;
+  beforeAll(() => {
+    root = monorepo("mono");
+    created = run(NEW, intoArgs(root, ["--no-labels"]), env);
+  });
+
+  test("writes the plugin to plugins/<plugin> with no marketplace of its own, and records the layout in generated.json", () => {
+    expect(created.code, JSON.stringify(created.out)).toBe(0);
+    const dir = join(root, "plugins/shop");
+    expect(created.out).toMatchObject({ dir, root, plugin: "shop", repo: "acme/plugins", version: "0.1.0", tagPrefix: "shop-v" });
+    expect(created.out.next).toStartWith(`bun ${join(SKILL_ROOT, "tools", "add-skill.ts")} --dir ${dir}`);
+    for (const f of [".claude-plugin/plugin.json", ".codex-plugin/plugin.json", "package.json", "scripts/bump.ts", "scripts/fixed-in.ts", "tests/version-sync.test.ts", "README.md", "skills/shop-feedback/SKILL.md", "skills/shop-deploy/SKILL.md"]) {
+      expect(existsSync(join(dir, f)), f).toBe(true);
+    }
+    for (const f of [...MARKETS, ".agents/plugins/marketplace.json", ".github/workflows"]) expect(existsSync(join(dir, f)), f).toBe(false);
+    expect(readJson(join(dir, "generated.json"))).toEqual({ generatedWith: generatorVersion(), maintainer: "octo", pluginDir: "plugins/shop", tagPrefix: "shop-v" });
+    const claude = readJson(join(dir, ".claude-plugin/plugin.json"));
+    expect(claude.homepage).toBe("https://github.com/acme/plugins/tree/main/plugins/shop");
+    expect(claude.repository).toBe("https://github.com/acme/plugins");
+    expect(created.out.files).toContain(".github/workflows/shop-ci.yml");
+    expect(created.out.files).toContain("plugins/shop/generated.json");
+    expect(findTokens(root)).toEqual([]);
+  });
+
+  test("adds one entry to each root marketplace file, keeping its formatting and the other plugins", () => {
+    for (const m of MARKETS) {
+      const text = readFileSync(join(root, m), "utf8");
+      expect(text, m).toStartWith(market.slice(0, market.lastIndexOf("    }") + 5));
+      expect(text).toContain('"owner": { "name": "Acme", "url": "https://github.com/acme" }');
+      const parsed = JSON.parse(text);
+      expect(parsed.name).toBe("acme");
+      expect(parsed.plugins).toEqual([
+        { name: "other", source: "./plugins/other", description: "Another plugin.", category: "shopping" },
+        { name: "shop", source: "./plugins/shop", description: "Shop things." },
+      ]);
+    }
+    expect(created.out.marketplaces).toEqual(MARKETS);
+  });
+
+  test("writes <plugin>-ci.yml and <plugin>-release.yml at the repo root, path-filtered to the plugin, with prefixed tags", () => {
+    expect(readFileSync(join(root, ".github/workflows/other-ci.yml"), "utf8")).toBe(otherCi);
+    const ci = readFileSync(join(root, ".github/workflows/shop-ci.yml"), "utf8");
+    const release = readFileSync(join(root, ".github/workflows/shop-release.yml"), "utf8");
+    for (const [wf, file] of [[ci, "shop-ci.yml"], [release, "shop-release.yml"]] as const) {
+      expect(wf).not.toContain("#@");
+      expect(wf).toContain(`name: ${file.replace(".yml", "")}\n`);
+      expect(wf).toContain(`    paths:\n      - plugins/shop/**\n      - .github/workflows/${file}\n`);
+      expect(wf).toContain("PLUGIN_DIR: plugins/shop\n");
+      expect(wf).toContain("working-directory: plugins/shop\n");
+    }
+    expect(ci).toMatch(/pull_request:\n {4}paths:/);
+    expect(ci).toContain('--base main --dir "$PLUGIN_DIR"');
+    expect(release).toContain("TAG_PREFIX: shop-v\n");
+    expect(release).toContain('tag="$TAG_PREFIX$version"');
+    expect(release).toContain('--title "shop v$VERSION" "${notes[@]}" --latest=false');
+    // Notes start at this plugin's previous tag, never another plugin's release in the repo.
+    expect(release).toContain('grep -E "^${TAG_PREFIX}[0-9]+\\.[0-9]+\\.[0-9]+$"');
+    expect(release).toContain('notes+=(--notes-start-tag "$prev")');
+    expect(release).toContain('gh release edit "$TAG" --draft=false --latest=false');
+    expect(release).toContain("working-directory: plugins/shop/skills/${{ matrix.skill }}/cli");
+    expect(release).toContain('bun "$PLUGIN_DIR/scripts/fixed-in.ts" "$TAG" --repo "$GITHUB_REPOSITORY" --branch main --dir "$PLUGIN_DIR"');
+  });
+
+  // The green gate lints the Starter's workflows in place; this lints what the layout lines make of them.
+  test.skipIf(!Bun.which("actionlint"))("actionlint passes on the generated workflows (skipped without actionlint)", () => {
+    const files = ["shop-ci.yml", "shop-release.yml"].map((f) => join(root, ".github/workflows", f));
+    const proc = Bun.spawnSync(["actionlint", ...files], { stdout: "pipe", stderr: "pipe" });
+    expect(proc.exitCode, proc.stdout.toString() + proc.stderr.toString()).toBe(0);
+  });
+
+  test("the Feedback skill, README and Deploy skill name the shared repo, the plugin's label and its tags", () => {
+    const dir = join(root, "plugins/shop");
+    const fb = readFileSync(join(dir, "skills/shop-feedback/SKILL.md"), "utf8");
+    expect(fb).not.toContain("#@");
+    for (const s of ["gh issue create --repo acme/plugins --title \"$title\" --label shop --label <label>", "labels=shop,<label>", "fixed-in:shop-vX.Y.Z", "Every issue also gets the label `shop`", `--search '"feature: <skill>:" in:title'`]) {
+      expect(fb).toContain(s);
+    }
+    const readme = readFileSync(join(dir, "README.md"), "utf8");
+    expect(readme).not.toContain("#@");
+    for (const s of ["/plugin marketplace add acme/plugins", "/plugin install shop@acme", "`shop-v<version>`", "bash plugins/shop/skills/<skill>/install.sh", "--label shop", ".github/workflows/shop-release.yml"]) {
+      expect(readme).toContain(s);
+    }
+    expect(readme).not.toContain("codex plugin");
+    const deploy = readFileSync(join(dir, "skills/shop-deploy/SKILL.md"), "utf8");
+    expect(deploy).toContain("plugins/shop/skills/<skill>/");
+    expect(deploy).toContain("`shop-v<version>`");
+  });
+
+  test("add-skill reads the layout from generated.json: install.sh downloads from <plugin>-v<version>", () => {
+    const dir = join(root, "plugins/shop");
+    const added = run(ADD_SKILL, ["--dir", dir, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "none"], env);
+    expect(added.code, JSON.stringify(added.out)).toBe(0);
+    expect(readFileSync(join(dir, "skills/shop/install.sh"), "utf8")).toContain('TAG_PREFIX="shop-v"');
+    expect(findTokens(root)).toEqual([]);
+    // A plugin in its own repo keeps v<version>.
+    const own = join(work, "own-prefix");
+    expect(run(NEW, newArgs(own, ["--no-labels"]), env).code).toBe(0);
+    expect(run(ADD_SKILL, ["--dir", own, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "none"], env).code).toBe(0);
+    expect(readFileSync(join(own, "skills/shop/install.sh"), "utf8")).toContain('TAG_PREFIX="v"');
+    expect(readJson(join(own, "generated.json"))).toMatchObject({ pluginDir: ".", tagPrefix: "v" });
+  });
+
+  test("the plugin's own script and version tests pass in its folder", () => {
+    const proc = Bun.spawnSync([process.execPath, "test", "./tests"], { cwd: join(root, "plugins/shop"), stdout: "pipe", stderr: "pipe", env: cleanEnv() });
+    const out = proc.stderr.toString().replace(/\x1b\[[0-9;]*m/g, "");
+    expect(out).toMatch(/^ 0 fail$/m);
+    expect(proc.exitCode, out).toBe(0);
+  }, 60_000);
+
+  test("creates the shared labels and one named after the plugin", () => {
+    const bin = join(work, "gh-bin-into");
+    const log = join(work, "gh-into.log");
+    write(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`, 0o755);
+    const r = run(NEW, intoArgs(monorepo("mono-labels")), { ...env, PATH: `${bin}:${process.env.PATH}` });
+    expect(r.code, JSON.stringify(r.out)).toBe(0);
+    const names = ["feature", "drift", "bug", "unverified", "needs-account", "shop"];
+    expect(r.out.labels).toEqual({ created: names });
+    const calls = readFileSync(log, "utf8").trim().split("\n");
+    for (const [i, name] of names.entries()) expect(calls[i]).toStartWith(`label create ${name} --repo acme/plugins --force`);
+  });
+
+  test("refuses, writing nothing, a root without marketplace files, an existing plugin folder, workflow or marketplace entry", () => {
+    const bare = join(work, "mono-bare");
+    write(join(bare, "README.md"), "x");
+    const noMarket = run(NEW, intoArgs(bare, ["--no-labels"]), env);
+    expect(noMarket.code).toBe(1);
+    expect(noMarket.out.error.message).toContain("no marketplace file");
+    expect(existsSync(join(bare, "plugins"))).toBe(false);
+
+    const cases: [string, (r: string) => void, string][] = [
+      ["mono-dir", (r) => write(join(r, "plugins/shop/README.md"), "x"), "plugins/shop"],
+      ["mono-wf", (r) => write(join(r, ".github/workflows/shop-release.yml"), "x"), "shop-release.yml"],
+      ["mono-listed", (r) => write(join(r, ".cursor-plugin/marketplace.json"), JSON.stringify({ name: "acme", plugins: [{ name: "shop", source: "./x" }] })), "already lists"],
+    ];
+    for (const [name, prepare, message] of cases) {
+      const r = monorepo(name);
+      prepare(r);
+      const out = run(NEW, intoArgs(r, ["--no-labels"]), env);
+      expect(out.code, name).toBe(1);
+      expect(out.out.error.message, name).toContain(message);
+      expect(readFileSync(join(r, ".claude-plugin/marketplace.json"), "utf8"), name).toBe(market);
+      expect(existsSync(join(r, ".github/workflows/shop-ci.yml")), name).toBe(false);
+    }
+    expect(run(NEW, [...intoArgs(monorepo("mono-both"), ["--no-labels"]), "--dir", join(work, "x")], env).out.error.message).toContain("pass either --dir");
+    expect(run(NEW, intoArgs(monorepo("mono-neither"), ["--no-labels"]).slice(2), env).out.error.message).toContain("pass either --dir");
+  });
+});
+
 /** The environment without anything a developer's shell may have set for site CLIs. */
 function cleanEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined && !k.startsWith("SITE_CLI_") && k !== "STARTER_DIR") env[k] = v;
   return env;
 }
+
+// Windows smoke (2026-10-18): new.ts skips the Starter's .github/workflows by comparing with
+// ".github/workflows"; Windows' "\" made it copy the workflows twice and refuse to overwrite.
+describe("copyTemplate skip", () => {
+  test("sees nested paths with / on every OS", () => {
+    const src = mkdtempSync(join(tmpdir(), "copy-skip-src-"));
+    const dest = mkdtempSync(join(tmpdir(), "copy-skip-dest-"));
+    try {
+      mkdirSync(join(src, ".github", "workflows"), { recursive: true });
+      writeFileSync(join(src, ".github", "workflows", "ci.yml"), "x");
+      writeFileSync(join(src, "README.md"), "y");
+      const seen: string[] = [];
+      const written = copyTemplate(src, join(dest, "out"), {}, { skip: (rel) => (seen.push(rel), rel === ".github/workflows") });
+      expect(seen).toContain(".github/workflows");
+      expect(seen.every((r) => !r.includes("\\"))).toBe(true);
+      expect(written).toEqual(["README.md"]);
+    } finally {
+      rmSync(src, { recursive: true, force: true });
+      rmSync(dest, { recursive: true, force: true });
+    }
+  });
+});
+
+// Windows smoke (2026-10-18): a Windows checkout has CRLF endings, and the layout lines stayed.
+describe("applyLayout with CRLF", () => {
+  test("keeps the layout's lines without their marker and drops the other's, keeping CRLF", () => {
+    const text = "a\r\n  #@shared paths: x\r\n  #@standalone gone\r\n#@shared\r\nb\r\n";
+    expect(applyLayout(text, "shared")).toBe("a\r\n  paths: x\r\n\r\nb\r\n");
+    expect(applyLayout(text, "standalone")).toBe("a\r\n  gone\r\nb\r\n");
+    expect(applyLayout("x\n#@shared y\n", "shared")).toBe("x\ny\n");
+  });
+});

@@ -1,6 +1,7 @@
 # Deploy on Railway
 
 Run from `skills/<skill>/`, with the Railway CLI logged in (`railway login`). Written against 5.63. Run `railway <command> --help` if a flag differs on your version. `<service-id>` is the service's ID from step 1.
+#@shared In the checkout of `__REPO__`, that folder is `__PLUGIN_DIR__/skills/<skill>/`.
 
 There is no Railway config file in the folder. Railway ignores its JSON config file for every service created today (Config as Code is closed to new services), and its replacement, an IaC file, needs an npm package and owns the whole project. Railway's defaults cover the rest: it always builds a `Dockerfile` at the folder's root, runs one replica and restarts on failure. The health check is step 5.
 

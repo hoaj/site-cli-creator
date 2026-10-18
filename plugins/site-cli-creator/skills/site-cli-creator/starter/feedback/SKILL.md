@@ -7,6 +7,7 @@ description: Files a problem with the __PLUGIN__ plugin as a GitHub issue on __R
 # __PLUGIN__ feedback
 
 A CLI skill in this plugin hit Drift or a bug, or it lacks a Task the user needs. Draft one issue for `__REPO__`, show it to the user, and file it only on a yes. The maintainer's generator picks it up from there.
+#@shared The plugin lives in `__PLUGIN_DIR__` of that repo, alongside other plugins, so its issues carry the label `__PLUGIN__` and its releases are tagged `__PREFIX__vX.Y.Z`.
 
 ## When to use
 
@@ -37,17 +38,21 @@ EOF
 gh issue list --repo __REPO__ --state all --search "\"$key\" in:title" --json number,title,state,labels,closedAt,url
 ```
 
-Feature: list open feature requests and judge by meaning.
+#@standalone Feature: list open feature requests and judge by meaning.
+#@shared Feature: list the open feature requests for the CLI skill the Task belongs to (the repo holds other plugins' requests too, so search by title) and judge by meaning.
 
 ```sh
-gh issue list --repo __REPO__ --state open --label feature --json number,title,url
+#@standalone gh issue list --repo __REPO__ --state open --label feature --json number,title,url
+#@shared gh issue list --repo __REPO__ --state open --search '"feature: <skill>:" in:title' --json number,title,url
 ```
 
 GitHub's search is fuzzy: for Drift and bug, a match is only an issue whose title is exactly the title step 3 would write (the Fingerprint, or `bug: <bug key>`). For Drift, also note open issues whose title starts with the same `<plugin>:<skill>:<operation>:` (the same Operation, seen another way, such as by `check` instead of a command); they are not matches, but the body names them (step 3). When `gh` is missing or not logged in, skip the search and go to step 3; step 4 gives the user a link instead.
 
 ### 2. Decide what to do
 
-Compare `fixed-in:vX.Y.Z` labels with the envelope's `version` as semantic versions. Several matches are normal (a closed issue and the issue filed when it came back), so take the first row that fits, top to bottom:
+Compare `fixed-in:__PREFIX__vX.Y.Z` labels with the envelope's `version` as semantic versions.
+#@shared Other plugins in the repo have their own `fixed-in` labels: ignore every one that does not start with `fixed-in:__PREFIX__v`.
+Several matches are normal (a closed issue and the issue filed when it came back), so take the first row that fits, top to bottom:
 
 | Match | Action | Files a new issue |
 |---|---|---|
@@ -68,7 +73,8 @@ With no open match and several closed ones, judge the closed rows by the most re
 | bug | `bug: <bug key>` | `bug` |
 | feature | `feature: <skill>: <Task in plain words>` | `feature` |
 
-The label lets the maintainer filter the queue; dedup still goes by the exact title (step 1).
+#@standalone The label lets the maintainer filter the queue; dedup still goes by the exact title (step 1).
+#@shared Every issue also gets the label `__PLUGIN__`, so the maintainer can tell it from the other plugins' issues in the repo. The labels filter the queue; dedup still goes by the exact title (step 1).
 
 Body for drift and bug:
 
@@ -97,18 +103,20 @@ title=$(cat <<'EOF'
 <title>
 EOF
 )
-gh issue create --repo __REPO__ --title "$title" --label <label> --body-file - <<'EOF'
+#@standalone gh issue create --repo __REPO__ --title "$title" --label <label> --body-file - <<'EOF'
+#@shared gh issue create --repo __REPO__ --title "$title" --label __PLUGIN__ --label <label> --body-file - <<'EOF'
 <body>
 EOF
 gh issue comment <n> --repo __REPO__ --body "+1 on <version>, <os>"
 ```
 
-Set the title the same byte-exact way as the key in step 1, so the next user's search finds this issue. `<label>` is the one from step 3; if `gh` says the label does not exist (a repo set up before it), file again without `--label`.
+Set the title the same byte-exact way as the key in step 1, so the next user's search finds this issue. `<label>` is the one from step 3; if `gh` says a label does not exist (a repo set up before it), file again without that `--label`.
 
 Without `gh`, without a login, or when `gh` is refused permission: give the user a pre-filled link to open instead, with the title, body and label URL-encoded:
 
 ```
-https://github.com/__REPO__/issues/new?title=<title>&body=<body>&labels=<label>
+#@standalone https://github.com/__REPO__/issues/new?title=<title>&body=<body>&labels=<label>
+#@shared https://github.com/__REPO__/issues/new?title=<title>&body=<body>&labels=__PLUGIN__,<label>
 ```
 
 Duplicates filed this way are caught later by the maintainer through the Fingerprint.
