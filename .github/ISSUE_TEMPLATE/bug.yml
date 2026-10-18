@@ -1,0 +1,47 @@
+name: Bug report
+description: A generator tool, mode or piece of guidance got in the way.
+labels: ["site-cli-creator", "bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repo is public. Keep shapes, type names, field paths and Operation names. Replace site values, tokens and cookies with `<redacted>`.
+  - type: textarea
+    id: intent
+    attributes:
+      label: Intent
+      description: What you were doing, in plain words, and which mode.
+    validations:
+      required: true
+  - type: textarea
+    id: where
+    attributes:
+      label: Where
+      description: The tool and its exact command line, or the SKILL.md / reference section you followed.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual
+      description: The output, verbatim after redaction.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Generator version, `bun --version`, OS.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggestion
+      description: A fix idea, if you have one.
