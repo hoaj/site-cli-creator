@@ -10,7 +10,7 @@ Glossary terms (**Task**, **CLI skill**, **Feedback skill**, **Starter code**, *
 
 | Part | Who runs it | What it is |
 |---|---|---|
-| **site-cli-creator** | the maintainer | a plugin in `hoaj/site-cli-creator`: the generator skill (SKILL.md, the Starter code, the Capture tool) and `site-cli-creator-feedback` |
+| **site-cli-creator** | the maintainer | the plugin at the root of `hoaj/site-cli-creator` (its `skills/` ship to users): the generator skill (SKILL.md, the Starter code, the Capture tool) and `site-cli-creator-feedback` |
 | **Generated plugin** | many users | its own repo (or `plugins/<plugin>/` of a shared marketplace repo, §4), holding one or more CLI skills, one Deploy skill, one Feedback skill, four manifests and a release workflow |
 | **CLI skill** | users' agents | `skills/<skill>/`: a SKILL.md and a compiled CLI for one site, with one login or none (§7) |
 | **Deploy skill** | the Owner's agent | `skills/<plugin>-deploy/`: runs a CLI skill in remote mode on a host the Owner controls (Railway first), see **Deploy shape** in §8 |

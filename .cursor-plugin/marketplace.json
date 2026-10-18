@@ -7,7 +7,7 @@
   "plugins": [
     {
       "name": "site-cli-creator",
-      "source": "./plugins/site-cli-creator",
+      "source": "./",
       "description": "Turn the calls a website makes into a plugin of CLI skills that coding agents can run, with Drift checks and a feedback loop."
     }
   ]

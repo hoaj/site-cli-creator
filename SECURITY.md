@@ -7,7 +7,7 @@ Report it privately: open the [Security tab](https://github.com/hoaj/site-cli-cr
 Include:
 
 - what the problem is and which part it affects
-- the version (`plugins/site-cli-creator/.claude-plugin/plugin.json`)
+- the version (`.claude-plugin/plugin.json`)
 - steps to reproduce, with shapes and type names only, never real site data, tokens or cookies
 - the impact you see
 
