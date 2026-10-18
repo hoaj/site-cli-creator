@@ -489,6 +489,58 @@ describe("Capture safety", () => {
     expect(r.allowElsewhere({ method: "POST", url: "data:text/plain,x", resourceType: "fetch" })).toBe(true);
   });
 
+  test("an OAuth token request (a POST whose body has grant_type) is a sign-in step on any host (#85)", () => {
+    const form = (url: string, extra: Partial<RequestInfo> = {}) =>
+      req({
+        url,
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        postData: Buffer.from("grant_type=authorization_code&code=c0de1234&code_verifier=v3r1f13r&client_id=web&redirect_uri=https%3A%2F%2Fwww.example.com%2Fcb"),
+        ...extra,
+      });
+    // login.<site> is in scope but not declared: the token exchange is a fetch to a path no sign-in word names.
+    const r = new CaptureRecorder({ origin });
+    const exchange = r.plan(form("https://login.example.com/as/token.oauth2"))!;
+    expect({ loginFlow: exchange.loginFlow, abort: r.shouldAbort(exchange) }).toEqual({ loginFlow: true, abort: false });
+    expect([...r.signInHosts]).toEqual(["login.example.com"]);
+    // A JSON refresh on the site's own API, and a token request on a host outside the Capture.
+    const refresh = r.plan(post(`${origin}/api/oauth/v2`, { grant_type: "refresh_token", refresh_token: SECRETS.token }))!;
+    expect(r.shouldAbort(refresh)).toBe(false);
+    expect(r.allowElsewhere(form("https://idp.partner.net/as/token.oauth2"))).toBe(true);
+    // Not a token request: no grant_type, or a grant_type that is only a word in the path.
+    expect(r.shouldAbort(r.plan(post(`${origin}/api/grants`, { type: "account" }))!)).toBe(true);
+    expect(r.shouldAbort(r.plan(post(`${origin}/api/grant_type`, {}))!)).toBe(true);
+    expect(r.allowElsewhere(req({ url: "https://idp.partner.net/oauth/revoke", method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, postData: Buffer.from("token=abc") }))).toBe(false);
+  });
+
+  test("well-known eID and sign-in providers are login hosts without --login-host (#85)", () => {
+    const r = new CaptureRecorder({ origin });
+    for (const url of ["https://signicat-id.mitid.dk/std/method/acme/x1/api/initAuth", "https://acme.criipto.id/oauth2/authorize", "https://acme.eu.auth0.com/u/login", "https://acme.okta.com/api/v1/authn"]) {
+      expect(r.inScope(url), url).toBe(true);
+      const plan = r.plan(post(url))!;
+      expect({ url, loginFlow: plan.loginFlow, abort: r.shouldAbort(plan) }).toEqual({ url, loginFlow: true, abort: false });
+    }
+    expect([...r.signInHosts].sort()).toEqual(["acme.criipto.id", "acme.eu.auth0.com", "acme.okta.com", "signicat-id.mitid.dk"]);
+    // Only those domains: a look-alike is not one.
+    expect(r.inScope("https://mitid.dk.example.net/api/initAuth")).toBe(false);
+    expect(r.inScope("https://notmitid.dk/api/initAuth")).toBe(false);
+    // Even there, a change to the account is no sign-in step.
+    expect(r.shouldAbort(r.plan(post("https://acme.okta.com/api/v1/users/me/logout"))!)).toBe(true);
+  });
+
+  test("a write aborted on a host this tab navigated to names --login-host at once (#85)", () => {
+    const r = new CaptureRecorder({ origin });
+    r.notePageHost("https://idp.partner.net/start");
+    r.notePageHost(`${origin}/home`);
+    expect(r.signInSuspect("https://idp.partner.net/api/begin")).toBe("idp.partner.net");
+    expect(r.signInSuspect("https://login.example.com/api/begin")).toBe("login.example.com"); // named like a sign-in host
+    expect(r.signInSuspect(`${origin}/api/notes`)).toBeUndefined(); // the site's own host
+    expect(r.signInSuspect("https://www.google-analytics.com/g/collect")).toBeUndefined();
+    const declared = new CaptureRecorder({ origin, loginHosts: ["idp.partner.net"] });
+    declared.notePageHost("https://idp.partner.net/start");
+    expect(declared.signInSuspect("https://idp.partner.net/api/begin")).toBeUndefined();
+  });
+
   test("a path segment that is a value the page sent or received becomes :id", () => {
     const r = new CaptureRecorder({ origin });
     const get = (path: string, body: unknown) => {

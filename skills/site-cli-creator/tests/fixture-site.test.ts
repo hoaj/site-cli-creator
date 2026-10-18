@@ -229,6 +229,13 @@ describe("fixture site, auth login", () => {
     expect((await fetch(`${site.loginUrl}/graphql`, { method: "POST" })).status).toBe(404);
   });
 
+  test("the login form works only after the page has started a sign-in flow with a POST on the login host (#85)", async () => {
+    const page = await (await fetch(`${site.loginUrl}/login`)).text();
+    expect(page).toContain('<button type="submit" disabled>');
+    expect(page).toContain('fetch("/u/flow/begin", { method: "POST"');
+    expect((await fetch(`${site.loginUrl}/u/flow/begin`, { method: "POST", body: "{}" })).status).toBe(200);
+  });
+
   test("the login form accepts test/test only, and its code works once", async () => {
     const post = (username: string, password: string) =>
       fetch(`${site.loginUrl}/login`, { method: "POST", body: new URLSearchParams({ username, password }), redirect: "manual" });
