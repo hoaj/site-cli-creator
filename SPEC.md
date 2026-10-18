@@ -55,7 +55,7 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cl
 
 ## 4. Generated plugin layout
 
-Decided in [Template command surface and SKILL.md layout](https://github.com/hoaj/site-cli-creator/issues/6) and [One site per plugin, or several?](https://github.com/hoaj/site-cli-creator/issues/12). A prototype of one CLI skill (the older single-skill layout, reference only, see §5) is on [`prototype/template-command-surface`](https://github.com/hoaj/site-cli-creator/tree/prototype/template-command-surface/prototypes/yousee-plugin-PROTOTYPE).
+Decided in [Template command surface and SKILL.md layout](https://github.com/hoaj/site-cli-creator/issues/6) and [One site per plugin, or several?](https://github.com/hoaj/site-cli-creator/issues/12). A prototype of one CLI skill (the older single-skill layout, reference only, see §5) is on [`prototype/template-command-surface`](https://github.com/hoaj/site-cli-creator/tree/archive/prototype/template-command-surface/prototypes/yousee-plugin-PROTOTYPE).
 
 ```
 <plugin>/                                   own repo, public by default
