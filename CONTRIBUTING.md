@@ -2,9 +2,9 @@
 
 ## Layout
 
-- `plugins/site-cli-creator/`: the plugin. The generator skill is in `skills/site-cli-creator/` (tools, Starter code, reference docs, tests, fixture site); the generator's feedback skill is in `skills/site-cli-creator-feedback/`.
-- `maintainer-skills/`: skills for changing the generator. They never ship to users and load here through `.claude/skills/`.
-- `SPEC.md`, `CONTEXT.md`, `plugins/site-cli-creator/ARCHITECTURE.md`: the spec, glossary and implementation contract. SPEC.md wins when they disagree.
+- The repo root is the plugin (manifests in `.claude-plugin/`, `.cursor-plugin/`, `.github/plugin/`). `skills/` is what ships to users: the generator skill is in `skills/site-cli-creator/` (tools, Starter code, reference docs, tests, fixture site); the generator's feedback skill is in `skills/site-cli-creator-feedback/`.
+- `.claude/skills/`: skills for changing the generator. Claude Code never loads `.claude/` from an installed plugin, so they never ship to users.
+- `SPEC.md`, `CONTEXT.md`, `ARCHITECTURE.md`: the spec, glossary and implementation contract. SPEC.md wins when they disagree.
 - `.github/workflows/site-cli-creator.yml`: the generator's CI.
 
 ## Setup
@@ -12,28 +12,28 @@
 You need Bun 1.4.3 (the version CI uses), Google Chrome, `actionlint` and `shellcheck`. Without Chrome the browser tests skip.
 
 ```sh
-cd plugins/site-cli-creator && bun install --frozen-lockfile
+bun install --frozen-lockfile
 ```
 
-Step-by-step installs: [setup.md](./maintainer-skills/improve-site-cli-creator/references/setup.md).
+Step-by-step installs: [setup.md](./.claude/skills/improve-site-cli-creator/references/setup.md).
 
 ## Before you open a PR
 
-Run the green gate from `plugins/site-cli-creator`:
+Run the green gate from the repo root:
 
 ```sh
 bun test
 bun x tsc --noEmit -p .
 bun x tsc --noEmit -p skills/site-cli-creator/starter/skill/cli
-actionlint ../../.github/workflows/*.yml skills/site-cli-creator/starter/plugin/.github/workflows/*.yml
+actionlint .github/workflows/*.yml skills/site-cli-creator/starter/plugin/.github/workflows/*.yml
 shellcheck skills/site-cli-creator/starter/skill/install.sh
 ```
 
-Every PR that touches `plugins/site-cli-creator` bumps the version. [bump.md](./maintainer-skills/improve-site-cli-creator/references/bump.md) lists the files to change.
+Every PR that touches the plugin (`skills/`, the manifests, `package.json`) bumps the version. [bump.md](./.claude/skills/improve-site-cli-creator/references/bump.md) lists the files to change.
 
 ## Working with an agent
 
-Agent-driven maintenance uses the `improve-site-cli-creator` maintainer skill in `maintainer-skills/`. It covers triaging issues labelled `site-cli-creator`, which area owns a bug and which tests to extend.
+Agent-driven maintenance uses the `improve-site-cli-creator` maintainer skill in `.claude/skills/`. It covers triaging issues labelled `site-cli-creator`, which area owns a bug and which tests to extend.
 
 ## No real site data
 

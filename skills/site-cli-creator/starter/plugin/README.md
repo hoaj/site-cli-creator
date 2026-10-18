@@ -4,8 +4,8 @@ __DESCRIPTION__
 
 A plugin for coding agents (Claude Code, Cursor, Codex, GitHub Copilot CLI). Each CLI skill in `skills/` wraps one site with a small compiled CLI that your agent runs for you. It notices when the site changes (Drift) and, once you agree, reports it here so it gets fixed.
 
-#@standalone **Maintainer:** [@__MAINTAINER__](https://github.com/__MAINTAINER__). Generated with [site-cli-creator](https://github.com/hoaj/site-cli-creator/tree/main/plugins/site-cli-creator).
-#@shared **Maintainer:** [@__MAINTAINER__](https://github.com/__MAINTAINER__). Generated with [site-cli-creator](https://github.com/hoaj/site-cli-creator/tree/main/plugins/site-cli-creator). It lives in `__PLUGIN_DIR__` of [`__REPO__`](https://github.com/__REPO__), alongside other plugins, and ships through that repo's `__MARKETPLACE__` marketplace.
+#@standalone **Maintainer:** [@__MAINTAINER__](https://github.com/__MAINTAINER__). Generated with [site-cli-creator](https://github.com/hoaj/site-cli-creator).
+#@shared **Maintainer:** [@__MAINTAINER__](https://github.com/__MAINTAINER__). Generated with [site-cli-creator](https://github.com/hoaj/site-cli-creator). It lives in `__PLUGIN_DIR__` of [`__REPO__`](https://github.com/__REPO__), alongside other plugins, and ships through that repo's `__MARKETPLACE__` marketplace.
 
 ## Requirements
 
