@@ -1,0 +1,38 @@
+name: Feature request
+description: The generator cannot do something your plugin needs.
+labels: ["site-cli-creator", "feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This repo is public. Keep shapes and type names; leave out site values, tokens and cookies.
+  - type: textarea
+    id: intent
+    attributes:
+      label: Intent
+      description: What you were trying to build or do.
+    validations:
+      required: true
+  - type: textarea
+    id: gap
+    attributes:
+      label: The gap
+      description: What the generator lacks (an auth flow, a request kind, a tool flag).
+    validations:
+      required: true
+  - type: textarea
+    id: workaround
+    attributes:
+      label: Workaround
+      description: What you did instead, and why it falls short.
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Generator version, `bun --version`, OS.
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggestion

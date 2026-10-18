@@ -4,3 +4,6 @@ docs/*
 !.claude/skills/improve-site-cli-creator
 .agents/
 .DS_Store
+
+# Throwaway scripts (e.g. a Playwright check run next to node_modules)
+*.tmp.ts
