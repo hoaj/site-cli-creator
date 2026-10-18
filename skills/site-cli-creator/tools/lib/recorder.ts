@@ -364,13 +364,15 @@ export class CaptureRecorder {
 
   /**
    * The host of an aborted write when it may be a sign-in host the maintainer must name with
-   * --login-host: not the origin's host and not a login host already, but a host a tab loaded a page
-   * from (the sign-in sent the user there), or one named like a sign-in host. Else undefined.
+   * --login-host: not the origin's host and not a login host already, but one named like a sign-in host,
+   * or a host on another domain that a tab loaded a page from (the sign-in sent the user there). A page
+   * on the site's own domain (`shop.<site>`) is just the site. Else undefined.
    */
   signInSuspect(url: string): string | undefined {
     const host = httpHost(url);
     if (!host || host === this.originHost.toLowerCase() || this.isLoginHost(host)) return undefined;
-    return this.pageHosts.has(host) || isLoginHostName(host) ? host : undefined;
+    if (isLoginHostName(host)) return host;
+    return this.pageHosts.has(host) && !onSiteDomain(this.domain, host) ? host : undefined;
   }
 
   /** A sign-in step went to `host`: remember it unless it is the origin's own host. */
