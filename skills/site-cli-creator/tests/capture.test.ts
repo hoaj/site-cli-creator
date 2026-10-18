@@ -112,6 +112,26 @@ async function load() {
 load();
 </script></body></html>`;
 
+// An explore walk (#84): the start page loads the profile and fires a write on its own; a link leads
+// to a page whose path holds the customer id; a button there changes route in the page (pushState)
+// to a path holding a word from the profile, then loads settings.
+const EXPLORE_PAGE = `<!doctype html><html><body><a id="bills" href="/explore/customers/${CUSTOMER_ID}/bills">bills</a><script>
+async function load() {
+  // Like any frontend, it reads what it fetches: a body still loading when the user moves on is lost.
+  await fetch("/api/customers/${CUSTOMER_ID}/profile").then((r) => r.json());
+  await fetch("/api/quotes", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => {});
+  window.loaded = true;
+}
+load();
+</script></body></html>`;
+const EXPLORE_BILLS_PAGE = `<!doctype html><html><body><button id="street">street</button><script>
+fetch("/api/bills?customer=${CUSTOMER_ID}").then((r) => r.json()).then(() => (window.bills = true));
+document.getElementById("street").onclick = () => {
+  history.pushState({}, "", "/explore/streets/Vestergade");
+  fetch("/api/settings").then((r) => r.json()).then(() => (window.street = true));
+};
+</script></body></html>`;
+
 // A site that hands sign-in to another host (an SSO host): the start page redirects there, the
 // user posts the sign-in form there, and it redirects back. login.hosts is still empty.
 const SSO_PASSWORD = "Hemmelig-Kode-77";
@@ -157,6 +177,7 @@ beforeAll(() => {
   writeFileSync(join(work, "noop.ts"), "export default async () => {};\n");
   writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
   writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
+  writeFileSync(join(work, "explore.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#bills');\n  await page.waitForFunction(() => window.bills === true);\n  await page.click('#street');\n  await page.waitForFunction(() => window.street === true);\n};\n");
   server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -169,6 +190,9 @@ beforeAll(() => {
       if (url.pathname === "/u/login" && req.method === "GET") return new Response(SSO_LOGIN_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/u/login" && req.method === "POST") return Response.redirect(`http://127.0.0.1:${server.port}/sso-home`, 302);
       if (url.pathname === "/sso-home") return new Response(SSO_HOME_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/explore") return new Response(EXPLORE_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === `/explore/customers/${CUSTOMER_ID}/bills`) return new Response(EXPLORE_BILLS_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/api/bills") return json([{ id: "b-1", amount: 349.75, holder: "Jens Hansen" }]);
       if (url.pathname === "/shop") return new Response("<!doctype html><title>shop</title>", { headers: { "content-type": "text/html" } });
       if (url.pathname === "/tab") return new Response(TAB_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/tab-two") return new Response(TAB_TWO_PAGE, { headers: { "content-type": "text/html" } });
@@ -237,6 +261,21 @@ async function capture(skill: string, extra: string[], path = "/") {
   const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
   await proc.exited;
   const dir = join(skill, "captures", "profile-show");
+  const files = existsSync(dir) ? readdirSync(dir).sort() : [];
+  const everything = [stdout, ...files.map((f) => readFileSync(join(dir, f), "utf8"))].join("\n");
+  return { code: proc.exitCode, out: JSON.parse(stdout), stderr, dir, files, everything };
+}
+
+/** capture.ts --explore: no --task; the Capture goes to captures/explore/. */
+async function explore(skill: string, extra: string[], path = "/explore") {
+  mkdirSync(skill, { recursive: true });
+  const proc = Bun.spawn(
+    [process.execPath, CAPTURE, "--skill-dir", skill, "--explore", "--url", `http://127.0.0.1:${server.port}${path}`, "--profile", join(work, "profile"), "--headless", ...extra],
+    { env: { ...process.env, ...(existsSync(CHROME) ? { SITE_CLI_CHROME: CHROME } : {}) }, stdout: "pipe", stderr: "pipe", timeout: 90_000 },
+  );
+  const [stdout, stderr] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+  await proc.exited;
+  const dir = join(skill, "captures", "explore");
   const files = existsSync(dir) ? readdirSync(dir).sort() : [];
   const everything = [stdout, ...files.map((f) => readFileSync(join(dir, f), "utf8"))].join("\n");
   return { code: proc.exitCode, out: JSON.parse(stdout), stderr, dir, files, everything };
@@ -481,6 +520,37 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(r.out.hints.join(" ")).toContain("Next.js");
   }, 120_000);
 
+  test("--explore: one read-only walk over several pages, Operations grouped by the page that called them, no values in page paths (#84)", async () => {
+    writesReceived = [];
+    const skill = join(work, "explore-skill");
+    const r = await explore(skill, ["--script", join(work, "explore.ts")]);
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    assertNoValues(r.everything);
+    expect(r.everything).not.toContain("Vestergade");
+    expect(r.everything).not.toContain(CUSTOMER_ID);
+    expect(writesReceived).toEqual([]);
+    expect(existsSync(join(skill, "captures", "profile-show"))).toBe(false);
+
+    const pages = [
+      { path: "/explore", operations: ["GET /api/customers/:id/profile", "POST /api/quotes"] },
+      { path: "/explore/customers/:id/bills", operations: ["GET /api/bills"] },
+      { path: "/explore/streets/:id", operations: ["GET /api/settings"] },
+    ];
+    expect(r.out).toMatchObject({ task: "explore", explore: true, dir: r.dir, pages });
+    expect(r.out.next).toContain("split-capture.ts --skill-dir");
+
+    const index = JSON.parse(readFileSync(join(r.dir, "index.json"), "utf8"));
+    expect(index).toMatchObject({ task: "explore", explore: true, startPath: "/explore", write: false, pages });
+    const entry = (name: string) => index.operations.find((o: { operation: string }) => o.operation === name);
+    expect(entry("GET /api/bills")).toMatchObject({ effect: "read", pages: ["/explore/customers/:id/bills"], aborted: 0 });
+    expect(entry("POST /api/quotes")).toMatchObject({ effect: "write", pages: ["/explore"], aborted: 1 });
+    // A page load is its own page.
+    expect(entry("GET /explore/customers/:id/bills")).toMatchObject({ navigation: true, pages: ["/explore/customers/:id/bills"] });
+    // Page lists stay in index.json: shape files are what draft-contract reads.
+    const bills = JSON.parse(readFileSync(join(r.dir, entry("GET /api/bills").file), "utf8"));
+    expect(bills.pages).toBeUndefined();
+  }, 120_000);
+
   test("nothing recorded: an error, and the previous Capture is left alone", async () => {
     const skill = join(work, "empty-skill");
     const dir = join(skill, "captures", "profile-show");
@@ -516,13 +586,17 @@ describe("capture.ts flags", () => {
     expect(unparsable.code).toBe(1);
     expect(unparsable.out.error.message).toMatch(/could not load --script .*unparsable\.ts: .*errors building.*; Expected "\)" but found "b"/);
     expect(run(["--skill-dir", work, "--task", "x", "--url", "https://a.example", "--write-op", "addNote"]).out.error.message).toContain("--write-op needs --write");
+    expect(run(["--skill-dir", work, "--url", "https://a.example"]).out.error.message).toContain("missing --task (or --explore)");
+    expect(run(["--skill-dir", work, "--explore", "--task", "x", "--url", "https://a.example"]).out.error.message).toContain("--explore records no Task");
+    expect(run(["--skill-dir", work, "--explore", "--write", "--url", "https://a.example"]).out.error.message).toContain("--explore is read-only");
+    expect(run(["--skill-dir", work, "--task", "explore", "--url", "https://a.example"]).out.error.message).toContain("reserved for --explore");
   });
 
   test("--help documents every flag and the --script contract, exit 0", () => {
     const p = Bun.spawnSync([process.execPath, CAPTURE, "--help"], { stdout: "pipe", stderr: "pipe" });
     expect(p.exitCode).toBe(0);
     const out = JSON.parse(p.stdout.toString());
-    expect(Object.keys(out.flags)).toEqual(["--skill-dir", "--task", "--url", "--write", "--write-op", "--allow-read", "--script", "--profile", "--headless", "--origin", "--login-host"]);
+    expect(Object.keys(out.flags)).toEqual(["--skill-dir", "--task", "--explore", "--url", "--write", "--write-op", "--allow-read", "--script", "--profile", "--headless", "--origin", "--login-host"]);
     expect(out.notes.join(" ")).toContain("export default async (page)");
   });
 });

@@ -3,8 +3,9 @@
 // Prints {"operation", "file", "source"}: a draft src/operations/<name>.ts with a
 // Zod response schema covering every captured field. The same Operation captured
 // for other Tasks of the skill (captures/*/) is merged in, so a field seen as a
-// string in one Capture and null in another drafts as nullable. With --out, writes
-// it there (never over an existing file) instead of printing the source.
+// string in one Capture and null in another drafts as nullable. The explore Capture
+// (captures/explore/) never is: once fix re-captures a Task, its shapes are old.
+// With --out, writes it there (never over an existing file) instead of printing the source.
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
@@ -37,7 +38,10 @@ function readShape(path: string): OperationShape {
   return shape;
 }
 
-/** The same Operation (name, kind, host) in the skill's other Captures: captures/<task>/*.shape.json. */
+/**
+ * The same Operation (name, kind, host) in the skill's other Captures: captures/<task>/*.shape.json.
+ * Never captures/explore/: each Task chosen from it has its own copy, which fix keeps current.
+ */
 function sameOperationElsewhere(path: string, shape: OperationShape): { files: string[]; shapes: OperationShape[] } {
   const taskDir = dirname(path);
   const captures = dirname(taskDir);
@@ -46,7 +50,7 @@ function sameOperationElsewhere(path: string, shape: OperationShape): { files: s
   const shapes: OperationShape[] = [];
   for (const task of readdirSync(captures, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).sort()) {
     const dir = join(captures, task);
-    if (dir === taskDir) continue;
+    if (dir === taskDir || task === "explore") continue;
     for (const f of readdirSync(dir).filter((n) => n.endsWith(".shape.json")).sort()) {
       const other = parseShape(join(dir, f));
       if (other && other.operation === shape.operation && other.kind === shape.kind && other.host === shape.host) {

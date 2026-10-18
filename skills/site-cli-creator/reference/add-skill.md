@@ -11,7 +11,7 @@ Done when the skill's Tasks pass `check --writes`, and (outside `new`) the PR is
 | skill name | kebab-case; the plugin name for the plugin's first skill | `yousee` |
 | origin | scheme + host the frontend calls, no path | `https://www.yousee.dk` |
 | auth | `login` when the Tasks need the user signed in, else `none` | `login` |
-| Tasks | plain words, one per line | "see my subscription and price" |
+| Tasks | plain words, one per line; or "explore first" when the user can't name them yet ([explore.md](explore.md)) | "see my subscription and price" |
 
 For `login`, confirm the maintainer's own account can perform every Task.
 
@@ -28,7 +28,7 @@ It also copies the skill's deploy files, `Dockerfile` and `.dockerignore`, which
 
 ## 3. Capture the first Task and confirm `auth`
 
-Run the first Task's Capture (add-task.md step 2). Confirm `auth` from it:
+Run the first Task's Capture (add-task.md step 2), or the explore Capture ([explore.md](explore.md) step 1). Confirm `auth` from it:
 
 | Capture shows | auth |
 |---|---|
@@ -45,7 +45,7 @@ mv /tmp/<skill>-captures <plugin>/skills/<skill>/captures && cd <plugin>/skills/
 
 ## 4. Fill in `site.ts`
 
-Write `login` (with `postLogin`) or `bootstrap`, and `accounts` if one login holds several accounts, as [contracts.md](contracts.md) describes. The Capture holds what you need: its output's `loginHosts` (also in `captures/<task>/index.json`) names the hosts the sign-in went through, which go in `login.hosts`; `request.bearerClaims` in the shape files lists the claim names `postLogin` can decode from the bearer, `responses[].setCookies` names the cookies a response set (what `bootstrap` must fetch), and the API shapes' request headers show what every call sends back. For `tokenRequest`, pick a request every load of the start page sends: compare the first Task's Capture with another Task's Capture of the same start page (capturing the same `--task` again replaces the first one) and use a request that is in both.
+Write `login` (with `postLogin`) or `bootstrap`, and `accounts` if one login holds several accounts, as [contracts.md](contracts.md) describes. The Capture holds what you need: its output's `loginHosts` (also in `captures/<task>/index.json`) names the hosts the sign-in went through, which go in `login.hosts`; `request.bearerClaims` in the shape files lists the claim names `postLogin` can decode from the bearer, `responses[].setCookies` names the cookies a response set (what `bootstrap` must fetch), and the API shapes' request headers show what every call sends back. For `tokenRequest`, pick a request every load of the start page sends: compare the first Task's Capture with another Task's Capture of the same start page (capturing the same `--task` again replaces the first one) and use a request that is in both. In an explore Capture, a request whose `pages` in `index.json` lists every page the user opened is a candidate; a frontend that keeps its token sends it only once, so still compare with a second Capture of the start page (the first Task's, or a write Task's) before choosing.
 
 Then check that it works:
 
@@ -61,7 +61,7 @@ cd <plugin>/skills/<skill>/cli && bun src/main.ts check     # auth: none with bo
 
 ## 5. Tasks
 
-Run [add-task.md](add-task.md) from step 3 for the first Task (its Capture exists), then the full loop for each other Task. All Tasks share this mode's one bump and PR.
+Run [add-task.md](add-task.md) from step 3 for the first Task (its Capture exists), then the full loop for each other Task. After an explore Capture, run [explore.md](explore.md) steps 2 and 3, then add-task step 5 for each chosen Task. All Tasks share this mode's one bump and PR.
 
 ## 6. Description
 
