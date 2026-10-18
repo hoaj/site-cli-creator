@@ -310,6 +310,23 @@ describe("draft-contract.ts", () => {
     expect(skipped.out.mergedFrom).toEqual(["captures/merge-b/GET-api-invoices-id.shape.json"]);
   });
 
+  test("the explore Capture is never merged in: after a fix re-captures a Task, its old shapes would come back (#84)", () => {
+    const [current] = capture([{ req: { url: `${ORIGIN}/api/invoices/1001` }, body: { id: "x", total: 12 } }]);
+    const [stale] = capture([{ req: { url: `${ORIGIN}/api/invoices/1002` }, body: { id: "y", total: "12.00" } }]);
+    for (const [task, op] of [["invoice-show", current], ["explore", stale]] as const) {
+      mkdirSync(join(work, "explored", "captures", task), { recursive: true });
+      writeFileSync(join(work, "explored", "captures", task, "GET-api-invoices-id.shape.json"), JSON.stringify(op));
+    }
+    const r = run(join(work, "explored", "captures", "invoice-show", "GET-api-invoices-id.shape.json"));
+    expect(r.code).toBe(0);
+    expect(r.out.mergedFrom).toBeUndefined();
+    expect(r.out.source).toContain("total: z.number()");
+    expect(r.out.source).not.toContain("z.union");
+    // Drafting from the explore Capture itself still merges the Tasks' Captures in.
+    const fromExplore = run(join(work, "explored", "captures", "explore", "GET-api-invoices-id.shape.json"));
+    expect(fromExplore.out.mergedFrom).toEqual(["captures/invoice-show/GET-api-invoices-id.shape.json"]);
+  });
+
   test("--help prints the usage and every flag's meaning, exit 0", () => {
     const r = run("--help");
     expect(r.code).toBe(0);

@@ -41,6 +41,8 @@ export type RequestInfo = {
   headers: Record<string, string>;
   postData: Buffer | null;
   resourceType: string;
+  /** The URL of the tab's page when the request was sent (for a page load, the page it loads). */
+  page?: string;
 };
 
 type ResponseInfo = {
@@ -87,6 +89,11 @@ export type OperationShape = {
   host: string;
   method: string;
   path: string;
+  /**
+   * The pages that sent it, as redacted paths (`host/path` for a page on another host), in the
+   * order first seen. capture.ts lists them in index.json only, never in the shape file.
+   */
+  pages?: string[];
   graphql?: Omit<GraphqlCall, "variables">;
   request: {
     headers: Record<string, string | null>;
@@ -320,6 +327,14 @@ export class CaptureRecorder {
     this.gesture = true;
   }
 
+  /** The page a request came from, redacted like a REST path: `/bills/:id`, or `host/path` off the origin's host. */
+  private pageOf(page: string | undefined): string[] {
+    if (!page || !this.inScope(page)) return [];
+    const url = new URL(page);
+    const path = redactPath(url.pathname);
+    return [url.hostname.toLowerCase() === this.originHost.toLowerCase() ? path : `${url.hostname.toLowerCase()}${path}`];
+  }
+
   /** A main-frame page load: writes the new page fires on its own come before any gesture again. */
   noteNavigation(): void {
     this.gesture = false;
@@ -364,7 +379,8 @@ export class CaptureRecorder {
       gql = graphqlFromSearch(url.searchParams, { graphqlPath });
     }
 
-    const base = { resourceType: req.resourceType, host, method, path };
+    const pages = this.pageOf(req.page);
+    const base = { resourceType: req.resourceType, host, method, path, ...(pages.length ? { pages } : {}) };
     const outcome = () => ({ responses: [], seen: 0, aborted: 0 });
     const declaredLoginHost = this.isLoginHost(host);
     const guessedLoginHost = !declaredLoginHost && isLoginHostName(host);
@@ -567,10 +583,11 @@ export class CaptureRecorder {
     for (const [key, { first, shape }] of this.ops) {
       let k = key;
       let s = shape;
+      if (shape.pages) s = { ...s, pages: [...new Set(shape.pages.map((p) => this.redactValues(p)))] };
       if (shape.kind === "rest") {
         const path = this.redactValues(shape.path);
         if (path !== shape.path) {
-          s = { ...shape, path, operation: `${shape.method} ${path}` };
+          s = { ...s, path, operation: `${shape.method} ${path}` };
           k = `rest ${shape.host} ${shape.method} ${path}`;
         }
       }
@@ -608,8 +625,10 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
   const variables = mergeOptional(a.request.variables, b.request.variables);
   const bearer = mergeOptional(a.request.bearerClaims, b.request.bearerClaims);
   const body = a.request.body && b.request.body ? mergeBodies(a.request.body, b.request.body) : (a.request.body ?? b.request.body);
+  const pages = [...new Set([...(a.pages ?? []), ...(b.pages ?? [])])];
   return {
     ...a,
+    ...(pages.length ? { pages } : {}),
     effect: a.effect === "write" || b.effect === "write" ? "write" : "read",
     ...markers(b), // a's are already in ...a
     graphql: a.graphql && !a.graphql.query && b.graphql?.query ? b.graphql : a.graphql,

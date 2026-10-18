@@ -8,6 +8,8 @@ Done when every Task is a command that returns the card's output from source, `c
 
 From the issue or the user, write each Task in plain words. Turn a vague one into something checkable ("see my latest bill" → which fields, how many bills). Outside `add-skill`, branch: `git switch -c add-task/<slug>`.
 
+When the user can't name the Tasks yet, or wants several read Tasks from one walk through the site, explore first ([explore.md](explore.md)): one Capture, cards for the candidate Tasks, the user picks, then step 5 here.
+
 **A plugin in a shared repo** (its `generated.json` has a `pluginDir` other than `.`): find its feature requests with `gh issue list --repo <owner/name> --state open --label feature --label <plugin>`, and run every `cd <plugin>` in `plugins/<plugin>`.
 
 If the issue asks for a Task the maintainer's account cannot perform (a product they lack, a role they don't hold), there can be no Capture and no Contract. Close the issue:
@@ -52,7 +54,7 @@ If nothing reached the origin, `capture.ts` exits with an error and leaves any e
 
 Recapture when the Task's data never appeared (wrong start page, still loading when the browser closed) or a needed Operation is missing.
 
-**One page, several Tasks.** When a single page loads everything (an account page), every Task's Capture of it holds the same Operations. Capture it once per Task anyway (each Task has its own `captures/<slug>/`, which `fix` re-captures), and let step 3 keep different Operations per Task. An Operation the page calls on its own (a detail call for the first item, with no detail page) counts as captured.
+**One page, several Tasks.** When a single page loads everything (an account page), every Task's Capture of it holds the same Operations. Capture it once per Task, or explore once and split it per Task ([explore.md](explore.md)): either way each Task has its own `captures/<slug>/`, which `fix` re-captures, and step 3 keeps different Operations per Task. An Operation the page calls on its own (a detail call for the first item, with no detail page) counts as captured.
 
 ## 3. Filter Operations
 
