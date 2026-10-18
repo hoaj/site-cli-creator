@@ -3,7 +3,7 @@ import { join, resolve } from "node:path";
 
 /** skills/site-cli-creator/ */
 export const SKILL_ROOT = resolve(import.meta.dir, "../..");
-/** plugins/site-cli-creator/ */
+/** The plugin root, which is the repo root */
 export const GENERATOR_ROOT = resolve(SKILL_ROOT, "../..");
 
 /** The Starter code. Tests point STARTER_DIR at a fake starter. */
