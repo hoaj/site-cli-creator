@@ -3,11 +3,11 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
-// tests/ → skills/site-cli-creator → skills → plugins/site-cli-creator → plugins → repo root
+// tests/ → skills/site-cli-creator → skills → the repo root, which is the plugin root
 const PLUGIN = resolve(import.meta.dir, "../../..");
-const REPO = resolve(PLUGIN, "../..");
+const REPO = PLUGIN;
 // The hoaj/site-cli-creator wiring (README, workflow, SPEC) needs the whole repo; a copy of just
-// this plugin runs everything else. CI always checks out the whole repo.
+// the plugin files runs everything else. CI always checks out the whole repo.
 const IN_REPO = existsSync(join(REPO, ".github/workflows/site-cli-creator.yml")) && existsSync(join(REPO, "SPEC.md"));
 const REPO_REASON = IN_REPO ? "" : " (skipped: not inside the hoaj/site-cli-creator checkout)";
 if (!IN_REPO && process.env.GITHUB_ACTIONS) throw new Error(`expected the hoaj/site-cli-creator checkout above ${PLUGIN}`);
@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.9.1, both skills exist", () => {
+  test("version 0.10.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.9.1");
+      expect(m.version).toBe("0.10.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -43,7 +43,7 @@ describe("manifests", () => {
     manifests.forEach((m) => {
       expect(Object.keys(m).sort()).toEqual(["author", "description", "homepage", "keywords", "license", "name", "repository", "skills", "version"]);
       expect(m.repository).toBe("https://github.com/hoaj/site-cli-creator");
-      expect(m.homepage).toBe("https://github.com/hoaj/site-cli-creator/tree/main/plugins/site-cli-creator");
+      expect(m.homepage).toBe("https://github.com/hoaj/site-cli-creator");
     });
   });
 
@@ -55,11 +55,11 @@ describe("manifests", () => {
     }
     const cursor = JSON.parse(read(join(REPO, ".cursor-plugin/marketplace.json")));
     expect(cursor.name).toBe("site-cli-creator");
-    expect(cursor.plugins).toEqual([{ name: "site-cli-creator", source: "./plugins/site-cli-creator", description: manifests[0].description }]);
+    expect(cursor.plugins).toEqual([{ name: "site-cli-creator", source: "./", description: manifests[0].description }]);
     const readme = read(join(REPO, "README.md"));
     expect(readme).toContain("/plugin marketplace add hoaj/plugins");
     expect(readme).toContain("/plugin install site-cli-creator@hoaj");
-    expect(readme).toContain("[site-cli-creator](./plugins/site-cli-creator)");
+    expect(readme).toContain("[site-cli-creator](./skills/site-cli-creator)");
   });
 });
 
