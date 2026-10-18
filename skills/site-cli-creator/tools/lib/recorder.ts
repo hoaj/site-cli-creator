@@ -189,6 +189,49 @@ function isLoginHostName(host: string): boolean {
   return LOGIN_HOST_LABELS.has(host.split(".", 1)[0] ?? "");
 }
 
+/**
+ * Domains that only sign people in: national eIDs and their brokers, and hosted sign-in providers.
+ * Their hosts (the domain or a subdomain of it) are login hosts without site.ts or --login-host.
+ */
+const SIGN_IN_PROVIDER_DOMAINS = [
+  "mitid.dk", // MitID (Denmark) and its brokers' hosts under it
+  "signicat.com",
+  "criipto.id",
+  "idporten.no",
+  "bankid.no",
+  "bankid.com",
+  "auth0.com",
+  "okta.com",
+  "oktapreview.com",
+  "okta-emea.com",
+  "pingone.com",
+  "pingone.eu",
+  "pingidentity.com",
+  "login.microsoftonline.com",
+  "b2clogin.com",
+  "amazoncognito.com",
+  "onelogin.com",
+  "accounts.google.com",
+  "appleid.apple.com",
+];
+
+export function isSignInProviderHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return SIGN_IN_PROVIDER_DOMAINS.some((d) => h === d || h.endsWith(`.${d}`));
+}
+
+/**
+ * An OAuth token request (RFC 6749: a POST whose form or JSON body has `grant_type`): the code-for-token
+ * exchange or a refresh, a sign-in step on any host. Reads only the field name, never a value.
+ */
+export function isTokenRequest(method: string, postData: Buffer | null | undefined, contentType: string | undefined): boolean {
+  if (method.toUpperCase() !== "POST" || !postData || postData.length === 0) return false;
+  const text = postData.toString("utf8");
+  if (mediaType(contentType) === "application/x-www-form-urlencoded") return new URLSearchParams(text).has("grant_type");
+  const parsed = parseJson(text);
+  return parsed.ok && typeof parsed.value === "object" && parsed.value !== null && typeof (parsed.value as Record<string, unknown>).grant_type === "string";
+}
+
 /** A sign-in form on a login host: anything but a DELETE or a path that names a change. */
 function isSignInForm(method: string, path: string): boolean {
   return method !== "DELETE" && !namesChange(path);
@@ -284,6 +327,8 @@ export class CaptureRecorder {
   private gesture = false;
   private seq = 0;
   private readonly ops = new Map<string, { first: number; shape: OperationShape }>();
+  /** Hosts this Capture's tabs loaded a page from (host names only). */
+  private readonly pageHosts = new Set<string>();
   /** Values seen in bodies, variables and query strings, as sent. Memory only. */
   private readonly values = new Set<string>();
   private readonly valueWords = new Set<string>();
@@ -306,8 +351,26 @@ export class CaptureRecorder {
     this.allowRead = (opts.allowRead ?? []).map((p) => p.trim()).filter(Boolean);
   }
 
+  /** Named in site.ts or with --login-host, or a well-known sign-in provider's host. */
   isLoginHost(host: string): boolean {
-    return this.loginHosts.has(host.toLowerCase());
+    return this.loginHosts.has(host.toLowerCase()) || isSignInProviderHost(host);
+  }
+
+  /** A tab loaded a page from `url`'s host (capture.ts reports every main-frame page load). */
+  notePageHost(url: string): void {
+    const host = httpHost(url);
+    if (host) this.pageHosts.add(host);
+  }
+
+  /**
+   * The host of an aborted write when it may be a sign-in host the maintainer must name with
+   * --login-host: not the origin's host and not a login host already, but a host a tab loaded a page
+   * from (the sign-in sent the user there), or one named like a sign-in host. Else undefined.
+   */
+  signInSuspect(url: string): string | undefined {
+    const host = httpHost(url);
+    if (!host || host === this.originHost.toLowerCase() || this.isLoginHost(host)) return undefined;
+    return this.pageHosts.has(host) || isLoginHostName(host) ? host : undefined;
   }
 
   /** A sign-in step went to `host`: remember it unless it is the origin's own host. */
@@ -436,7 +499,9 @@ export class CaptureRecorder {
       (declaredLoginHost
         ? isSignInForm(method, path)
         : effect === "write" &&
-          (isSignInStep(method, path) || (guessedLoginHost && req.resourceType === "document" && isSignInForm(method, path))));
+          (isSignInStep(method, path) ||
+            isTokenRequest(method, req.postData, contentType) ||
+            (guessedLoginHost && req.resourceType === "document" && isSignInForm(method, path))));
     const navigation = req.resourceType === "document" && effect === "read";
     // A sign-in page or form on another host: a token request on the site's own API host is not one.
     if ((loginFlow && (declaredLoginHost || guessedLoginHost || req.resourceType === "document")) || (navigation && (declaredLoginHost || guessedLoginHost))) {
@@ -464,7 +529,7 @@ export class CaptureRecorder {
    * a sign-in form on a login host) or --allow-read names it; every other write is aborted, so a
    * Capture writes nowhere it does not record.
    */
-  allowElsewhere(req: Pick<RequestInfo, "method" | "url" | "resourceType">): boolean {
+  allowElsewhere(req: Pick<RequestInfo, "method" | "url" | "resourceType"> & Partial<Pick<RequestInfo, "headers" | "postData">>): boolean {
     const method = req.method.toUpperCase();
     const host = httpHost(req.url);
     if (!host) return true;
@@ -475,7 +540,8 @@ export class CaptureRecorder {
     const raw = new URL(req.url).pathname;
     const path = redactPath(raw);
     if (this.allowRead.some((p) => `${host}${path}`.includes(p) || `${host}${raw}`.includes(p))) return true;
-    if (isSignInStep(method, path) || (isLoginHostName(host) && req.resourceType === "document" && isSignInForm(method, path))) {
+    const tokenRequest = isTokenRequest(method, req.postData, header(req.headers ?? {}, "content-type"));
+    if (isSignInStep(method, path) || tokenRequest || (isLoginHostName(host) && req.resourceType === "document" && isSignInForm(method, path))) {
       this.noteSignInHost(host);
       return true;
     }

@@ -132,6 +132,20 @@ document.getElementById("street").onclick = () => {
 };
 </script></body></html>`;
 
+// A sign-in on a host not yet in site.ts (#85): the tab navigates there, the page exchanges its code for a
+// token with a form POST (grant_type) and then sends one more write that no rule recognises.
+const PF_START_PAGE = `<!doctype html><html><body><a id="signin" href="http://localhost:PORT/pf/as/authorization.oauth2">sign in</a></body></html>`;
+const PF_AUTHORIZE_PAGE = `<!doctype html><html><body><script>
+async function load() {
+  const form = { "content-type": "application/x-www-form-urlencoded" };
+  const t = await fetch("/pf/as/token.oauth2", { method: "POST", headers: form, body: "grant_type=authorization_code&code=c0de1234&code_verifier=v3r1f13r&client_id=web" });
+  window.token = t.ok ? "yes" : "no";
+  await fetch("/pf/api/begin", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => {});
+  window.done = true;
+}
+load();
+</script></body></html>`;
+
 // A site that hands sign-in to another host (an SSO host): the start page redirects there, the
 // user posts the sign-in form there, and it redirects back. login.hosts is still empty.
 const SSO_PASSWORD = "Hemmelig-Kode-77";
@@ -178,6 +192,8 @@ beforeAll(() => {
   writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
   writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
   writeFileSync(join(work, "explore.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#bills');\n  await page.waitForFunction(() => window.bills === true);\n  await page.click('#street');\n  await page.waitForFunction(() => window.street === true);\n};\n");
+  writeFileSync(join(work, "pf.ts"), "export default async (page) => {\n  await page.click('#signin');\n  await page.waitForURL(/localhost/);\n  await page.waitForFunction(() => window.done === true);\n  if (await page.evaluate(() => window.token) !== 'yes') throw new Error('token exchange blocked');\n};\n");
+  writeFileSync(join(work, "pf-stall.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.done === true);\n  throw new Error('signing in never finished');\n};\n");
   server = Bun.serve({
     port: 0,
     hostname: "127.0.0.1",
@@ -193,6 +209,18 @@ beforeAll(() => {
       if (url.pathname === "/explore") return new Response(EXPLORE_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === `/explore/customers/${CUSTOMER_ID}/bills`) return new Response(EXPLORE_BILLS_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/api/bills") return json([{ id: "b-1", amount: 349.75, holder: "Jens Hansen" }]);
+      // The way most sites hand sign-in over: an HTTP redirect, which Playwright's route handler never sees.
+      if (url.pathname === "/pf-redirect") return Response.redirect(`http://localhost:${server.port}/pf/as/authorization.oauth2`, 302);
+      if (url.pathname === "/pf-start") return new Response(PF_START_PAGE.replace("PORT", String(server.port)), { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/pf/as/authorization.oauth2") return new Response(PF_AUTHORIZE_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/pf/as/token.oauth2" && req.method === "POST") {
+        writesReceived.push("token exchange");
+        return json({ access_token: "s3cr3t-bearer-token", token_type: "Bearer" });
+      }
+      if (url.pathname === "/pf/api/begin" && req.method === "POST") {
+        writesReceived.push("POST /pf/api/begin");
+        return json({ ok: true });
+      }
       if (url.pathname === "/shop") return new Response("<!doctype html><title>shop</title>", { headers: { "content-type": "text/html" } });
       if (url.pathname === "/tab") return new Response(TAB_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/tab-two") return new Response(TAB_TWO_PAGE, { headers: { "content-type": "text/html" } });
@@ -549,6 +577,27 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     // Page lists stay in index.json: shape files are what draft-contract reads.
     const bills = JSON.parse(readFileSync(join(r.dir, entry("GET /api/bills").file), "utf8"));
     expect(bills.pages).toBeUndefined();
+  }, 120_000);
+
+  test("a token exchange on a host not in site.ts goes through, and a write aborted there names --login-host while recording (#85)", async () => {
+    writesReceived = [];
+    const r = await capture(join(work, "pf-skill"), ["--script", join(work, "pf.ts")], "/pf-start");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    expect(writesReceived).toEqual(["token exchange"]);
+    // On stderr while Chrome is open, not only in the final JSON.
+    expect(r.stderr).toMatch(/aborted write on localhost.*--login-host localhost/);
+    expect(r.out.hints.join(" ")).toContain("--login-host localhost");
+    assertNoValues(r.everything + r.stderr);
+
+    // A --script that stalls there fails, and its error names the flag too (it carries no hints). This time the
+    // start page redirects to the login host, as most sites do.
+    const stalled = await capture(join(work, "pf-stalled-skill"), ["--script", join(work, "pf-stall.ts")], "/pf-redirect");
+    expect(stalled.code).toBe(1);
+    expect(stalled.stderr).toMatch(/aborted write on localhost.*--login-host localhost/);
+    // Host names have no port, as --login-host and site.ts login.hosts take them.
+    expect(stalled.stderr).not.toMatch(/localhost:\d+ \(not recorded\)/);
+    expect(stalled.out.error.message).toContain("--script failed");
+    expect(stalled.out.error.message).toContain("capture again with --login-host localhost");
   }, 120_000);
 
   test("nothing recorded: an error, and the previous Capture is left alone", async () => {

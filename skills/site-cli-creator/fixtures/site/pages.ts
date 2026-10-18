@@ -229,8 +229,14 @@ export function loginPage(error?: string): string {
     <input id="username" name="username" autocomplete="username" required>
     <label for="password">Adgangskode</label>
     <input id="password" name="password" type="password" autocomplete="current-password" required>
-    <button type="submit">Log ind</button>
+    <button type="submit" disabled>Log ind</button>
   </form>
+  <script>
+    // Like PingFederate or an eID broker: the page starts a sign-in flow on the login host with a POST no
+    // sign-in word names, and the form only works once it has (#85). A Capture that aborts it stalls here.
+    fetch("/u/flow/begin", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" })
+      .then((r) => { if (r.ok) document.querySelector("button[type=submit]").disabled = false; });
+  </script>
 </body>
 </html>`;
 }
