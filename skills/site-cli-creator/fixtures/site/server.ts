@@ -229,6 +229,7 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
       if (signInBlocked) return html(200, loginPage("Log ind er midlertidigt lukket."));
       return url.searchParams.get("autologin") === "1" ? signedIn() : html(200, loginPage());
     }
+    if (route === "POST /u/flow/begin") return new Response(JSON.stringify({ ok: true }), { headers: { "content-type": "application/json" } });
     if (route === "POST /login") {
       if (signInBlocked) return html(503, loginPage("Log ind er midlertidigt lukket."));
       const form = await req.formData().catch(() => null);

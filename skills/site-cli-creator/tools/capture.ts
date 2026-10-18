@@ -249,6 +249,8 @@ await runTool(async () => {
   const plans = new WeakMap<Request, Planned | null>();
   /** Paths of server actions already explained on stderr. */
   const hintedActions = new Set<string>();
+  /** Hosts a write was aborted on that may be sign-in hosts (recorder.signInSuspect), each named on stderr once. */
+  const suspects = new Set<string>();
   const aborted = new WeakSet<Request>();
   const pending = new Set<Promise<void>>();
   /** In-scope requests sent but not yet finished or failed. */
@@ -311,14 +313,18 @@ await runTool(async () => {
   }
 
   context.on("request", (req) => {
+    // Here, not in the route handler: a page load that follows a redirect (a site handing sign-in to its
+    // login host) never reaches the route handler, and a write aborted there later is a sign-in suspect.
+    if (isPageLoad(req)) recorder.notePageHost(req.url());
     if (planOf(req)) inflight.add(req);
   });
   await context.route("**/*", async (route) => {
     const req = route.request();
     const plan = planOf(req);
     let abort = false;
-    if (!plan && !recorder.allowElsewhere({ method: req.method(), url: req.url(), resourceType: req.resourceType() })) {
-      progress(`aborted write outside the recorded hosts: ${req.method()} ${new URL(req.url()).host} (not recorded)`);
+    const elsewhere = { method: req.method(), url: req.url(), resourceType: req.resourceType(), headers: req.headers(), postData: req.postDataBuffer() };
+    if (!plan && !recorder.allowElsewhere(elsewhere)) {
+      progress(`aborted write outside the recorded hosts: ${req.method()} ${new URL(req.url()).hostname} (not recorded)`);
       abort = true;
     } else if (plan && recorder.shouldAbort(plan)) {
       aborted.add(req);
@@ -334,6 +340,14 @@ await runTool(async () => {
     } else if (plan?.effect === "write") {
       const what = plan.loginFlow ? "let sign-in step through" : plan.allowedRead ? "let --allow-read request through" : "let write through";
       progress(`${what}: ${plan.calls.map((c) => c.shape.operation).join(", ")}`);
+    }
+    // A sign-in that stalls on an aborted write retries until the user gives up: name the flag now, not only in the final JSON.
+    const suspect = abort ? recorder.signInSuspect(req.url()) : undefined;
+    if (suspect && !suspects.has(suspect)) {
+      suspects.add(suspect);
+      progress(
+        `aborted write on ${suspect}, a host the sign-in may go through: if signing in stalls, stop this Capture (close the window, Enter, or kill -INT ${process.pid}) and capture again with --login-host ${suspect}`,
+      );
     }
     // Decided first: a form POST is both the user's write and a page load.
     if (isPageLoad(req)) recorder.noteNavigation();
@@ -409,9 +423,13 @@ await runTool(async () => {
 
   const operations = recorder.operations();
   const dir = join(skillDir, "captures", task);
+  // A sign-in stalled on an aborted write often ends in a failed --script: say which flag to try in the error too.
+  const suspectNote = suspects.size
+    ? ` A write was aborted on ${[...suspects].sort().join(", ")}, which the sign-in may go through: if signing in stalled, capture again with ${[...suspects].sort().map((h) => `--login-host ${h}`).join(" ")}.`
+    : "";
   if (operations.length === 0) {
     const why = scriptError ? `--script failed: ${firstLine(scriptError.message)}; ` : "";
-    fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was`);
+    fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was.${suspectNote}`);
   }
   const files = shapeFileNames(operations, new URL(origin).hostname);
   mkdirSync(dir, { recursive: true });
@@ -446,7 +464,7 @@ await runTool(async () => {
   };
   writeJson(join(dir, "index.json"), index);
 
-  if (scriptError) fail(`--script failed: ${firstLine(scriptError.message)} (shapes so far written to ${dir})`);
+  if (scriptError) fail(`--script failed: ${firstLine(scriptError.message)} (shapes so far written to ${dir}).${suspectNote}`);
   const blockedElsewhere = [...recorder.blockedElsewhere].sort();
   const hints: string[] = [];
   if (values.write && !recorder.wrote) {
@@ -468,7 +486,13 @@ await runTool(async () => {
   const undeclared = signInHosts.filter((h) => !declared.has(h));
   if (undeclared.length > 0) {
     hints.push(
-      `Sign-in went through ${undeclared.join(", ")} (loginHosts): add ${undeclared.length === 1 ? "it" : "them"} to site.ts login.hosts (host names, no port), or pass --login-host until then. Leave out a host that only served a token to the site's own pages.`,
+      `Sign-in went through ${undeclared.join(", ")} (loginHosts): add ${undeclared.length === 1 ? "it" : "them"} to site.ts login.hosts (host names, no port), or pass ${undeclared.map((h) => `--login-host ${h}`).join(" ")} until then. Leave out a host that only served a token to the site's own pages.`,
+    );
+  }
+  const suspected = [...suspects].filter((h) => !undeclared.includes(h)).sort();
+  if (suspected.length > 0) {
+    hints.push(
+      `A write was aborted on ${suspected.join(", ")}, where a tab loaded a page or that is named like a sign-in host. If signing in stalled there, capture again with ${suspected.map((h) => `--login-host ${h}`).join(" ")} and add ${suspected.length === 1 ? "it" : "them"} to site.ts login.hosts.`,
     );
   }
   if (blockedElsewhere.length > 0) {

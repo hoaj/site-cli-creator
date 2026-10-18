@@ -30,6 +30,22 @@ function isDottedName(text: string): boolean {
   return DOTTED_NAME.test(text) && !FILE_EXTENSION.test(text);
 }
 
+/** The words and numbers of a name: `getMSISDNList` → get, MSISDN, List; `oauth2Login` → oauth, 2, Login. */
+const NAME_PARTS = /[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+/g;
+
+/**
+ * A per-session random token that appears nowhere else in the traffic (PingFederate's `/as/aB3dE5fGh1/resume`):
+ * 8 or more letters and digits that split into many one- and two-character runs, where a camelCase name
+ * splits into words (`getMSISDNList`, `eSIMsForUser`, `oauth2Login` stay names).
+ */
+function looksRandom(segment: string): boolean {
+  if (segment.length < 8 || !/^[A-Za-z0-9]+$/.test(segment)) return false;
+  const parts = segment.match(NAME_PARTS) ?? [];
+  const average = segment.length / parts.length;
+  if (/\d/.test(segment) && /[A-Za-z]/.test(segment)) return parts.length >= 4 && average < 3;
+  return parts.length >= 5 && average <= 2;
+}
+
 /** A URL path segment that carries data rather than naming a resource. */
 export function isIdLike(segment: string): boolean {
   if (segment === "") return false;
@@ -39,6 +55,7 @@ export function isIdLike(segment: string): boolean {
   if (digitCount(segment) >= 4) return true;
   if (segment.length >= 16 && /\d/.test(segment)) return true;
   if (segment.length >= 24 && /^[\w-]+=*$/.test(segment)) return true; // base64url tokens
+  if (looksRandom(segment)) return true;
   return /[^\w.~-]/.test(segment); // spaces, plus signs, commas: free text
 }
 
@@ -102,6 +119,25 @@ export function shapeOf(value: unknown, depth = 0): Shape {
     return { type: "object", fields };
   }
   return { type: "null" };
+}
+
+/**
+ * A JWT payload: its top-level keys are claim names, the schema postLogin decodes, so they stay even when
+ * one is dotted (`pi.sri`) or namespaced (`https://example.dk/claims/roles`). Only a claim name that is
+ * itself a value (an email, a UUID, a number) becomes `:id`. Claim values are shaped as usual.
+ */
+export function claimsShape(payload: Record<string, unknown>): Shape {
+  const fields: Record<string, Shape> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    const name = isValueClaimName(key) ? ":id" : key;
+    fields[name] = mergeOptional(fields[name], shapeOf(value, 1)) as Shape;
+  }
+  return { type: "object", fields };
+}
+
+function isValueClaimName(key: string): boolean {
+  if (/^https?:\/\/[^\s@]+$/.test(key)) return false; // a namespaced claim
+  return key.includes("@") || UUID.test(key) || digitCount(key) >= 4 || /\s/.test(key) || key.length > 200;
 }
 
 /** mergeShapes when both are there, else whichever is. */

@@ -125,6 +125,10 @@ describe("redactPath", () => {
     ["/api/users/jens.hansen/invoices", "/api/users/:id/invoices"],
     ["/static/app.js", "/static/app.js"],
     ["/.well-known/openid-configuration", "/.well-known/openid-configuration"],
+    // A per-session random segment that appears nowhere else in the traffic (#87): PingFederate's resume path.
+    ["/as/aB3dE5fGh1/resume/as/authorization.ping", "/as/:id/resume/as/:id"],
+    ["/as/QxAbKfPzRt/resume/as/authorization.ping", "/as/:id/resume/as/:id"],
+    ["/flow/k3q9zx7mw2/next", "/flow/:id/next"],
     ["/", "/"],
   ])("%s → %s", (input, expected) => {
     expect(redactPath(input)).toBe(expected);
@@ -132,6 +136,10 @@ describe("redactPath", () => {
 
   test("names stay names", () => {
     for (const seg of ["ecare", "oauth2", "v1", "listFtpdProducts", "post-login", "i18n"]) expect(isIdLike(seg)).toBe(false);
+    // camelCase names with acronyms and digits are not random (#87).
+    for (const seg of ["eSIMsForUser", "oauth2Login", "XMLHttpRequest", "getMSISDNList", "iOSDevices", "s3Bucket", "myYouSee", "openIdConnect", "PaymentMethods", "base64Encoded", "ipv4Address", "x509Certs", "authorization", "subscriptions"]) {
+      expect({ seg, idLike: isIdLike(seg) }).toEqual({ seg, idLike: false });
+    }
   });
 });
 
@@ -481,6 +489,63 @@ describe("Capture safety", () => {
     expect(r.allowElsewhere({ method: "POST", url: "data:text/plain,x", resourceType: "fetch" })).toBe(true);
   });
 
+  test("an OAuth token request (a POST whose body has grant_type) is a sign-in step on any host (#85)", () => {
+    const form = (url: string, extra: Partial<RequestInfo> = {}) =>
+      req({
+        url,
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        postData: Buffer.from("grant_type=authorization_code&code=c0de1234&code_verifier=v3r1f13r&client_id=web&redirect_uri=https%3A%2F%2Fwww.example.com%2Fcb"),
+        ...extra,
+      });
+    // login.<site> is in scope but not declared: the token exchange is a fetch to a path no sign-in word names.
+    const r = new CaptureRecorder({ origin });
+    const exchange = r.plan(form("https://login.example.com/as/token.oauth2"))!;
+    expect({ loginFlow: exchange.loginFlow, abort: r.shouldAbort(exchange) }).toEqual({ loginFlow: true, abort: false });
+    expect([...r.signInHosts]).toEqual(["login.example.com"]);
+    // A JSON refresh on the site's own API, and a token request on a host outside the Capture.
+    const refresh = r.plan(post(`${origin}/api/oauth/v2`, { grant_type: "refresh_token", refresh_token: SECRETS.token }))!;
+    expect(r.shouldAbort(refresh)).toBe(false);
+    expect(r.allowElsewhere(form("https://idp.partner.net/as/token.oauth2"))).toBe(true);
+    // Not a token request: no grant_type, or a grant_type that is only a word in the path.
+    expect(r.shouldAbort(r.plan(post(`${origin}/api/grants`, { type: "account" }))!)).toBe(true);
+    expect(r.shouldAbort(r.plan(post(`${origin}/api/grant_type`, {}))!)).toBe(true);
+    expect(r.allowElsewhere(req({ url: "https://idp.partner.net/oauth/revoke", method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" }, postData: Buffer.from("token=abc") }))).toBe(false);
+  });
+
+  test("well-known eID and sign-in providers are login hosts without --login-host (#85)", () => {
+    const r = new CaptureRecorder({ origin });
+    for (const url of ["https://signicat-id.mitid.dk/std/method/acme/x1/api/initAuth", "https://acme.criipto.id/oauth2/authorize", "https://acme.eu.auth0.com/u/login", "https://acme.okta.com/api/v1/authn"]) {
+      expect(r.inScope(url), url).toBe(true);
+      const plan = r.plan(post(url))!;
+      expect({ url, loginFlow: plan.loginFlow, abort: r.shouldAbort(plan) }).toEqual({ url, loginFlow: true, abort: false });
+    }
+    expect([...r.signInHosts].sort()).toEqual(["acme.criipto.id", "acme.eu.auth0.com", "acme.okta.com", "signicat-id.mitid.dk"]);
+    // Only those domains: a look-alike is not one.
+    expect(r.inScope("https://mitid.dk.example.net/api/initAuth")).toBe(false);
+    expect(r.inScope("https://notmitid.dk/api/initAuth")).toBe(false);
+    // Even there, a change to the account is no sign-in step.
+    expect(r.shouldAbort(r.plan(post("https://acme.okta.com/api/v1/users/me/logout"))!)).toBe(true);
+  });
+
+  test("a write aborted on a host this tab navigated to names --login-host at once (#85)", () => {
+    const r = new CaptureRecorder({ origin });
+    r.notePageHost("https://idp.partner.net/start");
+    r.notePageHost(`${origin}/home`);
+    expect(r.signInSuspect("https://idp.partner.net/api/begin")).toBe("idp.partner.net");
+    expect(r.signInSuspect("https://login.example.com/api/begin")).toBe("login.example.com"); // named like a sign-in host
+    expect(r.signInSuspect(`${origin}/api/notes`)).toBeUndefined(); // the site's own host
+    expect(r.signInSuspect("https://www.google-analytics.com/g/collect")).toBeUndefined();
+    // The site's own subdomains: a page loaded there is just the site, so only a sign-in name makes one a suspect
+    // (an explore walk submits forms on purpose, and every such write is aborted).
+    r.notePageHost("https://shop.example.com/cart");
+    expect(r.signInSuspect("https://shop.example.com/api/cart")).toBeUndefined();
+    expect(r.signInSuspect("https://example.com/api/collect")).toBeUndefined();
+    const declared = new CaptureRecorder({ origin, loginHosts: ["idp.partner.net"] });
+    declared.notePageHost("https://idp.partner.net/start");
+    expect(declared.signInSuspect("https://idp.partner.net/api/begin")).toBeUndefined();
+  });
+
   test("a path segment that is a value the page sent or received becomes :id", () => {
     const r = new CaptureRecorder({ origin });
     const get = (path: string, body: unknown) => {
@@ -506,6 +571,25 @@ describe("Capture safety", () => {
       fields: { sub: { type: "string", format: "numeric" }, account_ref: { type: "string" }, email: { type: "string" }, exp: { type: "number" } },
     });
     expect(bearerClaims("Bearer opaque-token")).toBeUndefined();
+    // Claim names are schema, never collapsed into a record (#86): dotted and namespaced names stay; a claim
+    // name that is itself a value (an email) becomes :id. Nested objects keyed by data still collapse.
+    const idp = `${b64({ alg: "RS256" })}.${b64({
+      iss: "https://login.example.dk",
+      sub: SECRETS.uuid,
+      "pi.sri": "x7Yq",
+      "https://example.dk/claims/roles": ["user"],
+      ciam_id: SECRETS.customerId,
+      individualId: "99812345",
+      authorization_details: [{ type: "account", locations: ["x"] }],
+      households: { [SECRETS.uuid]: "owner" },
+      [SECRETS.email]: true,
+    })}.c2ln`;
+    const claims = bearerClaims(`Bearer ${idp}`) as { type: string; fields: Record<string, { type: string }> };
+    expect(claims.type).toBe("object");
+    expect(Object.keys(claims.fields)).toEqual(["iss", "sub", "pi.sri", "https://example.dk/claims/roles", "ciam_id", "individualId", "authorization_details", "households", ":id"]);
+    expect(claims.fields.households!.type).toBe("record");
+    expect(claims.fields[":id"]).toEqual({ type: "boolean" });
+    assertNoSecrets(JSON.stringify(claims));
     expect(setCookieNames(`csrf_token=${SECRETS.cookie}; Path=/\nsid=x; HttpOnly`)).toEqual(["csrf_token", "sid"]);
 
     const r = new CaptureRecorder({ origin });
