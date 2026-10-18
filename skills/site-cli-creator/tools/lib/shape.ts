@@ -121,6 +121,25 @@ export function shapeOf(value: unknown, depth = 0): Shape {
   return { type: "null" };
 }
 
+/**
+ * A JWT payload: its top-level keys are claim names, the schema postLogin decodes, so they stay even when
+ * one is dotted (`pi.sri`) or namespaced (`https://example.dk/claims/roles`). Only a claim name that is
+ * itself a value (an email, a UUID, a number) becomes `:id`. Claim values are shaped as usual.
+ */
+export function claimsShape(payload: Record<string, unknown>): Shape {
+  const fields: Record<string, Shape> = {};
+  for (const [key, value] of Object.entries(payload)) {
+    const name = isValueClaimName(key) ? ":id" : key;
+    fields[name] = mergeOptional(fields[name], shapeOf(value, 1)) as Shape;
+  }
+  return { type: "object", fields };
+}
+
+function isValueClaimName(key: string): boolean {
+  if (/^https?:\/\/[^\s@]+$/.test(key)) return false; // a namespaced claim
+  return key.includes("@") || UUID.test(key) || digitCount(key) >= 4 || /\s/.test(key) || key.length > 200;
+}
+
 /** mergeShapes when both are there, else whichever is. */
 export function mergeOptional(a?: Shape, b?: Shape): Shape | undefined {
   return a && b ? mergeShapes(a, b) : (a ?? b);

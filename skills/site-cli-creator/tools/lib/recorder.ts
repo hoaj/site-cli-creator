@@ -9,6 +9,7 @@ import { decodeJwt, onSiteDomain, siteDomain } from "../../starter/skill/cli/src
 import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
 import {
   bodyShape,
+  claimsShape,
   mediaType,
   mergeBodies,
   mergeOptional,
@@ -235,7 +236,7 @@ export function bearerClaims(authorization: string | undefined): Shape | undefin
   try {
     const payload = decodeJwt(token[0]);
     if (!payload || typeof payload !== "object" || Array.isArray(payload)) return undefined;
-    return shapeOf(payload);
+    return claimsShape(payload as Record<string, unknown>);
   } catch {
     return undefined;
   }
