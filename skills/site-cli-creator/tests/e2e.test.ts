@@ -915,6 +915,26 @@ export default defineCommand({
       const writeFiles = [...writeOps.map((o) => o.file), "index.json"];
       expect(leaks(scanned(write.stdout, "note-add", writeFiles))).toEqual([]);
 
+      // An explore Capture (#84), then split-capture copies one chosen Task's Operations into its own Capture.
+      const explored = await tool(
+        "capture.ts",
+        ["--skill-dir", skillDir, "--explore", "--url", start, "--headless", "--script", join(scripts, "read.ts"), "--profile", join(work, "profile-explore"), "--origin", fresh.url],
+        { env: { SITE_CLI_CHROME: CHROME! }, timeout: 180_000 },
+      );
+      expect(explored.code, JSON.stringify(explored.out) + explored.stderr).toBe(0);
+      expect(explored.out).toMatchObject({ task: "explore", explore: true });
+      const explorePages = explored.out.pages as { path: string; operations: string[] }[];
+      const accountPage = explorePages.find((p) => p.operations.includes("getAccount"));
+      expect(accountPage?.operations).toEqual(expect.arrayContaining(["getAccount", "listSubscriptions", "GET /api/invoices"]));
+      // Sign-in steps and page loads are never offered as a Task's Operations.
+      expect(explorePages.flatMap((p) => p.operations)).not.toContain("POST /oauth/token");
+      const exploreFiles = [...(explored.out.operations as { file: string }[]).map((o) => o.file), "index.json"];
+      expect(leaks(scanned(explored.stdout, "explore", exploreFiles))).toEqual([]);
+      const split = await tool("split-capture.ts", ["--skill-dir", skillDir, "--task", "account-show", "--op", "getAccount"]);
+      expect(split.code, JSON.stringify(split.out) + split.stderr).toBe(0);
+      expect(split.out).toMatchObject({ task: "account-show", startPath: accountPage!.path, operations: [{ operation: "getAccount", file: "getAccount.shape.json" }] });
+      expect(filesOf("account-show").text("getAccount.shape.json")).toBe(filesOf("explore").text("getAccount.shape.json"));
+
       // draft-contract --out writes a module Bun can import, and never overwrites it.
       const drafts = join(cliDir, "src", "drafts");
       mkdirSync(drafts, { recursive: true });

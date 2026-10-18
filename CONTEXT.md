@@ -41,7 +41,7 @@ The tested base code the generator copies into a new plugin once: routing, the e
 _Avoid_: template (nothing is kept in sync), framework, shared runtime
 
 **Capture**:
-A recording of the calls a site's frontend makes while the user performs one Task in the browser, kept as shapes only, with no values.
+A recording of the calls a site's frontend makes while the user performs one Task in the browser, kept as shapes only, with no values. An **explore Capture** records a read-only walk through the site before the Tasks are known; each Task chosen from it gets its own Capture, split from it.
 _Avoid_: HAR, recording, trace
 
 ### MCP server

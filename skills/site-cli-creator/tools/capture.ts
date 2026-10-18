@@ -1,10 +1,12 @@
 #!/usr/bin/env bun
-// bun tools/capture.ts --skill-dir <dir> --task <slug> --url <start> [--write] [--write-op <op>]
+// bun tools/capture.ts --skill-dir <dir> --task <slug> | --explore --url <start> [--write] [--write-op <op>]
 //   [--allow-read <op>]... [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]...
 // The Capture tool (SPEC §3 step 2): drives Chrome while the user performs one
 // Task and writes shapes only to <skill>/captures/<task>/. Raw traffic stays in
 // memory and is never written anywhere. A read Task aborts every write on every
-// host except sign-in steps; --write lets the Task's one write through.
+// host except sign-in steps; --write lets the Task's one write through. --explore
+// records a read-only walk through the site before the Tasks are known, into
+// <skill>/captures/explore/, with the Operations each page called.
 
 import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
@@ -14,22 +16,46 @@ import { chromium, type BrowserContext, type Page, type Request } from "playwrig
 import { parseFlags, requireKebab } from "./lib/args";
 import { writeJson } from "./lib/manifests";
 import { fail, firstLine, progress, runTool } from "./lib/output";
+import { toolCommand } from "./lib/paths";
 import { CaptureRecorder, markers, shapeFileNames, type Planned } from "./lib/recorder";
 import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
 import { redactPath } from "./lib/shape";
 import { loginHostName } from "../starter/skill/cli/src/runtime/site";
 
 const USAGE =
-  "bun tools/capture.ts --skill-dir <dir> --task <slug> --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]";
+  "bun tools/capture.ts --skill-dir <dir> --task <slug> | --explore --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]";
 
 const NOTES = [
   "--script <file.ts> must `export default async (page) => { ... }` (page is a Playwright Page). The tool has already opened --url (and followed its redirects, to a login host too) when the function is called; the Capture stops when it resolves. Drive the page with real input (page.click, page.fill, page.press, locators), not element.click() inside page.evaluate: --write counts only real clicks, key presses and submits.",
   "Without --script, Chrome opens headed: the user performs the Task, then closes the Task window or presses Enter in the terminal. The Capture ends when no window on the site is left open (windows on other sites, such as a shop the page opened, close with it); a tab the site opened on its own hosts keeps it going. SIGINT or SIGTERM (kill -INT <pid>; stderr prints the pid) is a clean stop that still writes the Capture: use it to end a Capture you run in the background.",
+  "--explore records no Task: the user walks through every page worth a command (submitting a form only to show a write; every write is aborted), and the Capture goes to <skill-dir>/captures/explore/ with the Operations each page called (pages). split-capture.ts then copies each chosen read Task's Operations into its own captures/<task>/.",
   "Hosts are host names without scheme or port (login.example.com).",
   "The profile (~/.site-cli-creator/profile/ by default) keeps cookies between Captures; pass --profile <empty dir> to see a site set its cookies from scratch.",
 ];
 
 const SETTLE_MS = 5_000;
+
+/** The folder under captures/ an explore Capture goes to; never a Task's slug. */
+const EXPLORE = "explore";
+
+type IndexEntry = { operation: string; loginFlow?: true; navigation?: true; serverAction?: true; rsc?: true; pages?: string[] };
+
+/**
+ * The pages of an explore Capture in the order their first call was made, each with the calls that
+ * could be a Task's Operation (no page loads, sign-in steps, server actions or RSC streams).
+ */
+function pageSummary(entries: IndexEntry[]): { path: string; operations: string[] }[] {
+  const pages = new Map<string, string[]>();
+  for (const e of entries) {
+    if (e.navigation || e.loginFlow || e.serverAction || e.rsc) continue;
+    for (const page of e.pages ?? []) {
+      const ops = pages.get(page) ?? [];
+      if (!ops.includes(e.operation)) ops.push(e.operation);
+      pages.set(page, ops);
+    }
+  }
+  return [...pages].map(([path, operations]) => ({ path, operations }));
+}
 
 type SiteHints = { origin?: string; loginHosts: string[] };
 
@@ -168,7 +194,11 @@ await runTool(async () => {
     process.argv.slice(2),
     {
       "skill-dir": { type: "string", required: true, help: "the CLI skill's folder; the Capture goes to <skill-dir>/captures/<task>/" },
-      task: { type: "string", required: true, help: "the Task's slug, kebab-case (subscription-show)" },
+      task: { type: "string", help: "the Task's slug, kebab-case (subscription-show); required unless --explore" },
+      explore: {
+        type: "boolean",
+        help: "no Task yet: record a read-only walk through the site into captures/explore/, grouped by the page that made each call, to pick Tasks from",
+      },
       url: { type: "string", required: true, help: "the page the Task starts from" },
       write: {
         type: "boolean",
@@ -192,7 +222,12 @@ await runTool(async () => {
   );
   const skillDir = resolve(values["skill-dir"]);
   if (!existsSync(skillDir)) fail(`no such skill dir: ${skillDir}`);
-  const task = requireKebab("task", values.task);
+  const explore = values.explore;
+  if (explore && values.task) fail("--explore records no Task: leave out --task (the Capture goes to captures/explore/)");
+  if (explore && (values.write || values["write-op"])) fail("--explore is read-only: capture a write Task on its own with --task <slug> --write");
+  if (!explore && !values.task) fail(`missing --task (or --explore)\nusage: ${USAGE}`);
+  const task = explore ? EXPLORE : requireKebab("task", values.task as string);
+  if (!explore && task === EXPLORE) fail(`the slug "${EXPLORE}" is reserved for --explore: name the Task (subscription-show)`);
   const startUrl = parseHttpUrl(values.url, "url").href;
   const script = values.script ? await loadScript(values.script) : undefined;
 
@@ -229,6 +264,7 @@ await runTool(async () => {
           headers: req.headers(),
           postData: req.postDataBuffer(),
           resourceType: req.resourceType(),
+          page: pageUrl(req),
         }),
       );
     }
@@ -264,6 +300,15 @@ await runTool(async () => {
       return false; // a service worker's request has no frame
     }
   };
+  /** The tab's page the request was sent from; a page load belongs to the page it loads. */
+  function pageUrl(req: Request): string | undefined {
+    if (isPageLoad(req)) return req.url();
+    try {
+      return req.frame().page().url();
+    } catch {
+      return undefined; // a service worker's request has no frame
+    }
+  }
 
   context.on("request", (req) => {
     if (planOf(req)) inflight.add(req);
@@ -340,9 +385,10 @@ await runTool(async () => {
   } else if (script) {
     stoppedBy = "script failed";
   } else {
-    progress(
-      `Perform the Task in Chrome, then close the Task window or press Enter here. Capture pid ${process.pid}: kill -INT ${process.pid} stops it cleanly too.`,
-    );
+    const what = explore
+      ? "Open every page worth a command in Chrome, letting each one's data show before moving on; submit a form only to show a write a command should make (every write is aborted, nothing changes)"
+      : "Perform the Task in Chrome";
+    progress(`${what}, then close the Task window or press Enter here. Capture pid ${process.pid}: kill -INT ${process.pid} stops it cleanly too.`);
     stoppedBy = await stop.reason;
   }
   stop.dispose();
@@ -370,27 +416,33 @@ await runTool(async () => {
   const files = shapeFileNames(operations, new URL(origin).hostname);
   mkdirSync(dir, { recursive: true });
   clearPreviousCapture(dir);
-  operations.forEach((op, i) => writeJson(join(dir, files[i] as string), op));
+  // Pages go in index.json only: a shape file is what draft-contract reads.
+  operations.forEach(({ pages: _pages, ...op }, i) => writeJson(join(dir, files[i] as string), op));
   // Host names only: where the sign-in went, so site.ts login.hosts can list them.
   const signInHosts = [...recorder.signInHosts].sort();
+  const entries = operations.map((op, i) => ({
+    operation: op.operation,
+    kind: op.kind,
+    effect: op.effect,
+    ...markers(op),
+    method: op.method,
+    host: op.host,
+    path: op.path,
+    file: files[i] as string,
+    ...(op.pages ? { pages: op.pages } : {}),
+    seen: op.seen,
+    aborted: op.aborted,
+  }));
+  const pages = explore ? pageSummary(entries) : undefined;
   const index = {
     task,
+    ...(explore ? { explore: true } : {}),
     startPath: recorder.redactValues(redactPath(new URL(startUrl).pathname)),
     write: values.write,
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
     ...(signInHosts.length ? { loginHosts: signInHosts } : {}),
-    operations: operations.map((op, i) => ({
-      operation: op.operation,
-      kind: op.kind,
-      effect: op.effect,
-      ...markers(op),
-      method: op.method,
-      host: op.host,
-      path: op.path,
-      file: files[i],
-      seen: op.seen,
-      aborted: op.aborted,
-    })),
+    ...(pages ? { pages } : {}),
+    operations: entries,
   };
   writeJson(join(dir, "index.json"), index);
 
@@ -422,15 +474,23 @@ await runTool(async () => {
   if (blockedElsewhere.length > 0) {
     hints.push("Writes to hosts outside the recorded scope were aborted (blockedElsewhere). A sign-in host among them: add --login-host <host>. The site's own API: pass --origin <url>.");
   }
+  if (explore) {
+    hints.push(
+      "Explore: propose a Task per page (or per group of calls) from pages, let the user pick, then copy each chosen read Task's Operations into its own Capture with split-capture.ts (reference/explore.md). A write Task still needs its own Capture: capture.ts --task <slug> --write.",
+    );
+  }
   return {
     task,
+    ...(explore ? { explore: true } : {}),
     dir,
     stoppedBy,
     ...(closedWindows ? { closedWindows } : {}),
     ...(recorder.wrote ? { wrote: recorder.wrote } : {}),
-    operations: index.operations.map(({ kind: _kind, method: _method, host: _host, path: _path, seen: _seen, ...op }) => op),
+    operations: index.operations.map(({ kind: _kind, method: _method, host: _host, path: _path, seen: _seen, pages: _pages, ...op }) => op),
+    ...(pages ? { pages } : {}),
     ...(signInHosts.length ? { loginHosts: signInHosts } : {}),
     ...(blockedElsewhere.length ? { blockedElsewhere } : {}),
     ...(hints.length ? { hints } : {}),
+    ...(explore ? { next: `${toolCommand("split-capture")} --skill-dir ${skillDir} --task <slug> --op <operation>` } : {}),
   };
 });

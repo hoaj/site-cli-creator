@@ -37,7 +37,7 @@ Run these before any mode. Stop at the first failure and tell the user the fix. 
 
 Every mode that adds or changes a Task runs this loop. Steps are in [reference/add-task.md](reference/add-task.md).
 
-1. **State the Tasks.** The user lists, in plain words, what agents should be able to do.
+1. **State the Tasks.** The user lists, in plain words, what agents should be able to do. When they can't yet, or want several read Tasks from one walk through the site, explore first instead of steps 1–4: [reference/explore.md](reference/explore.md).
 2. **Capture each Task** with `capture.ts` while the user performs it in Chrome. Read Tasks abort every write on every host except sign-in steps; a write Task passes `--write` and lets the user's one real write through (the first after their first click; never one the page fires while loading).
 3. **Filter Operations.** Keep the Operations whose fields reach the Task's output, plus the chain that supplies their variables. Show kept and dropped, one-line reason each.
 4. **Show a card** and wait. Nothing is written before the user accepts or edits it:
@@ -70,13 +70,15 @@ Run from anywhere; paths are absolute or relative to the shell's directory. Ever
 ```sh
 bun <gen>/tools/new.ts --dir <path> | --into <repo root> --plugin <name> --repo <owner/name> --description "<text>" --maintainer <login> [--no-labels] [--skip-checks]
 bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none
-bun <gen>/tools/capture.ts --skill-dir <skill> --task <slug> --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]
+bun <gen>/tools/capture.ts --skill-dir <skill> --task <slug> | --explore --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]
+bun <gen>/tools/split-capture.ts --skill-dir <skill> --task <slug> --op <operation> [--op <operation>]... [--start-path <path>]
 bun <gen>/tools/draft-contract.ts <skill>/captures/<task>/<operation>.shape.json [--name <op>] [--out <file.ts>]
 bun <gen>/tools/regen.ts --skill-dir <skill>
 ```
 
 - `new.ts --skip-checks` skips the maintainer requirement checks; only tests and CI use it.
 - `capture.ts` records calls to the origin in `site.ts`; `--origin <url>` names another API origin and `--login-host <host>` (repeatable; a host name, no port) a login host not yet in `site.ts`. When nothing was recorded it fails and leaves an earlier Capture of that Task untouched. Its flags for writes, reads sent as POST and unattended Captures (`--script`: a module whose default export gets the Playwright page) are in [reference/add-task.md](reference/add-task.md) step 2.
+- `capture.ts --explore` records a read-only walk through the site into `captures/explore/`, grouped by page; `split-capture.ts` copies one chosen Task's Operations from it into `captures/<slug>/` ([reference/explore.md](reference/explore.md)).
 - Operations the Capture marks `loginFlow: true` are sign-in steps (token request, post-login). They go into `site.ts` (`login.tokenRequest`, `postLogin`, `readOnlyRequests`), never into `operations/`.
 - `draft-contract.ts --out <file.ts>` writes the draft and refuses to overwrite an existing file; use `--out`, not shell redirection. `--name` is for GraphQL only.
 
