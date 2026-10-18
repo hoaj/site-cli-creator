@@ -19,7 +19,7 @@ Asset names use `aarch64` and `x64` (`bun-darwin-aarch64.zip`, `bun-darwin-x64.z
 ## Dependencies
 
 ```sh
-cd plugins/site-cli-creator && bun install --frozen-lockfile
+bun install --frozen-lockfile
 ```
 
 The Starter CLI's types resolve through this `node_modules`; there is no separate install for `starter/skill/cli`.

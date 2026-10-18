@@ -4,7 +4,7 @@ Teach your coding agent a website: do each task once in Chrome, get a plugin of 
 
 [![CI](https://github.com/hoaj/site-cli-creator/actions/workflows/site-cli-creator.yml/badge.svg?branch=main)](https://github.com/hoaj/site-cli-creator/actions/workflows/site-cli-creator.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE)
-[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhoaj%2Fsite-cli-creator%2Fmain%2Fplugins%2Fsite-cli-creator%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version)](./plugins/site-cli-creator/.claude-plugin/plugin.json)
+[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2Fhoaj%2Fsite-cli-creator%2Fmain%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version)](./.claude-plugin/plugin.json)
 
 site-cli-creator is a generator for coding agents (Claude Code, GitHub Copilot CLI, Cursor). It turns the calls a website's own frontend makes into a plugin of compiled [Bun](https://bun.sh) CLIs, and your agent runs them signed in as you. Every CLI is also an MCP server: locally (`mcp`), or hosted for one person (`mcp --http`). Each plugin notices when the site changes (Drift) and, with your OK, files an issue its maintainer fixes with the generator's `fix` mode.
 
@@ -116,12 +116,12 @@ The terms, defined in [CONTEXT.md](./CONTEXT.md):
 
 | Mode | Use it when | Guide |
 |---|---|---|
-| `new` | a new site and no plugin yet | [reference/new.md](./plugins/site-cli-creator/skills/site-cli-creator/reference/new.md) |
-| `add-skill` | another site or login in an existing plugin | [reference/add-skill.md](./plugins/site-cli-creator/skills/site-cli-creator/reference/add-skill.md) |
-| `add-task` | a new Task, or a `feature` issue | [reference/add-task.md](./plugins/site-cli-creator/skills/site-cli-creator/reference/add-task.md) |
-| `fix` | a Drift or `bug` issue from the plugin's Feedback skill | [reference/fix.md](./plugins/site-cli-creator/skills/site-cli-creator/reference/fix.md) |
+| `new` | a new site and no plugin yet | [reference/new.md](./skills/site-cli-creator/reference/new.md) |
+| `add-skill` | another site or login in an existing plugin | [reference/add-skill.md](./skills/site-cli-creator/reference/add-skill.md) |
+| `add-task` | a new Task, or a `feature` issue | [reference/add-task.md](./skills/site-cli-creator/reference/add-task.md) |
+| `fix` | a Drift or `bug` issue from the plugin's Feedback skill | [reference/fix.md](./skills/site-cli-creator/reference/fix.md) |
 
-Every mode reads [reference/contracts.md](./plugins/site-cli-creator/skills/site-cli-creator/reference/contracts.md) before it writes an Operation.
+Every mode reads [reference/contracts.md](./skills/site-cli-creator/reference/contracts.md) before it writes an Operation.
 
 ## Example: logbuy
 
@@ -163,10 +163,10 @@ That depends on the site's terms. See the privacy and site terms section above.
 
 - [SPEC.md](./SPEC.md): what the generator does and why.
 - [CONTEXT.md](./CONTEXT.md): the glossary.
-- [ARCHITECTURE.md](./plugins/site-cli-creator/ARCHITECTURE.md): where things live and the interfaces between them.
-- [SKILL.md](./plugins/site-cli-creator/skills/site-cli-creator/SKILL.md) and its [reference docs](./plugins/site-cli-creator/skills/site-cli-creator/reference): what the agent follows.
+- [ARCHITECTURE.md](./ARCHITECTURE.md): where things live and the interfaces between them.
+- [SKILL.md](./skills/site-cli-creator/SKILL.md) and its [reference docs](./skills/site-cli-creator/reference): what the agent follows.
 
-The plugin itself is [site-cli-creator](./plugins/site-cli-creator). Skills for changing the generator are in [maintainer-skills/](./maintainer-skills).
+The repo root is the plugin: [skills/](./skills) is what ships to users, with the generator in [site-cli-creator](./skills/site-cli-creator). The skill for changing the generator is in [.claude/skills/](./.claude/skills); it never ships.
 
 ## Contributing
 
