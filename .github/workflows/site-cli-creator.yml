@@ -2,7 +2,7 @@ name: site-cli-creator
 
 # The generator's CI (SPEC §5, §9): its own tests, then a platform smoke test of
 # the Starter code's compiled CLI on every release target.
-# Cost: the repo is private on GitHub Free and macOS minutes bill at 10x. A PR branch runs once
+# Cost: keep PR runs short; macOS minutes are the slowest to queue. A PR branch runs once
 # (pull_request; `push` is main only) and only on linux-x64; main and workflow_dispatch run all
 # five targets. Before merging a change to build.ts, install.sh, release.yml or main.ts, run the
 # full matrix on the branch: gh workflow run site-cli-creator.yml --ref <branch>.

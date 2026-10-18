@@ -30,7 +30,7 @@ Each issue got a test that failed on `origin/main` for the reported reason:
 
 ## 8. Bump
 
-Generator 0.1.0 → 0.2.0 in the three plugin manifests; marketplaces 1.2.0 → 1.3.0. The e2e and regen tests that had hard-coded "0.1.0" as the generator version now read it from `generatorVersion()`; `skills-docs.test.ts` pins the generator and marketplace versions on purpose and was updated. The remaining "0.1.0" strings are a generated plugin's own starting version and stay ([bump.md](bump.md)).
+Generator 0.1.0 → 0.2.0 in the three plugin manifests; marketplaces 1.2.0 → 1.3.0 (then the repo held the marketplace; since 0.8.0 it lives in hoaj/plugins and is not pinned, see bump.md). The e2e and regen tests that had hard-coded "0.1.0" as the generator version now read it from `generatorVersion()`; `skills-docs.test.ts` pins the generator and marketplace versions on purpose and was updated. The remaining "0.1.0" strings are a generated plugin's own starting version and stay ([bump.md](bump.md)).
 
 ## 9. Starter code reach
 

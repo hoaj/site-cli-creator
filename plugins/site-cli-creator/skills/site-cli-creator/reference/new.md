@@ -2,7 +2,9 @@
 
 Creates a plugin repo from the Starter code, then its first CLI skill. The person running `new` becomes the plugin's **maintainer**: they own the repo, review PRs and run `fix` with their own site account.
 
-Done when `main` holds the plugin with at least one CLI skill whose Tasks pass `check --writes`, and the `v0.1.0` release workflow has started.
+A plugin lives in one of two places: the root of **its own repo**, which is also its own marketplace (`--dir`), or the folder `plugins/<plugin>` of a **shared repo** that holds other plugins and one marketplace, such as `hoaj/plugins` (`--into`, see [Into a shared repo](#into-a-shared-repo)). Steps 1–6 are for its own repo.
+
+Done when `main` holds the plugin with at least one CLI skill whose Tasks pass `check --writes`, and the `v0.1.0` release workflow (`<plugin>-v0.1.0` in a shared repo) has started.
 
 ## 1. Ask
 
@@ -11,7 +13,7 @@ Ask in one message, with a proposal for each:
 | Value | Rule | Example |
 |---|---|---|
 | plugin name | kebab-case, usually the site's brand | `yousee` |
-| repo | `owner/name` on GitHub; public unless the user says otherwise | `hoaj/yousee-plugin` |
+| repo | `owner/name` on GitHub; public unless the user says otherwise. Or a shared marketplace repo the user already has (`hoaj/plugins`): then follow [Into a shared repo](#into-a-shared-repo) | `hoaj/yousee-plugin` |
 | description | one line, what agents can do with it | `Read your Mit YouSee subscription and bills.` |
 | maintainer | `gh api user -q .login` | `hoaj` |
 | local folder | where to clone the repo | `~/code/yousee-plugin` |
@@ -63,3 +65,24 @@ Tell the user:
 - that users report Drift, bugs and missing Tasks through `<plugin>-feedback`, which files issues on the repo;
 - that `<plugin>-deploy` puts a CLI skill on a host they control (Railway first) so claude.ai and the phone can use it;
 - that issues titled with a Fingerprint or `bug: …` go to `fix`, and `feature: …` issues to `add-task`.
+
+## Into a shared repo
+
+For a repo that already holds other plugins and one marketplace at its root (at least one of `.claude-plugin/marketplace.json`, `.cursor-plugin/marketplace.json`, `.github/plugin/marketplace.json`, `.agents/plugins/marketplace.json`), such as `hoaj/plugins`. The plugin goes to `plugins/<plugin>/`, and from then on that folder is `<plugin>`, the plugin's root, in every mode.
+
+1. **Ask** for the plugin name, description and maintainer as in step 1. The repo is the shared one and the local folder is its clone. The name must be one the repo's marketplace does not list yet.
+2. **Clone** it (or `git pull` an existing clone), branch with `git switch -c new/<plugin>`, and run the admin check from step 2: labels, releases and merges need `ADMIN` here too.
+3. **Scaffold** with `--into` instead of `--dir`:
+   ```sh
+   bun <gen>/tools/new.ts --into <clone> --plugin <name> --repo <owner/name> --description "<description>" --maintainer <login>
+   ```
+   It checks the same requirements as step 3 and prints the same JSON, plus `root` and `marketplaces`. It writes the plugin to `plugins/<plugin>/` with no marketplace of its own, adds one entry `{name, source: "./plugins/<plugin>", description}` to each marketplace file at the root (the rest of each file stays as it was), writes `.github/workflows/<plugin>-ci.yml` and `<plugin>-release.yml` at the root (they run only when `plugins/<plugin>/` or the workflow changes), and records `pluginDir` (`plugins/<plugin>`) and `tagPrefix` (`<plugin>-v`) in the plugin's `generated.json`. Besides the five labels of step 3 it creates the label `<plugin>`, which the Feedback skill adds to every issue it files; a label `retry` works as in step 3. A Codex marketplace (`.agents/plugins/marketplace.json`) gets the entry in Codex's form, `source: {source: "local", path: "./plugins/<plugin>"}`. It refuses, and writes nothing, when the root has no marketplace file, a marketplace file is not valid JSON, has no `name` or no `plugins` list, or already lists the plugin, or `plugins/<plugin>/` or one of its workflows exists.
+4. **First CLI skill:** step 4, with `--dir <clone>/plugins/<plugin>`.
+5. **Push through a PR**, since other plugins share `main`:
+   ```sh
+   cd <clone>/plugins/<plugin> && bun install && bun test
+   cd <clone> && git add -A && git commit -m "new: <plugin> 0.1.0" && git push -u origin HEAD
+   gh pr create --repo <owner/name> --title "new: <plugin> 0.1.0" --body "<Tasks, check result>"
+   ```
+   `<plugin>-ci.yml` runs on the PR; the maintainer merges. The merge starts `<plugin>-release.yml`, which publishes `<plugin>-v0.1.0` (never marked the repo's "Latest" release). Watch it as in step 5.
+6. **Hand over** as in step 6. The plugin's issues are the ones labelled `<plugin>`: `gh issue list --repo <owner/name> --label <plugin>`.

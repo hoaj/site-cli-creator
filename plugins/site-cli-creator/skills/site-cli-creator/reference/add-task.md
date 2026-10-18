@@ -8,6 +8,8 @@ Done when every Task is a command that returns the card's output from source, `c
 
 From the issue or the user, write each Task in plain words. Turn a vague one into something checkable ("see my latest bill" → which fields, how many bills). Outside `add-skill`, branch: `git switch -c add-task/<slug>`.
 
+**A plugin in a shared repo** (its `generated.json` has a `pluginDir` other than `.`): find its feature requests with `gh issue list --repo <owner/name> --state open --label feature --label <plugin>`, and run every `cd <plugin>` in `plugins/<plugin>`.
+
 If the issue asks for a Task the maintainer's account cannot perform (a product they lack, a role they don't hold), there can be no Capture and no Contract. Close the issue:
 
 ```sh

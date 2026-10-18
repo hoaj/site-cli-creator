@@ -17,7 +17,7 @@ import {
   setSiteVersion,
   setSkillMdVersion,
 } from "./lib/scaffold";
-import { assertNoTokens, copyTemplate, type Tokens } from "./lib/template";
+import { assertNoTokens, copyTemplate, type Layout, type Tokens } from "./lib/template";
 
 const USAGE = "bun tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none";
 
@@ -49,8 +49,14 @@ await runTool(async () => {
   if (skill === `${plugin}-deploy`) fail(`"${skill}" is the plugin's Deploy skill`);
   const repo = repoFromManifest(manifest.repository);
   const generated = existsSync(join(pluginDir, "generated.json"))
-    ? readJson<{ maintainer?: unknown; generatedWith?: unknown }>(join(pluginDir, "generated.json"))
+    ? readJson<{ maintainer?: unknown; generatedWith?: unknown; pluginDir?: unknown; tagPrefix?: unknown }>(join(pluginDir, "generated.json"))
     : {};
+  // Where the plugin sits in its repo and how its release tags read (new writes both; a plugin
+  // made before generator 0.9.0 has neither and is the root of its own repo, tags vX.Y.Z).
+  const tagPrefix = typeof generated.tagPrefix === "string" ? generated.tagPrefix : "v";
+  if (!/^([a-z0-9-]*-)?v$/.test(tagPrefix)) fail(`generated.json's tagPrefix must be "v" or "<plugin>-v", got "${tagPrefix}"`);
+  const repoPath = typeof generated.pluginDir === "string" && generated.pluginDir !== "" ? generated.pluginDir : ".";
+  const layout: Layout = repoPath === "." ? "standalone" : "shared";
 
   const skillDir = join(pluginDir, "skills", skill);
   if (existsSync(skillDir)) fail(`${skillDir} already exists`);
@@ -67,8 +73,10 @@ await runTool(async () => {
     GENERATOR_VERSION: typeof generated.generatedWith === "string" ? generated.generatedWith : generatorVersion(),
     ORIGIN: origin,
     AUTH: values.auth,
+    PREFIX: tagPrefix.slice(0, -1),
+    PLUGIN_DIR: repoPath,
   };
-  const files = copyTemplate(skillStarter, skillDir, tokens);
+  const files = copyTemplate(skillStarter, skillDir, tokens, { layout });
 
   const pins: [string, (path: string, version: string) => void][] = [
     ["SKILL.md", setSkillMdVersion],

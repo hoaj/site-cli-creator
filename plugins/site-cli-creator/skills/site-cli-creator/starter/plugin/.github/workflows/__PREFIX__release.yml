@@ -1,11 +1,16 @@
-# A merge to main whose plugin version has no tag yet releases it: build every CLI skill for
-# every target, publish release vX.Y.Z with the binaries, then label the issues the released
-# PRs fixed with fixed-in:vX.Y.Z. A failed build shows up as a red run on main.
-name: release
+# A merge to main whose __PLUGIN__ version has no tag yet releases it: build every CLI skill for
+# every target, publish release __PREFIX__vX.Y.Z with the binaries, then label the issues the
+# released PRs fixed with fixed-in:__PREFIX__vX.Y.Z. A failed build shows up as a red run on main.
+# PLUGIN_DIR is the plugin's folder in the repo: "." when the plugin is the repo, else
+# plugins/<plugin> in a repo that holds other plugins too, whose tags then carry the plugin's name.
+name: __PREFIX__release
 
 on:
   push:
     branches: [main]
+    #@shared paths:
+    #@shared   - __PLUGIN_DIR__/**
+    #@shared   - .github/workflows/__PREFIX__release.yml
 
 permissions: {}
 
@@ -14,17 +19,22 @@ permissions: {}
 # commit's version (actions/checkout checks out github.sha); `publish` is serialised per version
 # and skips a release that exists, so two runs of one version publish it once.
 concurrency:
-  group: release-${{ github.sha }}
+  group: ${{ github.workflow }}-${{ github.sha }}
   cancel-in-progress: false
 
 env:
   BUN_VERSION: "1.4.3"
+  PLUGIN_DIR: __PLUGIN_DIR__
+  TAG_PREFIX: __PREFIX__v
 
 jobs:
   plan:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    defaults:
+      run:
+        working-directory: __PLUGIN_DIR__
     outputs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
@@ -41,13 +51,14 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           version="$(jq -r .version .claude-plugin/plugin.json)"
-          tag="v$version"
+          tag="$TAG_PREFIX$version"
           echo "version=$version" >>"$GITHUB_OUTPUT"
           echo "tag=$tag" >>"$GITHUB_OUTPUT"
+          # Pathspecs and "<rev>:./<path>" are relative to this folder, the plugin root.
           cli=('skills/*/cli/src/*' 'skills/*/cli/package.json' 'skills/*/cli/build.ts')
           parent=""
           if git rev-parse --verify --quiet 'HEAD^' >/dev/null; then
-            parent="$(git show 'HEAD^:.claude-plugin/plugin.json' 2>/dev/null | jq -r .version 2>/dev/null || true)"
+            parent="$(git show 'HEAD^:./.claude-plugin/plugin.json' 2>/dev/null | jq -r .version 2>/dev/null || true)"
           fi
           # Two PRs that bumped to the same version can both merge when the second was not
           # rebased. Its CLI changes would then never get a binary, so fail loudly instead,
@@ -59,7 +70,7 @@ jobs:
             changed="$(git diff --name-only "$tag" HEAD -- "${cli[@]}")"
           fi
           if [ -n "$changed" ]; then
-            echo "::error::main changed CLI code in $tag without a version bump: open a PR that runs \`bun run bump patch\`. Changed: $(echo "$changed" | tr '\n' ' ')"
+            echo "::error::main changed __PLUGIN__ CLI code in $tag without a version bump: open a PR that runs \`bun run bump patch\` in $PLUGIN_DIR. Changed: $(echo "$changed" | tr '\n' ' ')"
             exit 1
           fi
           # A published release has its tag. A draft (a run that failed before `publish`) has
@@ -101,6 +112,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           TAG: ${{ needs.plan.outputs.tag }}
+          VERSION: ${{ needs.plan.outputs.version }}
         run: |
           state="$(gh release view "$TAG" --json isDraft --jq .isDraft 2>/dev/null || true)"
           if [ "$state" = false ]; then
@@ -108,12 +120,19 @@ jobs:
             echo "go=false" >>"$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "go=true" >>"$GITHUB_OUTPUT"
           if [ "$state" = true ]; then
             echo "reusing the draft of $TAG from an earlier run"
-          else
-            gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+            exit 0
           fi
-          echo "go=true" >>"$GITHUB_OUTPUT"
+          #@standalone gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "$TAG" --generate-notes
+          #@shared # The notes start at this plugin's previous release, not whichever release of the
+          #@shared # repo GitHub would pick (another plugin's). --latest=false: the repo's "Latest"
+          #@shared # release is not any one plugin's.
+          #@shared prev="$( { gh api "repos/$GITHUB_REPOSITORY/tags" --paginate --jq '.[].name' | grep -E "^${TAG_PREFIX}[0-9]+\.[0-9]+\.[0-9]+$" || true; echo "$TAG"; } | sort -uV | grep -xF -B1 "$TAG" | grep -vxF "$TAG" || true)"
+          #@shared notes=(--generate-notes)
+          #@shared if [ -n "$prev" ]; then notes+=(--notes-start-tag "$prev"); fi
+          #@shared gh release create "$TAG" --draft --target "$GITHUB_SHA" --title "__PLUGIN__ v$VERSION" "${notes[@]}" --latest=false
 
   build:
     needs: [plan, draft]
@@ -129,7 +148,7 @@ jobs:
         target: [darwin-arm64, darwin-x64, linux-x64, linux-arm64, windows-x64]
     defaults:
       run:
-        working-directory: skills/${{ matrix.skill }}/cli
+        working-directory: __PLUGIN_DIR__/skills/${{ matrix.skill }}/cli
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -173,7 +192,9 @@ jobs:
             exit 0
           fi
           gh release view "$TAG" --json assets --jq '.assets[] | "\(.size)\t\(.name)"'
-          gh release edit "$TAG" --draft=false
+          #@standalone gh release edit "$TAG" --draft=false
+          #@shared # --latest=false: the repo's "Latest" release is not any one plugin's.
+          #@shared gh release edit "$TAG" --draft=false --latest=false
 
   fixed-in:
     needs: [plan, publish]
@@ -192,7 +213,8 @@ jobs:
       - name: Label the issues this release fixed
         env:
           GH_TOKEN: ${{ github.token }}
-          VERSION: ${{ needs.plan.outputs.version }}
+          TAG: ${{ needs.plan.outputs.tag }}
+        # From the repo root: --dir is a git pathspec, which git reads relative to the shell's folder.
         run: |
           git fetch --tags --force origin
-          bun scripts/fixed-in.ts "v$VERSION" --repo "$GITHUB_REPOSITORY" --branch main
+          bun "$PLUGIN_DIR/scripts/fixed-in.ts" "$TAG" --repo "$GITHUB_REPOSITORY" --branch main --dir "$PLUGIN_DIR"
