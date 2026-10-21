@@ -21,6 +21,9 @@ export default defineSite({
     startUrl: "__LOGIN_ORIGIN__/login?autologin=1",
     hosts: ["__LOGIN_HOST__"],
     tokenRequest: "/graphql",
+    // Run with --anonymous, the site serves a signed-out REST read as an anonymous user (no
+    // invoices, 404 on one) instead of refusing it; GET /api/me answers 401 then, so the CLI asks it.
+    sessionProbe: "/api/me",
     timeoutMs: 600_000,
     postLogin: async (ctx) => {
       const token = (ctx.headers.authorization ?? "").replace(/^Bearer\s+/i, "");

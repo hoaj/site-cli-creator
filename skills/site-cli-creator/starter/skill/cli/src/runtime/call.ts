@@ -5,6 +5,7 @@
 // | transport error, 5xx, 429 (after retries)              | network                              |
 // | GraphQL data null + server error code (after retries)  | network (INTERNAL*, SERVICE_UNAVAILABLE) |
 // | login: 401/403/redirect to a login host                | sign in again, retry; still → drift auth |
+// | login: sessionProbe not 2xx (5xx/429 aside), once a run before the first call | sign in again before sending |
 // | login: sign-in doesn't complete                        | session                              |
 // | none: 401/403                                          | rerun bootstrap, retry; still → drift auth |
 // | 404/405                                                | drift http (code = status)           |
@@ -166,6 +167,8 @@ export class Client {
   readonly confirm: boolean;
   /** True once this run signed in or bootstrapped: a further 401/403 is Drift. */
   fresh = false;
+  /** True once this run asked login.sessionProbe whether the saved session is still signed in. */
+  private probed = false;
   private session: Session | null;
   private readonly reauthAllowed: boolean;
   private readonly surface: Surface;
@@ -280,6 +283,32 @@ export class Client {
     return this.session;
   }
 
+  /**
+   * Some sites (Jira Cloud) serve an expired session as an anonymous user: 200 with nothing in it,
+   * or 404, never 401. Ask login.sessionProbe once per run, before the first Operation, and sign in
+   * again (or fail with kind session) when it says signed out. Skipped right after a sign-in, and
+   * when this client may not sign in (reauth false).
+   */
+  private async probeSession(): Promise<void> {
+    const probe = this.site.auth === "login" ? this.site.login?.sessionProbe : undefined;
+    if (!probe || this.probed || this.fresh || !this.reauthAllowed) return;
+    this.probed = true;
+    const url = new URL(probe, this.origin);
+    if (url.origin !== new URL(this.origin).origin) return; // the session's headers stay on the site (siteProblems refuses this)
+    const headers: Record<string, string> = { accept: "application/json" };
+    for (const [k, v] of Object.entries(this.session?.headers ?? {})) headers[k.toLowerCase()] = v;
+    let res: Response_;
+    try {
+      res = await this.fetchFollowing({ method: "GET", url: url.toString(), headers });
+    } catch {
+      return; // network trouble: the Operation itself reports it
+    }
+    if (res.status >= 200 && res.status < 300 && !res.loginRedirect && !res.offsite) return;
+    if (res.status >= 500 || res.status === 429) return; // the site is struggling, not signed out
+    this.deps.note(`the saved sign-in to ${this.site.origin} has expired (${probe}: HTTP ${res.status})`);
+    await this.signInOrFail();
+  }
+
   /** After a 401/403: sign in again (login) or rerun bootstrap (none). False when there is nothing to rerun. */
   private async reauthenticate(): Promise<boolean> {
     if (!this.reauthAllowed || this.fresh) return false;
@@ -301,6 +330,7 @@ export class Client {
     }
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
     await this.ensureSession();
+    await this.probeSession();
     let res = await this.send(op, v.data);
     if (this.isAuthFailure(op, res)) {
       if (await this.reauthenticate()) res = await this.send(op, v.data);

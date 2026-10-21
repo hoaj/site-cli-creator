@@ -25,6 +25,14 @@ describe("siteProblems", () => {
     expect(siteProblems(makeSite({ readOnlyRequests: [""] }))).toEqual(["readOnlyRequests must be a list of non-empty URL path substrings or RegExps"]);
     expect(siteProblems(makeSite({ readOnlyRequests: "/api/token" as any }))).toHaveLength(1);
   });
+
+  test("login.sessionProbe must be a path on the origin, so the session never goes to another host", () => {
+    const probe = (sessionProbe: string) => siteProblems(loginSite({ login: { ...loginSite().login!, sessionProbe } }));
+    expect(probe("/api/me")).toEqual([]);
+    for (const bad of ["api/me", "https://other.example.test/api/me", "//other.example.test/api/me", ""]) {
+      expect(probe(bad)).toEqual(["login.sessionProbe must be a path on the origin, starting with a single /"]);
+    }
+  });
 });
 
 describe("login timeout", () => {

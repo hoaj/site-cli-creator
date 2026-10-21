@@ -4,7 +4,11 @@
 // host) and a public mode (CSRF cookie mirrored in a header), plus switches
 // that simulate Drift and outages.
 //
-//   bun fixtures/site/server.ts --auth login|none [--port N] [--drift <name>]
+//   bun fixtures/site/server.ts --auth login|none [--port N] [--drift <name>] [--anonymous]
+//
+// --anonymous (auth login): like Jira Cloud, a signed-out request is served as an anonymous user
+// instead of refused (the invoice list 200 with none, one invoice 404, GraphQL 200 with data null
+// and a NOT_FOUND error); GET /api/me still answers 401 without a session.
 //
 // Run this way, the site also takes `POST /__drift?name=<drift|none>` on its own origin, so a
 // Drift can be switched on and off while every session stays signed in (as a real site's
@@ -46,6 +50,13 @@ export type FixtureSite = {
   revokeSessions(): void;
   /** While true, the login host refuses every new sign-in (autologin included), so a login never completes; a browser it remembers (idp_sid cookie) still passes. */
   blockSignIn(blocked: boolean): void;
+  /**
+   * While true (auth login), a signed-out request is served as an anonymous user, as Jira Cloud
+   * does, never refused with 401 or a redirect to sign-in: the invoice list answers 200 with no
+   * invoices, one invoice 404, and GraphQL 200 with data null and a NOT_FOUND error. GET /api/me
+   * still answers 401 without a session.
+   */
+  serveAnonymous(on: boolean): void;
   /** Notes stored on the account, including ones added through addNote. */
   notes(): Note[];
   /** Every request the site received, in order (method, host, path, GraphQL operationName). */
@@ -96,9 +107,10 @@ function noteForm(drift: Drift | null): NoteForm {
 }
 
 /** `control`: serve POST /__drift?name=<drift|none> (the command-line server turns it on). */
-export function startFixtureSite(opts: { port?: number; auth: Auth; control?: boolean }): FixtureSite {
+export function startFixtureSite(opts: { port?: number; auth: Auth; control?: boolean; anonymous?: boolean }): FixtureSite {
   const { auth } = opts;
   let drift: Drift | null = null;
+  let anonymous = opts.anonymous ?? false;
   const store = newStore();
   const log: RequestLogEntry[] = [];
   const sessions = new Set<string>(); // login: session ids behind the session cookie
@@ -131,11 +143,13 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
   /**
    * Gate shared by every data API (/graphql, /api/invoices*): outage switches first, then auth.
    * Like many real sites, a signed-out REST read is redirected to sign-in, while GraphQL answers 401.
+   * `asAnonymous`: the caller serves a signed-out request as an anonymous user instead (serveAnonymous).
    */
-  const gate = (req: Request, rest: boolean): Response | null => {
+  const gate = (req: Request, rest: boolean, asAnonymous = false): Response | null => {
     if (drift === "auth") return failure(401, "UNAUTHENTICATED", "Authentication required.");
     if (drift === "server-error") return failure(500, "INTERNAL_SERVER_ERROR", "Something went wrong.");
     if (drift === "rate-limit") return failure(429, "RATE_LIMITED", "Too many requests.");
+    if (asAnonymous) return null;
     if (auth === "login" && rest && !sessionOf(req)) return redirect(302, `${loginUrl}/login`);
     if (auth === "login" && !loggedIn(req)) return failure(401, "UNAUTHENTICATED", "Authentication required.");
     if (auth === "none" && !csrfOk(req)) return failure(403, "CSRF", "Missing or invalid CSRF token.");
@@ -151,8 +165,11 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
     }
     const operationName = typeof body.operationName === "string" ? body.operationName : undefined;
     entry.operationName = operationName;
-    const blocked = gate(req, false);
+    // serveAnonymous: an anonymous user sees no account.
+    const anon = auth === "login" && anonymous && !loggedIn(req);
+    const blocked = gate(req, false, anon);
     if (blocked) return blocked;
+    if (anon) return json(200, { data: null, errors: [{ message: "Not found.", extensions: { code: "NOT_FOUND" } }] });
 
     const errors = (status: number, list: GraphQLError[]) => json(status, { errors: list });
     if (typeof body.query !== "string") return errors(400, [{ message: "Missing query.", extensions: { code: "BAD_REQUEST" } }]);
@@ -195,17 +212,20 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
   };
 
   const invoices = (req: Request, url: URL): Response => {
-    const blocked = gate(req, true);
+    // serveAnonymous: a signed-out read sees no invoices, as an anonymous user would.
+    const anon = auth === "login" && anonymous && !loggedIn(req);
+    const blocked = gate(req, true, anon);
     if (blocked) return blocked;
     if (drift === "input-rejected") return failure(400, "BAD_USER_INPUT", "Request parameters were rejected.");
     const id = url.pathname.match(/^\/api\/invoices\/([^/]+)$/)?.[1];
+    const visible = anon ? [] : INVOICES;
     if (id !== undefined) {
       if (drift === "remove-rest") return failure(404, "NOT_FOUND", "No such route.");
-      const invoice = INVOICES.find((i) => i.id === decodeURIComponent(id));
+      const invoice = visible.find((i) => i.id === decodeURIComponent(id));
       return invoice ? json(200, invoice) : failure(404, "NOT_FOUND", "Invoice not found.");
     }
     if (url.searchParams.get("accountId") !== ACCOUNT.id) return failure(400, "BAD_USER_INPUT", "Unknown or missing accountId.");
-    return json(200, { invoices: INVOICES.map(({ lines: _lines, ...summary }) => summary), total: INVOICES.length });
+    return json(200, { invoices: visible.map(({ lines: _lines, ...summary }) => summary), total: visible.length });
   };
 
   /** Login host: a finished sign-in hands a one-time code back to the site, which turns it into a session. */
@@ -255,6 +275,8 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
     if (req.method === "GET" && /^\/api\/invoices(\/[^/]+)?$/.test(url.pathname)) return invoices(req, url);
 
     if (auth === "login") {
+      // Who is signed in, as a frontend asks on load: 401 without a session, also under serveAnonymous.
+      if (route === "GET /api/me") return loggedIn(req) ? json(200, { signedIn: true }) : failure(401, "UNAUTHENTICATED", "Authentication required.");
       if (route === "GET /auth/callback") {
         const code = url.searchParams.get("code") ?? "";
         const sid = codes.get(code);
@@ -332,6 +354,9 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
     blockSignIn: (blocked) => {
       signInBlocked = blocked;
     },
+    serveAnonymous: (on) => {
+      anonymous = on;
+    },
     notes: () => structuredClone(store.notes),
     requests: () => structuredClone(log),
     stop: () => void server.stop(true),
@@ -348,7 +373,7 @@ if (import.meta.main) {
   };
   const usage = (problem: string): never => {
     console.error(
-      `${problem}\nusage: bun fixtures/site/server.ts --auth login|none [--port N] [--drift ${DRIFTS.join("|")}]\n` +
+      `${problem}\nusage: bun fixtures/site/server.ts --auth login|none [--port N] [--drift ${DRIFTS.join("|")}] [--anonymous]\n` +
         "while it runs: curl -X POST '<url>/__drift?name=<drift|none>' switches Drift without signing anyone out",
     );
     process.exit(2);
@@ -359,7 +384,9 @@ if (import.meta.main) {
   if (port !== undefined && !(Number.isInteger(port) && port >= 0 && port < 65536)) usage("--port must be a port number");
   const drift = flag("drift");
   if (drift !== undefined && !DRIFTS.includes(drift as Drift)) usage(`unknown drift "${drift}"`);
-  const site = startFixtureSite({ auth: auth as Auth, port, control: true });
+  const anonymous = args.includes("--anonymous");
+  if (anonymous && auth !== "login") usage("--anonymous needs --auth login");
+  const site = startFixtureSite({ auth: auth as Auth, port, control: true, anonymous });
   if (drift) site.setDrift(drift as Drift);
-  console.log(JSON.stringify({ url: site.url, loginUrl: site.loginUrl, auth, drift: drift ?? null, control: `POST ${site.url}/__drift?name=<drift|none>` }));
+  console.log(JSON.stringify({ url: site.url, loginUrl: site.loginUrl, auth, drift: drift ?? null, anonymous, control: `POST ${site.url}/__drift?name=<drift|none>` }));
 }

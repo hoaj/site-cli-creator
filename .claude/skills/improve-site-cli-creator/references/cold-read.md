@@ -26,4 +26,4 @@ does the whole flow still work? Return PASS, or FAIL with the one thing a fresh 
 still get wrong (file + section + what happened). Kill every process you started.
 ```
 
-Pick the auth mode and drift switch closest to the reported failure. Tell it to use a fresh `--profile <temp dir>` for Captures, so it never touches the maintainer's `~/.site-cli-creator/profile`. A fix that touched only one Task's path may shorten the brief to that Task, but always keep `check --writes` at the end.
+Pick the auth mode and drift switch closest to the reported failure; for an expired session the site serves as anonymous instead of refusing, start the fixture with `--auth login --anonymous`. Tell it to use a fresh `--profile <temp dir>` for Captures, so it never touches the maintainer's `~/.site-cli-creator/profile`. A fix that touched only one Task's path may shorten the brief to that Task, but always keep `check --writes` at the end.

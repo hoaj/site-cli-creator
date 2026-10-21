@@ -17,6 +17,10 @@ export default defineSite({
     startUrl: "__ORIGIN__/",
     hosts: [],
     tokenRequest: "/api/",
+    // When a signed-out request gets 200 or 404 instead of 401/403 (the site serves it as an
+    // anonymous user), set this to a GET path that answers 2xx only while signed in, such as
+    // /api/me: the CLI asks it once per run, so an expired sign-in is exit 4, not Drift.
+    // sessionProbe: "/api/me",
     timeoutMs: 600_000,
     postLogin: async () => ({}),
   },

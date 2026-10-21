@@ -145,6 +145,8 @@ async function loadAccount() {
 
 async function start() {
   const account = await loadAccount();
+  // Like many SPAs, it asks who is signed in on every load.
+  if (AUTH === "login") await api("/api/me");
   accountId = account.id;
   $("account-name").textContent = account.name;
   $("account-email").textContent = account.email ?? "ingen e-mail";
