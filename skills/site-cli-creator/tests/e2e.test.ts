@@ -331,6 +331,32 @@ for (const auth of ["none", "login"] as const) {
         expect(again.code, again.stderr).toBe(0);
       }, 180_000);
 
+      test("a site that serves an expired session as anonymous: login.sessionProbe makes it exit 4, not Drift (#91)", async () => {
+        const signedIn = await cli(["invoice", "list"]);
+        expect(signedIn.code, signedIn.stderr).toBe(0);
+        expect(signedIn.out.invoices.length).toBeGreaterThan(0);
+        site.serveAnonymous(true);
+        try {
+          site.revokeSessions();
+          site.blockSignIn(true);
+          try {
+            // Without the probe, getAccount's anonymous answer (data null) is Drift (exit 3).
+            for (const args of [["invoice", "list"], ["invoice", "show", "--id", INVOICES[0]!.id]]) {
+              const r = await cli(args, { env: { SITE_CLI_NONINTERACTIVE: "1" } });
+              expect(r.code, r.stdout + r.stderr).toBe(4);
+              expect(r.out.error.kind).toBe("session");
+            }
+          } finally {
+            site.blockSignIn(false);
+          }
+          // The probe sends the CLI through sign-in again, and the command sees the invoices.
+          const again = await cli(["invoice", "show", "--id", INVOICES[0]!.id]);
+          expect(again.code, again.stdout + again.stderr).toBe(0);
+        } finally {
+          site.serveAnonymous(false);
+        }
+      }, 180_000);
+
       test("login --from-profile reuses a Capture's sign-in: no second sign-in, session.json only (#38)", async () => {
         // The maintainer signs in once, during a Capture, on the Capture's own profile.
         const capProfile = join(work, "capture-profile");

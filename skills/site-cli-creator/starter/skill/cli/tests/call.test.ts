@@ -1,7 +1,7 @@
 // The classification table (SPEC §10), row by row, against a fake fetch.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { buildRequest } from "../src/runtime/call";
+import { buildRequest, Client } from "../src/runtime/call";
 import { DryRun, Failure } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
 import { loadSession, saveSession } from "../src/runtime/session";
@@ -191,6 +191,84 @@ describe("auth login", () => {
     expect(e.kind).toBe("session");
     expect(e.message).toContain("SITE_CLI_NONINTERACTIVE=1");
     expect(d.loginCalls).toEqual([true]); // headless only
+  });
+
+  describe("sessionProbe: a site that serves an expired session as anonymous (404, never 401)", () => {
+    const probeSite = () => loginSite({ login: { ...loginSite().login!, sessionProbe: "/api/me" } });
+    // Signed in only with "Bearer new"; anonymous gets 401 from /api/me and 404 from everything else.
+    const anonymousSite = () =>
+      fakeFetch((r) => {
+        const signedIn = r.headers.authorization === "Bearer new";
+        if (r.url.endsWith("/api/me")) return signedIn ? json({ ok: true }) : json({}, 401);
+        return signedIn ? json({ id: "1", total: 5 }) : json({}, 404);
+      });
+
+    test("probe says signed out → signs in again before the call, no Drift", async () => {
+      saved();
+      const { fetch, calls } = anonymousSite();
+      const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      const out: any = await client(probeSite(), deps).call(getOrder, { orderId: "1" });
+      expect(out.total).toBe(5);
+      expect(loginCalls).toEqual([true]);
+      expect(calls.map((c) => new URL(c.url).pathname)).toEqual(["/api/me", "/api/orders/1"]);
+      expect(calls[0].method).toBe("GET");
+      expect(calls[0].headers.authorization).toBe("Bearer old"); // the probe carries the saved session
+    });
+
+    test("a probe redirected to a login host also counts as signed out", async () => {
+      saved();
+      const { fetch } = fakeFetch((r) => {
+        if (r.headers.authorization === "Bearer new") return json({ id: "1", total: 5 });
+        return r.url.endsWith("/api/me") ? new Response(null, { status: 302, headers: { location: "https://login.example.test/authorize" } }) : json({}, 404);
+      });
+      const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      await client(probeSite(), deps).call(getOrder, { orderId: "1" });
+      expect(loginCalls).toEqual([true]);
+    });
+
+    test("SITE_CLI_NONINTERACTIVE=1, or an MCP tool call: signed out is kind session (exit 4), not Drift", async () => {
+      saved();
+      const { fetch, calls } = anonymousSite();
+      const d = makeDeps(fetch, home.dir, [null]);
+      d.deps.env = { ...d.deps.env, SITE_CLI_NONINTERACTIVE: "1" };
+      const e = await failure(client(probeSite(), d.deps).call(getOrder, { orderId: "1" }));
+      expect(e.kind).toBe("session");
+      expect(calls.map((c) => new URL(c.url).pathname)).toEqual(["/api/me"]);
+      const m = makeDeps(anonymousSite().fetch, home.dir, [null]);
+      const viaMcp = await failure(new Client(probeSite(), m.deps, { surface: "mcp" }).call(getOrder, { orderId: "1" }));
+      expect(viaMcp.kind).toBe("session");
+      expect(m.loginCalls).toEqual([true]); // headless only
+    });
+
+    test("probe says signed in → no sign-in, and it is asked once per run", async () => {
+      saveSession(home.dir, { headers: { authorization: "Bearer new" }, ids: { customerId: "C-1" } });
+      const { fetch, calls } = anonymousSite();
+      const { deps, loginCalls } = makeDeps(fetch, home.dir);
+      const c = client(probeSite(), deps);
+      await c.call(getOrder, { orderId: "1" });
+      await c.call(getOrder, { orderId: "2" });
+      expect(loginCalls).toEqual([]);
+      expect(calls.map((r) => new URL(r.url).pathname)).toEqual(["/api/me", "/api/orders/1", "/api/orders/2"]);
+    });
+
+    test("no saved session: the sign-in is fresh, so the probe is not asked", async () => {
+      const { fetch, calls } = anonymousSite();
+      const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      await client(probeSite(), deps).call(getOrder, { orderId: "1" });
+      expect(loginCalls).toEqual([true]);
+      expect(calls.map((r) => new URL(r.url).pathname)).toEqual(["/api/orders/1"]);
+    });
+
+    test("probe answers 5xx or 429, or the connection fails → no sign-in; the call goes ahead", async () => {
+      for (const answer of [() => json({}, 503), () => json({}, 429), () => Promise.reject(Object.assign(new Error("x"), { code: "ECONNRESET" }))]) {
+        saveSession(home.dir, { headers: { authorization: "Bearer new" }, ids: {} });
+        const { fetch, calls } = fakeFetch((r) => (r.url.endsWith("/api/me") ? answer() : json({ id: "1", total: 5 })));
+        const { deps, loginCalls } = makeDeps(fetch, home.dir);
+        await client(probeSite(), deps).call(getOrder, { orderId: "1" });
+        expect(loginCalls).toEqual([]);
+        expect(calls).toHaveLength(2);
+      }
+    });
   });
 
   test("login that doesn't complete → session", async () => {

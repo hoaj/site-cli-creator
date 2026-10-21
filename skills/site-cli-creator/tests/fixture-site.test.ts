@@ -355,6 +355,34 @@ describe("fixture site, auth login", () => {
     expect((await fetch(`${site.url}/`, { headers: h, redirect: "manual" })).status).toBe(302);
     expect((await fetch(`${site.url}/oauth/token`, { method: "POST", headers: { cookie: h.cookie! } })).status).toBe(401);
   });
+
+  test("GET /api/me is 200 signed in and 401 signed out", async () => {
+    const h = await loginHeaders(site);
+    expect((await fetch(`${site.url}/api/me`, { headers: h })).status).toBe(200);
+    expect((await fetch(`${site.url}/api/me`, { redirect: "manual" })).status).toBe(401);
+  });
+
+  test("serveAnonymous: a signed-out request gets an anonymous answer (no invoices, 404 on one, GraphQL data null), /api/me still 401", async () => {
+    const h = await loginHeaders(site);
+    site.serveAnonymous(true);
+    try {
+      const account = await gql(site, {}, "getAccount", ACCOUNT_Q, { customerId: USER.customerId });
+      expect(account.status).toBe(200);
+      expect(account.body).toEqual({ data: null, errors: [{ message: "Not found.", extensions: { code: "NOT_FOUND" } }] });
+      expect((await gql(site, h, "getAccount", ACCOUNT_Q, { customerId: USER.customerId })).body.data.getAccount.id).toBe(ACCOUNT.id);
+      const list = await fetch(`${site.url}/api/invoices?accountId=${ACCOUNT.id}`, { redirect: "manual" });
+      expect(list.status).toBe(200);
+      expect(await list.json()).toEqual({ invoices: [], total: 0 });
+      expect((await fetch(`${site.url}/api/invoices/${INVOICES[0]!.id}`, { redirect: "manual" })).status).toBe(404);
+      expect((await fetch(`${site.url}/api/me`, { redirect: "manual" })).status).toBe(401);
+      // Signed in, nothing changes.
+      expect(((await (await fetch(`${site.url}/api/invoices?accountId=${ACCOUNT.id}`, { headers: h })).json()) as any).total).toBe(INVOICES.length);
+      expect((await fetch(`${site.url}/api/invoices/${INVOICES[0]!.id}`, { headers: h })).status).toBe(200);
+    } finally {
+      site.serveAnonymous(false);
+    }
+    expect((await fetch(`${site.url}/api/invoices?accountId=${ACCOUNT.id}`, { redirect: "manual" })).status).toBe(302);
+  });
 });
 
 describe("drift switches", () => {
@@ -995,6 +1023,7 @@ describe.skipIf(!HAS_CHROME)("frontend in headless Chrome", () => {
         if (auth === "login") {
           expect(site.requests()[0]!.host).toBe(new URL(site.loginUrl).host);
           expect(paths.slice(0, 5)).toEqual(["/login", "/auth/callback", "/", "/oauth/token", "/api/session/post-login"]);
+          expect(paths).toContain("/api/me");
         }
 
         await page.getByLabel("Ny note").fill("Ring efter kl. 17");
