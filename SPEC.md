@@ -152,6 +152,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   3. if login doesn't complete, fails with `session`.
 
   A 401 or 403 right after a fresh login counts as Drift.
+- **Session probe.** Some sites (Jira Cloud) never refuse an expired session: they serve it as an anonymous user, with 200 and nothing in it or a 404, which would reach the user as empty results, input or false Drift. Such a site's `site.ts` names a GET that answers 2xx only while signed in (`login.sessionProbe`, a path on the origin). The CLI sends it with the session once per run, before the first Operation, and skips it right after a sign-in. Any answer other than 2xx counts as a redirect to login above (refresh, headed login, `session`), except a 5xx, a 429 or a transport error, which the Operation itself then reports. Decided in [An expired session served as anonymous is reported as input or Drift](https://github.com/hoaj/site-cli-creator/issues/91).
 - **`auth: "none"`:** there is no `login` command, no `profile/`, no post-login step, and exit 4 (session) never happens. Commands use plain `fetch`.
   - **Optional `bootstrap`** (`site.ts`), written by the agent from the Capture, fetches what a public API still needs, such as a front-page cookie or a CSRF token, with plain `fetch`. It is cached in `session.json` like a session and reruns silently when it expires.
   - **On a 401 or 403,** the CLI reruns `bootstrap` and retries once. If it still fails, it's Drift: the site now wants a login, a new token, or blocks the CLI. A 429 is `network`.
@@ -274,7 +275,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
   - a write request whose shape changed, or a `trigger(page)` that can't find its element;
   - a 401 or 403 right after a fresh login, or, for `auth: "none"`, after a rerun of `bootstrap`;
   - the server rejecting input that passed the variables schema.
-- **session:** a 401, a 403 or a redirect to login (handled as in §7). Only for `auth: "login"`.
+- **session:** a 401, a 403, a redirect to login, or a session probe that does not answer 2xx (handled as in §7). Only for `auth: "login"`.
 - **network:** 5xx responses, 429 and transport errors, retried 1–2 times.
 - **input:** fails the variables or flag schema, so no call is made.
 - **bug:** anything else thrown.

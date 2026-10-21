@@ -28,6 +28,13 @@ export type LoginConfig = {
    * call before sign-in ends the login early.
    */
   tokenRequest: string | RegExp;
+  /**
+   * Path on the origin of a GET that answers 2xx only while signed in (such as /api/me). Set it
+   * when the site serves an expired session as an anonymous user (200 with nothing in it, or 404)
+   * instead of 401/403: the runtime sends it once per run before the first Operation, and any
+   * answer other than 2xx (5xx and 429 aside) means "signed out", so it signs in again.
+   */
+  sessionProbe?: string;
   timeoutMs?: number;
   /** Derives chain-root ids after login. Returns ids to store, never personal data. */
   postLogin?: (ctx: SiteCtx) => Promise<Record<string, string>>;
@@ -93,6 +100,11 @@ export function siteProblems(site: Site): string[] {
   if (site.auth !== "login" && site.auth !== "none") out.push(`auth must be "login" or "none"`);
   if (!/^https?:\/\//.test(site.origin)) out.push("origin must be an http(s) URL");
   if (site.auth === "login" && !site.login) out.push(`auth "login" needs a login block`);
+  // A path only: the probe carries the session's headers, which must never go to another host.
+  const probe = site.login?.sessionProbe;
+  if (probe !== undefined && !(typeof probe === "string" && /^\/(?![/\\])/.test(probe))) {
+    out.push("login.sessionProbe must be a path on the origin, starting with a single /");
+  }
   const ro = site.readOnlyRequests;
   if (ro !== undefined && (!Array.isArray(ro) || ro.some((p) => !(typeof p === "string" && p !== "") && !(p instanceof RegExp)))) {
     out.push("readOnlyRequests must be a list of non-empty URL path substrings or RegExps");
