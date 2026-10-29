@@ -221,7 +221,11 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
     const jar = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
     if (jar) headers.cookie = jar;
     else if (sent.cookie) headers.cookie = sent.cookie;
-    await Promise.race([keeping, Bun.sleep(KEEP_WAIT_MS)]);
+    if (refresh?.from && refresh.keep) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      await Promise.race([keeping, new Promise<void>((resolve) => (timer = setTimeout(resolve, KEEP_WAIT_MS)))]);
+      clearTimeout(timer);
+    }
     return kept && Object.keys(kept).length ? { headers, refresh: kept } : { headers };
   } finally {
     await closeContext(context);
