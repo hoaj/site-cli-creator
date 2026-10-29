@@ -24,7 +24,8 @@ The fixture's `__ORIGIN__` and other `__TOKENS__` are filled in when it is copie
 - A command with no flags has `args: z.object({})`. `--account` and `--confirm` are global: never declare them.
 - `inputFailure(message)` ends the command with exit 2 (input). Use it when a value the user gave does not exist; never throw your own errors for that (anything else thrown is a bug, exit 1).
 - `trigger(page)` starts on `about:blank` in a fresh page: navigate first (`await page.goto("/")`). Relative URLs resolve against the site's origin.
-- In `site.ts` hooks, `ctx.fetch` is plain `fetch` (with `transport: "browser"`, the same Chrome tab the Operations use, so a hook needs no workaround for a bot wall): it adds no headers and keeps no cookie jar. Pass `ctx.headers` (the captured `authorization` and `cookie`) yourself. `ctx.decodeJwt(token)` takes the token with or without `Bearer `.
+- In `site.ts` hooks, `ctx.fetch` is plain `fetch`: it adds no headers and keeps no cookie jar. Pass `ctx.headers` (the captured `authorization` and `cookie`) yourself.
+- With `transport: "browser"`, `ctx.fetch` is the Chrome tab the Operations use, so a hook needs no workaround for a bot wall. It still reads `Set-Cookie` and follows redirects as `fetch` does, but it takes text or `URLSearchParams` bodies only, and a call to another host must pass that host's CORS rules. `ctx.decodeJwt(token)` takes the token with or without `Bearer `.
 - There is no cookie jar anywhere: what a call needs (a cookie, a CSRF header) is what `bootstrap` returns in `headers`, or what `login` captured.
 - Host names in `login.hosts` (and `capture.ts --login-host`) are host names without scheme or port: `login.example.com`.
 
