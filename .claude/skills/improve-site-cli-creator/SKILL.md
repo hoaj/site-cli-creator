@@ -86,13 +86,13 @@ Every PR that changes the plugin bumps its version: patch for fixes, minor for f
 
 Commit one issue per commit (`site-cli-creator: <summary> (#n)`), push, open a PR titled `site-cli-creator <version>: <summary>`. The body lists each issue as `Fixes #n` with one line on what changed, the cold-read result, and **Starter code reach**: a Starter code change reaches only plugins created after the release, so list the generated plugins whose `generated.json` `generatedWith` is older (the maintainer knows their repos; `gh search code generatedWith --owner <owner> --filename generated.json` finds the ones on GitHub) and whether they should port the change by hand. No Starter change: write "Starter code reach: none".
 
-Watch CI: `gh run watch <id> --repo hoaj/site-cli-creator --exit-status`. All jobs must be green. A PR runs the smoke test on linux-x64 only; the five-platform matrix runs on main and on `workflow_dispatch`. Before merging a change to `build.ts`, `install.sh`, `release.yml` or `main.ts`, run it on the branch with `gh workflow run site-cli-creator.yml --ref <branch>` and watch it.
+Watch CI: `gh run watch <id> --repo hoaj/site-cli-creator --exit-status`. All jobs must be green. A PR runs the smoke test on linux-x64 only; the five-platform matrix runs on main and on `workflow_dispatch`. Which changes need it on the branch before merging: CLAUDE.md, step 1.
 
-Merge only when the maintainer says so: remove your worktree first (`git worktree remove ../skills-<slug>`), then `gh pr merge <n> --merge --delete-branch`.
+Review and merge it with the procedure in the repo's CLAUDE.md (Pull requests): it holds the maintainer's standing yes, the review loop and the merge commands.
 
 ### 10. Relay
 
-Tell the maintainer the PR, the new version, the issues it closes, the cold-read result and the Starter code reach list. After the merge they update with `/plugin marketplace update hoaj`.
+After the merge, in the one report CLAUDE.md step 4 asks for, tell the maintainer the PR, the new version, the issues it closes, the cold-read result and the Starter code reach list. They update with `/plugin marketplace update hoaj`.
 
 ## Gotchas
 
