@@ -6,6 +6,10 @@ import { z } from "zod";
 import { defineSite } from "./runtime/site";
 
 const postLoginResponse = z.object({ personalInfo: z.object({ customerId: z.string().min(1) }) });
+// The sign-in's token exchange (POST /oauth/token): the frontend sends its client id, the answer
+// carries a refresh token that works once.
+const tokenRequest = z.object({ client_id: z.string().min(1) });
+const tokenResponse = z.object({ access_token: z.string().min(1), refresh_token: z.string().min(1) });
 
 export default defineSite({
   plugin: "__PLUGIN__",
@@ -39,6 +43,23 @@ export default defineSite({
       // The response also carries CPR and email; only the chain root is kept.
       const { personalInfo } = postLoginResponse.parse(await res.json());
       return { customerId: personalInfo.customerId };
+    },
+    refresh: {
+      from: "/oauth/token",
+      keep: ({ request, response }) => ({
+        clientId: tokenRequest.parse(request).client_id,
+        refreshToken: tokenResponse.parse(response).refresh_token,
+      }),
+      renew: async (ctx) => {
+        const res = await ctx.fetch(`${ctx.origin}/oauth/token`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: ctx.refresh.refreshToken ?? "", client_id: ctx.refresh.clientId ?? "" }).toString(),
+        });
+        if (!res.ok) return null; // spent or revoked: sign in with Chrome
+        const t = tokenResponse.parse(await res.json());
+        return { headers: { ...ctx.headers, authorization: `Bearer ${t.access_token}` }, refresh: { ...ctx.refresh, refreshToken: t.refresh_token } };
+      },
     },
   },
 });

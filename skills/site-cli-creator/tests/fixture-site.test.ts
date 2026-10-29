@@ -312,6 +312,26 @@ describe("fixture site, auth login", () => {
     expect(token.status).toBe(200);
   });
 
+  test("/oauth/token renews with a refresh token once, with the frontend's client id; expireAccessTokens keeps refresh tokens (#94)", async () => {
+    const h = await loginHeaders(site);
+    const first = (await (await fetch(`${site.url}/oauth/token`, { method: "POST", headers: { cookie: h.cookie!, "content-type": "application/json" }, body: JSON.stringify({ grant_type: "login_cookie", client_id: "shop-web" }) })).json()) as { refresh_token: string };
+    expect(typeof first.refresh_token).toBe("string");
+    site.expireAccessTokens();
+    expect((await gql(site, h, "getAccount", ACCOUNT_Q, { customerId: USER.customerId })).status).toBe(401);
+    const renew = (refresh: string, client = "shop-web") =>
+      fetch(`${site.url}/oauth/token`, { method: "POST", body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refresh, client_id: client }) });
+    expect((await renew(first.refresh_token, "other-client")).status).toBe(400);
+    const renewed = await renew(first.refresh_token);
+    expect(renewed.status).toBe(200);
+    const t = (await renewed.json()) as { access_token: string; refresh_token: string };
+    expect(t.refresh_token).not.toBe(first.refresh_token);
+    expect((await renew(first.refresh_token)).status).toBe(400); // rotated: the old one is spent
+    const fresh = { ...h, authorization: `Bearer ${t.access_token}` };
+    expect((await gql(site, fresh, "getAccount", ACCOUNT_Q, { customerId: USER.customerId })).status).toBe(200);
+    site.revokeTokens();
+    expect((await renew(t.refresh_token)).status).toBe(400); // revokeTokens ends refresh tokens too
+  });
+
   test("blockSignIn makes every sign-in fail until it is lifted", async () => {
     site.blockSignIn(true);
     try {

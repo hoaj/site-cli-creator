@@ -161,7 +161,8 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
 
 | Hook | When | Returns |
 |---|---|---|
-| `login` | `auth: "login"` | `{ startUrl, hosts, tokenRequest, sessionProbe?, timeoutMs, postLogin }` |
+| `login` | `auth: "login"` | `{ startUrl, hosts, tokenRequest, sessionProbe?, timeoutMs, postLogin, refresh? }` |
+| `login.refresh.renew(ctx)` | the session expired (a 401/403, a login redirect, the `sessionProbe`), before Chrome is tried | `{ headers, refresh? }`, or `null` when the refresh token no longer works |
 | `login.postLogin(ctx)` | after each login and refresh | the chain-root ids that `needs` reads with `from: "session"` |
 | `bootstrap(ctx)` | `auth: "none"`, before the first call and after a 401/403 | `{ headers, ids? }`: what every call must send (a cookie, a CSRF token) |
 | `accounts(ctx)` | one login holds several accounts | `[{ id, label }]`; with more than one, commands need `--account` |
@@ -172,6 +173,33 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
 - `startUrl`: the page that leads into the site's login. `hosts`: every host the login flow passes through (host names, no port); a redirect to one means logged out.
 - `tokenRequest`: a substring or RegExp of a request with an `authorization` header that **every** load of the start page sends, even when already signed in: frontends often cache their token, so a token or post-login call seen in the first Capture may never come again. Compare two Captures of the same page and pick one that is in both (usually the API or GraphQL endpoint). For cookie-only sites, a path that only answers 2xx when logged in.
 - `sessionProbe`: only for a site that serves a signed-out request as an anonymous user (200 with empty results, or 404) instead of refusing it with 401, 403 or a redirect to a login host. The CLI recognises an expired sign-in only by such a refusal, so on that site an expired sign-in reaches the user as an empty list, "no such item" (exit 2) or false Drift (exit 3). Set it to the path (starting with `/`, on the origin) of a GET that answers 2xx only while signed in: a "who am I" call the frontend makes, such as `/api/me` (often the `tokenRequest`, when that is a GET). The CLI sends it once per run before the first Operation, with the session's headers, and signs in again (or exits 4) when it answers anything but 2xx; a 5xx, a 429 or a failed connection is ignored. How to tell and pick one: [add-skill.md](add-skill.md#4-fill-in-sitets).
+- `refresh`: set it when the site's sign-in hands out a refresh token. Then an expired session is renewed with plain `fetch` in a second, with no Chrome, also on a remote server, where nothing else can renew it.
+  - **When:** a login-flow call in the Capture (`loginFlow: true`, usually `POST /oauth/token` or `.../token/refresh`) answers with a `refresh_token` field, or sets a cookie named like one.
+  - **`from`:** that call's path (substring or RegExp). Leave it out when the refresh token is a cookie: the session's cookie header already carries it.
+  - **`keep`:** picks what renewing needs from that request's body and its answer (each parsed: JSON, a form as an object). Usually that is the refresh token and the client id the frontend sent. Parse with Zod, so a changed shape keeps nothing instead of the wrong thing.
+  - **`renew`:** sends the same call, with the content-type the Capture's request used, using `ctx.fetch` and `ctx.refresh`, as the frontend would when its token runs out. The grant is `grant_type: "refresh_token"`, the OAuth standard; the Capture shows only that the field is a string. It returns every header to send from now on (`{ ...ctx.headers, authorization: ... }`) and the new refresh record when the answer carries a new refresh token (most sites rotate it), or `null` when the site refuses.
+  - **Check it** once the first Contract exists: `login --from-profile`, then `session.json` must list the record's keys (`bun -e 'console.log(Object.keys(JSON.parse(await Bun.file("<stateDir>/session.json").text()).refresh ?? {}))'`). Set the `authorization` header in `session.json` to a made-up token, then `SITE_CLI_NONINTERACTIVE=1 bun src/main.ts check` must exit 0, and its stderr must say "renewing the sign-in" and nothing about signing in again from a Chrome profile. That line is the proof: a broken `renew` falls back to a silent headless sign-in, which also exits 0.
+
+  ```ts
+  // The sign-in POSTs { client_id } to /oauth/token, whose answer carries refresh_token (rotated on use).
+  refresh: {
+    from: "/oauth/token",
+    keep: ({ request, response }) => ({
+      clientId: z.object({ client_id: z.string() }).parse(request).client_id,
+      refreshToken: z.object({ refresh_token: z.string() }).parse(response).refresh_token,
+    }),
+    renew: async (ctx) => {
+      const res = await ctx.fetch(`${ctx.origin}/oauth/token`, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: ctx.refresh.refreshToken ?? "", client_id: ctx.refresh.clientId ?? "" }).toString(),
+      });
+      if (!res.ok) return null;
+      const t = z.object({ access_token: z.string(), refresh_token: z.string() }).parse(await res.json());
+      return { headers: { ...ctx.headers, authorization: `Bearer ${t.access_token}` }, refresh: { ...ctx.refresh, refreshToken: t.refresh_token } };
+    },
+  },
+  ```
 - `postLogin` returns ids and nothing else. Which JWT claims it needs is in the Capture: `request.bearerClaims` in a shape file lists the bearer's claim names and types (never values; a claim whose name is itself a value, such as an email, shows as `:id`). A post-login response often carries names, national ids, addresses, emails and phone numbers: parse the one field you need with Zod and drop the rest.
 - `bootstrap` uses plain `fetch` only. Which cookie it needs is in the Capture: `responses[].setCookies` names the cookies a response set (the front page, usually), and the API shapes list the request headers that carry it back (`cookie`, `x-csrf-token`). A site that needs a real browser or a solved challenge to answer is behind a bot wall: see `transport` below.
 - `transport: "browser"`: leave it out unless the site refuses plain `fetch` where Chrome gets through. It sends every request from a Chrome tab open on the origin, with Chrome's own TLS, headers and cookies (also the ones its scripts set). Contracts, `check` and Drift work as before. The cost is that Chrome starts on every run (seconds), and remote mode then needs Chrome in its image.

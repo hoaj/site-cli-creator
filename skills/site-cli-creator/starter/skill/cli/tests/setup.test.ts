@@ -236,6 +236,13 @@ describe("the Session upload", () => {
     expect((await upload(base, { file: sessionJson(), text: "not json at all" })).status).toBe(200);
   });
 
+  test("an uploaded Session keeps its refresh record, so the server can renew without Chrome (#94)", async () => {
+    const { base } = await start();
+    expect((await upload(base, { text: sessionJson({ ...goodSession, refresh: { token: "rt-planted" } }) })).status).toBe(200);
+    expect(JSON.parse(stored()).refresh).toEqual({ token: "rt-planted" });
+    expect((await req(`${base}/setup`)).text).not.toContain("rt-planted");
+  });
+
   test("bad input is rejected and an earlier working Session is kept", async () => {
     const { base } = await start();
     expect((await upload(base, { file: sessionJson() })).status).toBe(200);

@@ -5,6 +5,9 @@
 
 export type Auth = "login" | "none";
 
+/** The frontend's OAuth client id: it sends it to /oauth/token, which requires it to renew a token. */
+export const OAUTH_CLIENT_ID = "shop-web";
+
 const STYLE = `
   body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 52rem; padding: 0 1rem; color: #1b1f24; }
   table { border-collapse: collapse; width: 100%; }
@@ -51,6 +54,7 @@ const addNoteQuery = (arg: NoteForm["arg"]) => `mutation addNote($accountId: ID!
 
 const SCRIPT = (auth: Auth, form: NoteForm) => `
 const AUTH = ${JSON.stringify(auth)};
+const CLIENT_ID = ${JSON.stringify(OAUTH_CLIENT_ID)};
 const NOTE_ARG = ${JSON.stringify(form.arg)};
 const QUERIES = ${JSON.stringify({ ...QUERIES, addNote: addNoteQuery(form.arg) })};
 const $ = (id) => document.getElementById(id);
@@ -111,7 +115,12 @@ function cachedSession() {
 }
 
 async function signIn() {
-  const tokenRes = await fetch("/oauth/token", { method: "POST", credentials: "same-origin" });
+  const tokenRes = await fetch("/oauth/token", {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ grant_type: "login_cookie", client_id: CLIENT_ID }),
+  });
   if (!tokenRes.ok) throw new Error("/oauth/token failed with " + tokenRes.status);
   bearer = (await tokenRes.json()).access_token;
   const claims = decodeClaims(bearer);
