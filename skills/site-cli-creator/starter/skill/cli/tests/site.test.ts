@@ -39,6 +39,7 @@ describe("siteProblems", () => {
     expect(withRefresh({ renew })).toEqual([]);
     expect(withRefresh({ from: "/oauth/token", keep: () => ({}), renew })).toEqual([]);
     expect(withRefresh({ from: "/oauth/token" })).toEqual(["login.refresh needs a renew function", "login.refresh.from needs a keep function"]);
+    expect(withRefresh({ from: "", keep: () => ({}), renew })).toEqual(["login.refresh.from must be a non-empty URL path substring or a RegExp"]);
   });
 
   test("login.sessionProbe must be a path on the origin, so the session never goes to another host", () => {
