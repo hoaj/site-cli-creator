@@ -666,14 +666,67 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
     expect(order).toEqual(["renew", "release"]);
   });
 
-  test("a sign-in saves the refresh record login captured, and keeps the old one when it captured none", async () => {
+  test("a sign-in saves the refresh record login captured; a silent re-sign-in that captured none keeps the old one, an explicit login does not", async () => {
     const { fetch } = site();
     const { deps } = makeDeps(fetch, home.dir);
     deps.login = async () => ({ headers: { authorization: "Bearer new" }, refresh: { token: "r0" } });
     await client(refreshSite(), deps).signIn(false);
     expect(loadSession(home.dir)!.refresh).toEqual({ token: "r0" });
     deps.login = async () => ({ headers: { authorization: "Bearer newer" } });
-    await client(refreshSite(), deps).signIn(true);
+    await client(refreshSite(), deps).signIn(true, { keepRefresh: true });
     expect(loadSession(home.dir)).toMatchObject({ headers: { authorization: "Bearer newer" }, refresh: { token: "r0" } });
+    // `login` (no keepRefresh): the computer must not keep a token it may share with a server (review 2).
+    await client(refreshSite(), deps).signIn(false);
+    expect(loadSession(home.dir)!.refresh).toBeUndefined();
+  });
+
+  test("a silent re-sign-in keeps the record also when postLogin returns no ids, as long as they match (review 2)", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: {}, refresh: { token: "r1" } });
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer new" } });
+    const s = refreshSite();
+    await client({ ...s, login: { ...s.login!, postLogin: async () => ({}) } }, deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r1" });
+  });
+
+  test("a refused renew rereads session.json: another run's renewal is taken over, never overwritten (review 2)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    const racing = refreshSite(async () => {
+      // Another run renews while this one's request is in flight; this one's token is then spent.
+      saveSession(home.dir, { headers: { authorization: "Bearer new", cookie: "sid=1" }, ids: { customerId: "C-1" }, refresh: { token: "r2" } });
+      return null;
+    });
+    await client(racing, deps).call(getCustomer, { customerId: "C-1" });
+    expect(loginCalls).toEqual([]);
+    expect(loadSession(home.dir)).toMatchObject({ headers: { authorization: "Bearer new" }, refresh: { token: "r2" } });
+  });
+
+  test("a renew whose answer no longer parses (ZodError, SyntaxError) is not sent again: the token may already be rotated (review 2)", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls, notes } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    let attempts = 0;
+    const changed = refreshSite(async () => {
+      attempts++;
+      throw Object.assign(new Error("bad shape"), { name: "ZodError" });
+    });
+    await client(changed, deps).call(getCustomer, { customerId: "C-1" });
+    expect(attempts).toBe(1);
+    expect(loginCalls).toEqual([true]);
+    expect(notes.join("\n")).toContain("no longer fits");
+  });
+
+  test("taking over another run's session does not write session.json again (review 2)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    const c = client(refreshSite(async () => null), deps);
+    c.peek();
+    const theirs = saveSession(home.dir, { headers: { authorization: "Bearer new" }, ids: { customerId: "C-1" }, refresh: { token: "r2" }, savedAt: "2026-01-02T00:00:00.000Z" });
+    await c.call(getCustomer, { customerId: "C-1" });
+    expect(loadSession(home.dir)!.savedAt).toBe(theirs.savedAt);
   });
 });

@@ -516,6 +516,16 @@ describe("checkSession", () => {
     expect(existsSync(sessionFile(home.dir))).toBe(false); // the check itself saves nothing
   });
 
+  test("an upload the sessionProbe calls signed out, with no renewal that helps, is refused, not stored as working (#94, review 2)", async () => {
+    const site = loginSite({ login: { ...loginSite().login!, sessionProbe: "/api/me" } });
+    // Serves the expired upload as anonymous: /api/me 401, every read 200 with data.
+    const anonymous = (r: Recorded) => (new URL(r.url).pathname === "/api/me" ? json({}, 401) : sessionSite(r));
+    const app = makeApp(site, makeDeps(fakeFetch(anonymous).fetch, home.dir).deps);
+    const r = await checkSession(app, candidate);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/did not accept this Session/);
+  });
+
   test("the site refusing the Session says so and names `<skill> login`", async () => {
     const r = await checkSession(appWith(() => json({}, 401)), candidate);
     expect(r.ok).toBe(false);

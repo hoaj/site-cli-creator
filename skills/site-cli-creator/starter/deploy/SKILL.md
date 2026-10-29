@@ -56,7 +56,7 @@ Skills whose Tasks need a sign-in only; the others skip this. On the Owner's com
 - "Session stored, but not checked: ..." Fine. The page then shows the Session as unchecked.
 - "Not stored: <reason>." The old Session is kept. Fix the reason and upload again.
 
-The Session is never shown again; the Owner uploads a fresh one when it expires. A skill whose `site.ts` has `login.refresh` renews it on the server for as long as its refresh token lasts, so that is rare. Most sites let a refresh token be used once, and the uploaded copy is the same token the Owner's computer holds, so whichever renews first spends the other's. Right after the upload, have the Owner run `<skill> login` once more on their computer: the computer gets a token of its own and the server keeps the uploaded one. Do not read or print the file yourself.
+The Session is never shown again; the Owner uploads a fresh one when it expires. A skill whose `site.ts` has `login.refresh` renews it on the server for as long as its refresh token lasts, so that is rare. Most sites let a refresh token be used once, and the uploaded copy is the same token the Owner's computer holds, so whichever renews first spends the other's. Right after the upload, have the Owner run `<skill> login` once more on their computer. The server keeps the uploaded token, and the computer gets one of its own, or none (it then signs in with Chrome when its session expires). Do not read or print the file yourself.
 
 ## Connect claude.ai and the phone
 
