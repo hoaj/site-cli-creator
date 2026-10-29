@@ -202,6 +202,14 @@ describe("regen.ts", () => {
     expect(regen(login).out.needsChrome).toBe(true);
   });
 
+  test("auth none, reads only, transport browser: needsChrome true (#93)", () => {
+    const skill = fakeSkill("none-browser", "none", { getAccount: "read" });
+    const site = join(skill, "cli/src/site.ts");
+    writeFileSync(site, readFileSync(site, "utf8").replace('auth: "none",', 'auth: "none",\n  transport: "browser",'));
+    expect(regen(skill).out.needsChrome).toBe(true);
+    expect(readFileSync(site, "utf8")).toContain("needsChrome: true,");
+  });
+
   test("a read Operation with a required variable no needs entry supplies, or a constant that does not fit, is a warning (#35, cold read)", () => {
     const skill = fakeSkill("never-checked", "none", { getAccount: "read" });
     const opFile = (name: string, needs: string) =>

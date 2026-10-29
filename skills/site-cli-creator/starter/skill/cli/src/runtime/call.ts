@@ -14,6 +14,9 @@
 // | other non-2xx                                          | drift http                           |
 // | response fails Zod                                     | drift zod (path, Zod issue code)     |
 // | anything else thrown                                   | bug (caught in main)                 |
+//
+// transport "browser" changes only how a request is sent (deps.fetch from runtime/transport.ts);
+// the table holds as it is.
 import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
@@ -33,6 +36,12 @@ export type Deps = {
    * or null when sign-in didn't complete (headless: the profile is logged out).
    */
   login(headless: boolean, options?: SignInOptions): Promise<Record<string, string> | null>;
+  /**
+   * Closes the Chrome that transport "browser" sends requests from, if one is open; the next request
+   * opens it again. Called before anything else opens Chrome on the CLI's profile (a sign-in,
+   * `check --writes`), and at the end of a run.
+   */
+  release?(): Promise<void>;
   sleep(ms: number): Promise<void>;
   /** Delay before each retry of a network failure; its length is the retry count. */
   retryDelays: number[];
@@ -224,10 +233,18 @@ export class Client {
 
   /** Signs in with Chrome, runs postLogin and saves the session. Null if sign-in didn't complete. */
   async signIn(headless: boolean, options?: SignInOptions): Promise<Session | null> {
+    // transport "browser": its Chrome holds the old session's cookies, so it closes around the sign-in
+    // and the next request opens one with the new session.
+    await this.deps.release?.();
     const headers = await this.deps.login(headless, options);
     if (!headers) return null;
     const draft: Session = { headers, ids: {}, savedAt: new Date().toISOString() };
-    const raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
+    let raw: Record<string, unknown> | undefined;
+    try {
+      raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
+    } finally {
+      await this.deps.release?.();
+    }
     const ids: Record<string, string> = {};
     for (const [k, v] of Object.entries(raw ?? {})) if (v !== undefined && v !== null) ids[k] = String(v);
     this.session = saveSession(this.dir, { headers, ids, ...(options?.fromProfile && { fromProfile: options.fromProfile }) });
@@ -399,6 +416,7 @@ export class Client {
       try {
         res = await this.fetchFollowing(req);
       } catch (e) {
+        if (e instanceof Failure) throw e; // transport "browser" with no Chrome to send from
         transport = (e as { code?: string })?.code || (e as Error)?.name || "error";
       }
       const serverError = res && op.graphql !== undefined ? gqlServerError(res.body) : undefined;

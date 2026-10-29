@@ -134,7 +134,7 @@ The Zod schema is both the runtime parser and the TypeScript type, so Drift show
 Decided in [Template command surface and SKILL.md layout](https://github.com/hoaj/site-cli-creator/issues/6), [Where does the CLI get the chain-root customerId?](https://github.com/hoaj/site-cli-creator/issues/9) and [Live check of YouSee token claims and post-login](https://github.com/hoaj/site-cli-creator/issues/10). Playwright feasibility comes from [Does Playwright work inside bun compile binaries?](https://github.com/hoaj/site-cli-creator/issues/2). Sites without login were added in [Sites without login](https://github.com/hoaj/site-cli-creator/issues/27).
 
 - **Every CLI skill declares `auth` in `site.ts`:** `"login"` or `"none"`. The generator asks at `add-skill` and confirms it from the Capture. A plugin can mix both kinds. The rest of this section describes `auth: "login"`. `auth: "none"` is at the end.
-- **Chrome only runs for `login`, the session refresh and `check`'s write checks.** Every command, including write commands, uses plain `fetch`.
+- **Chrome only runs for `login`, the session refresh and `check`'s write checks,** unless the CLI skill sets `transport: "browser"` (below). Otherwise every command, including write commands, uses plain `fetch`.
 - **State** lives in `~/.<plugin>/` when the CLI skill is named after its plugin (as `new` names a plugin's first skill), else in `~/.<plugin>-<skill>/`, with mode 0700. The path and mode are spec choices: naming the plugin avoids collisions between two plugins whose CLI skills share a name, without doubling the name for a plugin's own skill ([State dir doubles the name](https://github.com/hoaj/site-cli-creator/issues/44)). Builds before generator 0.2.1 used `~/.<plugin>-<plugin>/`; on its first run the CLI moves that dir to `~/.<plugin>/` (a rename, so the modes and the sign-in carry over) when `~/.<plugin>/` doesn't exist yet. It never merges or deletes: if both exist, it uses `~/.<plugin>/`, leaves the old one alone, and `doctor` names it. It holds:
   - `profile/`: a Chrome user-data dir owned by the tool. Chrome 136+ refuses automation on the default profile.
   - `session.json` (0600): the bearer, the cookie, and the chain-root ids.
@@ -156,8 +156,17 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 - **`auth: "none"`:** there is no `login` command, no `profile/`, no post-login step, and exit 4 (session) never happens. Commands use plain `fetch`.
   - **Optional `bootstrap`** (`site.ts`), written by the agent from the Capture, fetches what a public API still needs, such as a front-page cookie or a CSRF token, with plain `fetch`. It is cached in `session.json` like a session and reruns silently when it expires.
   - **On a 401 or 403,** the CLI reruns `bootstrap` and retries once. If it still fails, it's Drift: the site now wants a login, a new token, or blocks the CLI. A 429 is `network`.
-  - Sites behind real bot walls (Cloudflare challenges, captchas) are out of scope for v1.
+  - A site behind a bot wall needs `transport: "browser"` (below). Captchas stay out of scope.
   - `check --writes` on an `auth: "none"` skill runs `trigger(page)` in a fresh temporary profile, deleted afterwards ([Gaps found in the final spec read](https://github.com/hoaj/site-cli-creator/issues/31)).
+- **`transport: "browser"`** (`site.ts`, either `auth`), decided in [send a CLI skill's requests from inside Chrome](https://github.com/hoaj/site-cli-creator/issues/93). It is for a site that refuses plain `fetch` but answers a browser: a bot wall a real Chrome passes on its own (a challenge its scripts solve, cookies they set), or a check of Chrome's own TLS and headers.
+  - **How requests go:** every Operation, and every `fetch` of a site hook, is sent from a tab of the user's Chrome open on the origin, as the page's own `fetch` with the page's cookies and no HTTP cache.
+    - **The Chrome keeps nothing on disk.** The session (`session.json`) is the sign-in, as with plain `fetch`: its cookies are set before the front page loads and again after, so they win over what the page set. The CLI's `profile/` stays the login's alone.
+    - **The front page loads first,** so its scripts run, and the tab waits up to 5 s for it to settle (a challenge page that sets its cookie and reloads). If it leads off the origin (to a login host), the tab gets a blank page on the origin that reaches no one.
+    - **A GET is sent again** (twice at most) when the page navigates while it is in flight. Any other method is not, since it may have reached the site.
+  - **When Chrome runs:** it starts on a run's first request and closes at the end of the run, after each MCP tool call (so none stays open between calls), and around a sign-in, so the next request carries the new session. It runs headless unless `browserWindow: true`, for a site that refuses headless Chrome; that window opens on every run.
+  - **What stays the same:** building, classification, Contracts and Drift. The page cannot read `Set-Cookie` or a manual redirect's `Location`, so the CLI takes response headers from Chrome's network events: a redirect to a login host still means signed out, and a `bootstrap` still reads the cookies a response set.
+  - **Remote mode** needs Chrome in its image: without one, `mcp --http` is an input failure.
+  - **Not covered:** captchas, which need a person, and requests the page's scripts sign one by one (a header computed per request).
 - **Several accounts under one login** (for YouSee, several Customers from `getAssociationsByParty`): without `--account <id>`, a command fails with `input` and lists the accounts. The agent asks the user and passes `--account` on later calls. Single-account users never see this. Decided in [One site per plugin, or several?](https://github.com/hoaj/site-cli-creator/issues/12).
 
 ## 8. CLI surface
@@ -170,7 +179,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   - `help`: commands, flags and exit codes, as JSON. `<command> --help` (or `-h`) prints that one command's entry and runs nothing ([Generated CLI rejects <command> --help](https://github.com/hoaj/site-cli-creator/issues/47));
   - `login [--from-profile <dir>]` (only for `auth: "login"`, §7);
   - `check [--op <name>] [--writes]` (§10);
-  - `doctor`: versions, `generatedWith`, Chrome path, plus the state dir and `gh` status (both spec choices). It prints the `check` command but doesn't run it;
+  - `doctor`: versions, `generatedWith`, Chrome path, plus the transport, the state dir and `gh` status (spec choices). It prints the `check` command but doesn't run it;
   - `version`;
   - `mcp [--http [--port <n>]]`: serves the same CLI skill as an MCP server, in local mode on stdio or, with `--http`, in remote mode (see **MCP server** below). Agents running the CLI never call it.
 
@@ -312,7 +321,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 - Running `check` automatically on users' machines. A repo of plugins may schedule it itself, outside the generator: hoaj/plugins runs every CLI skill's read-only `check` daily and files Drift with the Feedback skill's titles.
 - Rub-style inspection of the site's JS bundle.
 - Private plugins installed without `gh`: a private repo's releases need `gh`, logged in, with read access. Public is the default (§9), accepting that a public plugin publishes a site's internal API shapes, never its values ([Generated plugins: install binaries over HTTPS without gh](https://github.com/hoaj/site-cli-creator/issues/78)).
-- Sites behind real bot walls, such as Cloudflare challenges or captchas.
+- Captchas and other bot walls a real Chrome does not pass on its own, and requests the page's scripts sign one by one. `transport: "browser"` (§7) covers walls that Chrome passes by itself.
 - Jira as a test case: it was replaced by Mit YouSee.
 
 ## 12. Open points (all resolved)

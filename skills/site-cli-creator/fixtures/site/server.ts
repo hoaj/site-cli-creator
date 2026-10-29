@@ -30,6 +30,7 @@ export const DRIFTS = [
   "server-error", // data APIs answer 500
   "rate-limit", // data APIs answer 429
   "input-rejected", // calls with variables are rejected with 400 BAD_USER_INPUT
+  "bot-wall", // data APIs answer 403 with an HTML challenge page unless the request comes from a browser (Sec-Fetch-Mode) and carries the cookie the front page sets in JavaScript
 ] as const;
 
 export type Drift = (typeof DRIFTS)[number];
@@ -69,6 +70,10 @@ const HINT_COOKIE = "shop_hint";
 const CSRF_COOKIE = "csrf_token";
 /** The login host's own sign-in, as an SSO host keeps one: a later visit signs in at once. */
 const IDP_COOKIE = "idp_sid";
+/** The bot-wall drift: a cookie only the front page's script sets, as an anti-bot script does. */
+const BOT_COOKIE = "shop_bw";
+const BOT_SCRIPT = `<script>document.cookie = "${BOT_COOKIE}=1; Path=/; SameSite=Lax";</script>`;
+const CHALLENGE_PAGE = "<!doctype html><html><head><title>Just a moment...</title></head><body>Checking your browser.</body></html>";
 
 const json = (status: number, body: unknown, headers: Record<string, string> = {}) =>
   new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json", ...headers } });
@@ -147,6 +152,9 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
    */
   const gate = (req: Request, rest: boolean, asAnonymous = false): Response | null => {
     if (drift === "auth") return failure(401, "UNAUTHENTICATED", "Authentication required.");
+    // Like a real wall, the cookie alone is not enough (copied into a plain request it would be): the
+    // request must also come from a browser, which sends Sec-Fetch-* headers a page cannot set.
+    if (drift === "bot-wall" && (readCookies(req)[BOT_COOKIE] !== "1" || !req.headers.get("sec-fetch-mode"))) return html(403, CHALLENGE_PAGE);
     if (drift === "server-error") return failure(500, "INTERNAL_SERVER_ERROR", "Something went wrong.");
     if (drift === "rate-limit") return failure(429, "RATE_LIMITED", "Too many requests.");
     if (asAnonymous) return null;
@@ -261,7 +269,7 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
 
   const handleSite = async (req: Request, route: string, url: URL, entry: RequestLogEntry): Promise<Response> => {
     if (route === "GET /") {
-      const page = html(200, accountPage(auth, noteForm(drift)));
+      const page = html(200, accountPage(auth, noteForm(drift)) + (drift === "bot-wall" ? BOT_SCRIPT : ""));
       if (auth === "login") return sessionOf(req) ? page : redirect(302, `${loginUrl}/login`);
       const existing = readCookies(req)[CSRF_COOKIE];
       if (existing && csrfTokens.has(existing)) return page;

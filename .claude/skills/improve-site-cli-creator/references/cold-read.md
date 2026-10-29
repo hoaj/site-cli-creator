@@ -2,7 +2,7 @@
 
 One fresh subagent that did not see the failure follows the generator's docs on the fixture site. Its blindness is the point: it catches a fix that only reads well if you already know the problem.
 
-Send it this brief, filled in, as one self-contained prompt. `<worktree>` is your worktree's absolute path; `<gen>` is `<worktree>/skills/site-cli-creator`. Drift switch names are the `DRIFTS` list in `<gen>/fixtures/site/server.ts` (`rename-field`, `type-change`, `remove-rest`, `graphql-validation`, `write-shape`, `ui-change`, `auth`, `server-error`, `rate-limit`, `input-rejected` at the time of writing).
+Send it this brief, filled in, as one self-contained prompt. `<worktree>` is your worktree's absolute path; `<gen>` is `<worktree>/skills/site-cli-creator`. Drift switch names are the `DRIFTS` list in `<gen>/fixtures/site/server.ts` (`rename-field`, `type-change`, `remove-rest`, `graphql-validation`, `write-shape`, `ui-change`, `auth`, `server-error`, `rate-limit`, `input-rejected`, `bot-wall` at the time of writing).
 
 ```
 You are a coding agent whose user asked: "Make me a plugin for the site at <fixture url>
