@@ -355,7 +355,8 @@ describe("login", () => {
     const answers = [{ authorization: "Bearer t" }, null];
     deps.login = async (headless, options) => {
       seen.push({ headless, options });
-      return answers.shift() ?? null;
+      const headers = answers.shift();
+      return headers ? { headers } : null;
     };
     const ok = await run(["login", "--from-profile", "/tmp/capture-profile"], makeApp(loginSite(), deps));
     expect(ok.code).toBe(0);
@@ -371,7 +372,7 @@ describe("login", () => {
     const { deps } = makeDeps(fakeFetch(happySite).fetch, home.dir);
     deps.login = async (_headless, options) => {
       seen.push(options?.fromProfile);
-      return { authorization: "Bearer t" };
+      return { headers: { authorization: "Bearer t" } };
     };
     for (const arg of ["--from-profile=~/.site-cli-creator/profile", "--from-profile=~"]) {
       expect((await run(["login", arg], makeApp(loginSite(), deps))).code).toBe(0);
@@ -389,7 +390,8 @@ describe("login", () => {
       deps.env = { ...deps.env, SITE_CLI_NONINTERACTIVE: "1" };
       deps.login = async (headless, options) => {
         seen.push({ headless, fromProfile: options?.fromProfile });
-        return answers.shift() ?? null;
+        const headers = answers.shift();
+        return headers ? { headers } : null;
       };
       expect((await run(["login", "--from-profile", source.dir], makeApp(loginSite(), deps))).code).toBe(0);
       expect(loadSession(home.dir)!.fromProfile).toBe(source.dir);
@@ -422,7 +424,7 @@ describe("login", () => {
       let seeded: Error = new ProfileUnavailable(`--from-profile: could not open ${source.dir} (in use)`);
       deps.login = async (_headless, options) => {
         if (options?.fromProfile) throw seeded;
-        return { authorization: "Bearer t2" };
+        return { headers: { authorization: "Bearer t2" } };
       };
       saveSession(home.dir, { headers: { authorization: "Bearer t1" }, ids: { customerId: "C-1" }, fromProfile: source.dir });
       expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(0);

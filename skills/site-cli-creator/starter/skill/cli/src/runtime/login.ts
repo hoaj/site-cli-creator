@@ -1,7 +1,8 @@
 // Sign-in through the user's Chrome on the tool-owned profile (SPEC §7). Headed for `login`,
 // headless for the silent refresh. Under SITE_CLI_TEST=1 the headed sign-in runs headless too.
 import { existsSync } from "node:fs";
-import type { BrowserContext, Cookie, Request } from "playwright-core";
+import type { BrowserContext, Cookie, Request, Response } from "playwright-core";
+import type { SignedIn } from "./call";
 import { chromeLaunchOptions, chromeNotFound, findChrome } from "./chrome";
 import { ContractError, Failure, ProfileUnavailable } from "./envelope";
 import { ensureProfileDir } from "./session";
@@ -10,6 +11,8 @@ import { effectiveOrigin, isLoginHost, isTest, loginHostName, onSiteDomain, reba
 const REFRESH_TIMEOUT_MS = 30_000;
 /** How long a headless refresh may sit on a login host before it counts as logged out (SSO hops pass through). */
 const LOGIN_HOST_GRACE_MS = 5_000;
+/** How long a finished sign-in waits for the refresh exchange's answer to be read. */
+const KEEP_WAIT_MS = 5_000;
 
 export type LoginOptions = {
   headless: boolean;
@@ -142,8 +145,11 @@ export function loginTimeoutMs(site: Site, headless: boolean, env: Env = process
   return headless ? Math.min(REFRESH_TIMEOUT_MS, configured ?? REFRESH_TIMEOUT_MS) : configured ?? 600_000;
 }
 
-/** Returns the captured authorization + cookie headers, or null when sign-in didn't complete. */
-export async function chromeLogin(site: Site, options: LoginOptions): Promise<Record<string, string> | null> {
+/**
+ * Returns the captured authorization + cookie headers, and what login.refresh.keep picked from the
+ * exchange login.refresh.from names; null when sign-in didn't complete.
+ */
+export async function chromeLogin(site: Site, options: LoginOptions): Promise<SignedIn | null> {
   const env = options.env ?? process.env;
   const login = site.login;
   if (!login) throw new ContractError(`site.ts has auth "login" but no login block`);
@@ -159,7 +165,23 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Re
   const context = seed.length
     ? await launchInMemory(site, headless, env, { cookies: seed, origins: [] })
     : await launch(site, ensureProfileDir(site, env), headless, env);
+  const refresh = login.refresh;
+  let kept: Record<string, string> | undefined;
+  /** The refresh exchange being read, so the sign-in does not end before it is. */
+  let keeping: Promise<void> = Promise.resolve();
   try {
+    if (refresh?.from && refresh.keep) {
+      const { from, keep } = refresh;
+      context.on("response", (res) => {
+        if (!tokenMatches(from, res.url()) || res.status() < 200 || res.status() >= 300) return;
+        keeping = keeping
+          .then(async () => {
+            const picked = keep({ request: requestBody(res.request()), response: await responseBody(res) });
+            kept = Object.fromEntries(Object.entries(picked ?? {}).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => [k, String(v)]));
+          })
+          .catch(() => {}); // a keep that throws keeps nothing; renew then has nothing to trade
+      });
+    }
     const done = new Promise<Request | "logged-out" | null>((resolve) => {
       const timer = setTimeout(() => resolve(null), timeoutMs);
       let grace: ReturnType<typeof setTimeout> | undefined;
@@ -199,8 +221,24 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Re
     const jar = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
     if (jar) headers.cookie = jar;
     else if (sent.cookie) headers.cookie = sent.cookie;
-    return headers;
+    await Promise.race([keeping, Bun.sleep(KEEP_WAIT_MS)]);
+    return kept && Object.keys(kept).length ? { headers, refresh: kept } : { headers };
   } finally {
     await closeContext(context);
   }
+}
+
+/** A request's body as keep sees it: parsed JSON, a form as an object, else undefined. Kept in memory only. */
+function requestBody(req: Request): unknown {
+  const raw = req.postData();
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    return /^[^=&\s]+=/.test(raw) ? Object.fromEntries(new URLSearchParams(raw)) : undefined;
+  }
+}
+
+async function responseBody(res: Response): Promise<unknown> {
+  return res.json().catch(() => undefined);
 }

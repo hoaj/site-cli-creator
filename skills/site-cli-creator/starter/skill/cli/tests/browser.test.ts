@@ -32,6 +32,12 @@ const server = Bun.serve({
     if (url.pathname === "/account")
       return page(`fetch("/graphql", { method: "POST", headers: { authorization: "Bearer tok-1", "content-type": "application/json" }, body: JSON.stringify({ operationName: "me", query: "query me { me { id } }" }) });`);
     if (url.pathname === "/logged-out") return Response.redirect(`${loginHost.url.origin}/login`, 302);
+    // An OAuth-style sign-in: the page trades for tokens (a refresh token among them), then calls the API.
+    if (url.pathname === "/account-refresh")
+      return page(`fetch("/oauth/token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant_type: "authorization_code", client_id: "c-1" }) })
+        .then((r) => r.json())
+        .then((t) => fetch("/graphql", { method: "POST", headers: { authorization: "Bearer " + t.access_token, "content-type": "application/json" }, body: JSON.stringify({ operationName: "me", query: "query me { me { id } }" }) }));`);
+    if (url.pathname === "/oauth/token") return Response.json({ access_token: "tok-1", refresh_token: "rt-1", expires_in: 300, name: "Kim Secret" });
     if (url.pathname === "/orders")
       return page(`
         document.getElementById("save").onclick = async () => {
@@ -113,9 +119,21 @@ const site = () =>
 
 describe.skipIf(skip)("Chrome", () => {
   test("login captures the authorization header and cookies (SITE_CLI_TEST runs it headless)", async () => {
-    const headers = await chromeLogin(site(), { headless: false, env: { SITE_CLI_TEST: "1", SITE_CLI_HOME: home.dir } });
-    expect(headers).toEqual({ authorization: "Bearer tok-1", cookie: "sid=abc" });
+    const signedIn = await chromeLogin(site(), { headless: false, env: { SITE_CLI_TEST: "1", SITE_CLI_HOME: home.dir } });
+    expect(signedIn).toEqual({ headers: { authorization: "Bearer tok-1", cookie: "sid=abc" } });
     expect(existsSync(profileDir(home.dir))).toBe(true);
+  }, 60_000);
+
+  test("login keeps what login.refresh.keep picks from the request login.refresh.from names and its JSON answer, nothing else (#94)", async () => {
+    const s = site();
+    s.login!.startUrl = `${server.url.origin}/account-refresh`;
+    s.login!.refresh = {
+      from: "/oauth/token",
+      keep: ({ request, response }) => ({ clientId: String((request as any).client_id), token: String((response as any).refresh_token) }),
+      renew: async () => null,
+    };
+    const signedIn = await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } });
+    expect(signedIn).toEqual({ headers: { authorization: "Bearer tok-1", cookie: "sid=abc" }, refresh: { clientId: "c-1", token: "rt-1" } });
   }, 60_000);
 
   test("login --from-profile writes no cookie into the CLI's own profile: nothing but session.json (review)", async () => {
@@ -126,8 +144,8 @@ describe.skipIf(skip)("Chrome", () => {
       const seeded = await chromium.launchPersistentContext(source.dir, { ...chromeLaunchOptions(findChrome()), headless: true });
       await seeded.addCookies([{ name: "seeded_sid", value: "seeded-value", url: server.url.origin, expires: Math.floor(Date.now() / 1000) + 3600 }]);
       await seeded.close();
-      const headers = await chromeLogin(site(), { headless: true, fromProfile: source.dir, env: { SITE_CLI_HOME: fresh.dir } });
-      expect(headers?.cookie).toContain("seeded_sid=seeded-value");
+      const signedIn = await chromeLogin(site(), { headless: true, fromProfile: source.dir, env: { SITE_CLI_HOME: fresh.dir } });
+      expect(signedIn?.headers.cookie).toContain("seeded_sid=seeded-value");
       const files = (dir: string): string[] =>
         existsSync(dir) ? readdirSync(dir, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? files(join(dir, e.name)) : [join(dir, e.name)])) : [];
       const holding = files(profileDir(fresh.dir)).filter((f) => basename(f).startsWith("Cookies") && readFileSync(f).includes("seeded_sid"));

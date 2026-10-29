@@ -17,7 +17,7 @@
 import { checkVariables, execute, GraphQLFailure, parse, validate, type GraphQLError } from "./graphql";
 import { ACCOUNT, buildSchema, INVOICES, newStore, SUBSCRIPTIONS, USER, type Note } from "./data";
 import { loginOriginFor } from "./hosts";
-import { accountPage, loginPage, NOTE_FORM, type Auth, type NoteForm } from "./pages";
+import { accountPage, loginPage, NOTE_FORM, OAUTH_CLIENT_ID, type Auth, type NoteForm } from "./pages";
 
 export const DRIFTS = [
   "rename-field", // listSubscriptions[].status is returned as `state`
@@ -45,8 +45,10 @@ export type FixtureSite = {
   auth: Auth;
   /** Switches the site's behaviour; null restores normal behaviour. */
   setDrift(name: Drift | null): void;
-  /** Invalidates every issued bearer while keeping login sessions: data APIs answer 401. */
+  /** Invalidates every issued bearer and refresh token while keeping login sessions: data APIs answer 401. */
   revokeTokens(): void;
+  /** Invalidates every issued bearer but keeps refresh tokens, as when access tokens time out: data APIs answer 401 until one is renewed. */
+  expireAccessTokens(): void;
   /** Ends every login session, bearer and remembered login-host sign-in: REST reads redirect to the login host, GraphQL answers 401. */
   revokeSessions(): void;
   /** While true, the login host refuses every new sign-in (autologin included), so a login never completes; a browser it remembers (idp_sid cookie) still passes. */
@@ -120,6 +122,7 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
   const log: RequestLogEntry[] = [];
   const sessions = new Set<string>(); // login: session ids behind the session cookie
   const tokens = new Map<string, string>(); // login: bearer → session id
+  const refreshTokens = new Map<string, string>(); // login: refresh token → session id; each is used once
   const codes = new Map<string, string>(); // login: one-time sign-in code → session id
   const csrfTokens = new Set<string>(); // none: issued CSRF tokens
   const idpSessions = new Set<string>(); // login: sign-ins the login host remembers (IDP_COOKIE)
@@ -297,11 +300,28 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
         return res;
       }
       if (route === "POST /oauth/token") {
-        const sid = sessionOf(req);
-        if (!sid) return failure(401, "UNAUTHENTICATED", "No login session.");
+        // JSON from the frontend, a form from an OAuth client: grant_type login_cookie (the login session's
+        // cookie) or refresh_token (a refresh token, rotated: each works once, with the client id).
+        const raw = await req.text();
+        let body: Record<string, unknown> = {};
+        try {
+          body = (req.headers.get("content-type") ?? "").includes("json") ? JSON.parse(raw) : Object.fromEntries(new URLSearchParams(raw));
+        } catch {}
+        let sid: string | undefined;
+        if (body.grant_type === "refresh_token") {
+          const old = String(body.refresh_token ?? "");
+          sid = refreshTokens.get(old);
+          if (!sid || body.client_id !== OAUTH_CLIENT_ID || !sessions.has(sid)) return json(400, { error: "invalid_grant" });
+          refreshTokens.delete(old);
+        } else {
+          sid = sessionOf(req);
+          if (!sid) return failure(401, "UNAUTHENTICATED", "No login session.");
+        }
         const token = makeToken();
         tokens.set(token, sid);
-        return json(200, { access_token: token, token_type: "Bearer", expires_in: 3600 });
+        const refresh = randomId();
+        refreshTokens.set(refresh, sid);
+        return json(200, { access_token: token, refresh_token: refresh, token_type: "Bearer", expires_in: 3600 });
       }
       if (route === "POST /api/session/post-login") {
         if (!loggedIn(req)) return failure(401, "UNAUTHENTICATED", "Authentication required.");
@@ -352,11 +372,16 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
       if (name !== null && !DRIFTS.includes(name)) throw new Error(`unknown drift "${name}", expected one of ${DRIFTS.join(", ")}`);
       drift = name;
     },
-    revokeTokens: () => tokens.clear(),
+    revokeTokens: () => {
+      tokens.clear();
+      refreshTokens.clear();
+    },
+    expireAccessTokens: () => tokens.clear(),
     revokeSessions: () => {
       sessions.clear();
       idpSessions.clear();
       tokens.clear();
+      refreshTokens.clear();
       codes.clear();
     },
     blockSignIn: (blocked) => {

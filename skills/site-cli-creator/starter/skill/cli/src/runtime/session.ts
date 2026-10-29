@@ -20,6 +20,8 @@ export type Session = {
    * profile/ holds no sign-in then.
    */
   fromProfile?: string;
+  /** What login.refresh.keep kept (a refresh token): renew trades it for a new session. Never logged. */
+  refresh?: Record<string, string>;
   savedAt: string;
 };
 
@@ -31,6 +33,7 @@ export const sessionUploadSchema = z.object({
   headers: z.record(z.string(), z.string()),
   ids: z.record(z.string(), z.string()),
   accounts: z.array(z.object({ id: z.string() })).optional(),
+  refresh: z.record(z.string(), z.string()).optional(),
   savedAt: z.string().optional(),
 });
 

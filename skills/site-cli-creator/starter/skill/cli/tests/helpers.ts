@@ -75,7 +75,8 @@ export function makeDeps(fetch: Deps["fetch"], home: string, logins: Array<Recor
     env: { SITE_CLI_HOME: home },
     login: async (headless) => {
       loginCalls.push(headless);
-      return logins.length ? logins.shift()! : null;
+      const headers = logins.length ? logins.shift()! : null;
+      return headers ? { headers } : null;
     },
     sleep: async () => {},
     retryDelays: [0, 0],

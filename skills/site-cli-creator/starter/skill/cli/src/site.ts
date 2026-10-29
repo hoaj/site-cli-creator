@@ -27,6 +27,9 @@ export default defineSite({
     // sessionProbe: "/api/me",
     timeoutMs: 600_000,
     postLogin: async () => ({}),
+    // When the sign-in's token call answers with a refresh_token, add `refresh` (from, keep,
+    // renew; see the generator's reference/contracts.md): an expired session is then renewed with
+    // plain fetch, without Chrome, also on a remote server.
   },
   bootstrap: async () => ({ headers: {} }),
   // Non-GET requests the pages send that change no data (token refresh, post-login), so

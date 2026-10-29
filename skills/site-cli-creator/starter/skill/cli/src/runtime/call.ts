@@ -4,7 +4,7 @@
 // | variables fail Zod                                     | input, nothing sent                  |
 // | transport error, 5xx, 429 (after retries)              | network                              |
 // | GraphQL data null + server error code (after retries)  | network (INTERNAL*, SERVICE_UNAVAILABLE) |
-// | login: 401/403/redirect to a login host                | sign in again, retry; still → drift auth |
+// | login: 401/403/redirect to a login host                | renew (login.refresh), else sign in again; retry; still → drift auth |
 // | login: sessionProbe not 2xx (5xx/429 aside), once a run before the first call | sign in again before sending |
 // | login: sign-in doesn't complete                        | session                              |
 // | none: 401/403                                          | rerun bootstrap, retry; still → drift auth |
@@ -28,14 +28,14 @@ import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type
 /** `fromProfile`: seed the sign-in from another Chrome profile's cookies (`login --from-profile`). */
 export type SignInOptions = { fromProfile?: string };
 
+/** A finished sign-in: the captured authorization + cookie headers, and what login.refresh.keep kept. */
+export type SignedIn = { headers: Record<string, string>; refresh?: Record<string, string> };
+
 export type Deps = {
   fetch: Fetch;
   env: Env;
-  /**
-   * Opens Chrome on the login profile and returns the captured authorization + cookie headers,
-   * or null when sign-in didn't complete (headless: the profile is logged out).
-   */
-  login(headless: boolean, options?: SignInOptions): Promise<Record<string, string> | null>;
+  /** Opens Chrome on the login profile; null when sign-in didn't complete (headless: the profile is logged out). */
+  login(headless: boolean, options?: SignInOptions): Promise<SignedIn | null>;
   /**
    * Closes the Chrome that transport "browser" sends requests from, if one is open; the next request
    * opens it again. Called before anything else opens Chrome on the CLI's profile (a sign-in,
@@ -178,6 +178,8 @@ export class Client {
   fresh = false;
   /** True once this run asked login.sessionProbe whether the saved session is still signed in. */
   private probed = false;
+  /** True once this run tried login.refresh.renew: a further refusal goes to Chrome. */
+  private renewTried = false;
   private session: Session | null;
   private readonly reauthAllowed: boolean;
   private readonly surface: Surface;
@@ -226,6 +228,7 @@ export class Client {
       origin: this.origin,
       headers: { ...session.headers },
       ids: { ...session.ids },
+      refresh: { ...session.refresh },
       decodeJwt,
       call: caller.call,
     };
@@ -236,9 +239,13 @@ export class Client {
     // transport "browser": its Chrome holds the old session's cookies, so it closes around the sign-in
     // and the next request opens one with the new session.
     await this.deps.release?.();
-    const headers = await this.deps.login(headless, options);
-    if (!headers) return null;
-    const draft: Session = { headers, ids: {}, savedAt: new Date().toISOString() };
+    const signedIn = await this.deps.login(headless, options);
+    if (!signedIn) return null;
+    const { headers } = signedIn;
+    // A sign-in that saw no token exchange (the frontend reused its cached token) keeps the refresh
+    // record it had: it belongs to the same login.
+    const refresh = signedIn.refresh ?? this.peek()?.refresh;
+    const draft: Session = { headers, ids: {}, ...(refresh && { refresh }), savedAt: new Date().toISOString() };
     let raw: Record<string, unknown> | undefined;
     try {
       raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
@@ -247,10 +254,35 @@ export class Client {
     }
     const ids: Record<string, string> = {};
     for (const [k, v] of Object.entries(raw ?? {})) if (v !== undefined && v !== null) ids[k] = String(v);
-    this.session = saveSession(this.dir, { headers, ids, ...(options?.fromProfile && { fromProfile: options.fromProfile }) });
+    this.session = saveSession(this.dir, { headers, ids, ...(refresh && { refresh }), ...(options?.fromProfile && { fromProfile: options.fromProfile }) });
     this.persisted = true;
     this.fresh = true;
     return this.session;
+  }
+
+  /**
+   * login.refresh: trades the kept refresh token for a new session with plain fetch, once per run,
+   * before Chrome is tried (SPEC §7). True when it did; the new headers and a rotated refresh record
+   * are saved, the ids kept. A renew that throws or answers null leaves the session as it was.
+   */
+  private async renew(): Promise<boolean> {
+    const refresh = this.site.auth === "login" ? this.site.login?.refresh : undefined;
+    const current = this.peek();
+    if (!refresh || !current || this.renewTried) return false;
+    this.renewTried = true;
+    this.deps.note(`renewing the sign-in to ${this.site.origin} with its refresh token`);
+    let renewed: Awaited<ReturnType<typeof refresh.renew>>;
+    try {
+      renewed = await refresh.renew(this.siteCtx(current, false));
+    } catch (e) {
+      // The error's name only: its message may carry what the site sent.
+      this.deps.note(`renewing the sign-in failed (${(e as Error)?.name ?? "error"}); signing in with Chrome instead`);
+      return false;
+    }
+    if (!renewed?.headers) return false;
+    const next = { ...current, headers: renewed.headers, ...(renewed.refresh && { refresh: renewed.refresh }), savedAt: new Date().toISOString() };
+    this.session = this.persisted ? saveSession(this.dir, next) : next;
+    return true;
   }
 
   /**
@@ -323,13 +355,17 @@ export class Client {
     if (res.status >= 200 && res.status < 300 && !res.loginRedirect && !res.offsite) return;
     if (res.status >= 500 || res.status === 429) return; // the site is struggling, not signed out
     this.deps.note(`the saved sign-in to ${this.site.origin} has expired (${probe}: HTTP ${res.status})`);
-    await this.signInOrFail();
+    if (!(await this.renew())) await this.signInOrFail();
   }
 
-  /** After a 401/403: sign in again (login) or rerun bootstrap (none). False when there is nothing to rerun. */
+  /**
+   * After a 401/403: renew with the refresh token, else sign in again (login), or rerun bootstrap
+   * (none). False when there is nothing left to try, so the refusal is Drift.
+   */
   private async reauthenticate(): Promise<boolean> {
     if (!this.reauthAllowed || this.fresh) return false;
     if (this.site.auth === "login") {
+      if (await this.renew()) return true;
       await this.signInOrFail();
       return true;
     }
@@ -349,12 +385,11 @@ export class Client {
     await this.ensureSession();
     await this.probeSession();
     let res = await this.send(op, v.data);
+    // Renew, then sign in (or rerun bootstrap): each at most once a run, so this ends.
+    while (this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data);
     if (this.isAuthFailure(op, res)) {
-      if (await this.reauthenticate()) res = await this.send(op, v.data);
-      if (this.isAuthFailure(op, res)) {
-        const after = this.site.auth === "login" ? "a fresh sign-in" : this.site.bootstrap ? "rerunning bootstrap" : "a call without login";
-        throw this.drift(op, "auth", "", res.loginRedirect ? "redirect" : String(res.status), `the site refused the request (HTTP ${res.status}) after ${after}`);
-      }
+      const after = this.site.auth === "login" ? "a fresh sign-in" : this.site.bootstrap ? "rerunning bootstrap" : "a call without login";
+      throw this.drift(op, "auth", "", res.loginRedirect ? "redirect" : String(res.status), `the site refused the request (HTTP ${res.status}) after ${after}`);
     }
     return this.classify(op, res);
   }) as Call;
