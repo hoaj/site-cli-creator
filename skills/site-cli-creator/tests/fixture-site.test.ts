@@ -493,11 +493,28 @@ describe("drift switches", () => {
     expect(res.status).toBe(200);
   });
 
+  test("bot-wall: a data API answers an HTML challenge with 403 unless a browser request carries the cookie the front page's script sets (#93)", async () => {
+    const site = startFixtureSite({ auth: "none" });
+    sites.push(site);
+    site.setDrift("bot-wall");
+    const h = await csrfHeaders(site);
+    const url = `${site.url}/api/invoices?accountId=${ACCOUNT.id}`;
+    const blocked = await fetch(url, { headers: h });
+    expect(blocked.status).toBe(403);
+    expect(blocked.headers.get("content-type")).toContain("text/html");
+    expect(await (await fetch(`${site.url}/`, { headers: { cookie: h.cookie! } })).text()).toContain('document.cookie = "shop_bw=1');
+    const withCookie = { ...h, cookie: `${h.cookie}; shop_bw=1` };
+    expect((await fetch(url, { headers: withCookie })).status).toBe(403); // a copied cookie alone does not pass
+    const browser = { ...withCookie, "sec-fetch-mode": "cors" };
+    expect((await fetch(url, { headers: browser })).status).toBe(200);
+    expect((await gql(site, browser, "getAccount", "query getAccount { getAccount { id } }")).status).toBe(200);
+  });
+
   test("unknown switches are refused", () => {
     const site = startFixtureSite({ auth: "none" });
     sites.push(site);
     expect(() => site.setDrift("nope" as Drift)).toThrow(/unknown drift/);
-    expect(DRIFTS.length).toBe(10);
+    expect(DRIFTS.length).toBe(11);
   });
 });
 

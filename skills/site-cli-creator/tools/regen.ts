@@ -114,7 +114,7 @@ await runTool(async () => {
     if (never) warnings.push(neverCheckedWarning(String(op.name), never));
   }
   for (const w of warnings) progress(`warning: ${w}`);
-  const needsChrome = site.auth === "login" || operations.some((o) => o.effect === "write");
+  const needsChrome = site.auth === "login" || site.transport === "browser" || operations.some((o) => o.effect === "write");
   writeFileSync(paths.site, setNeedsChrome(readFileSync(paths.site, "utf8"), needsChrome));
 
   const commands = helpCommands(runHelp(paths.cli, paths.main));

@@ -26,6 +26,13 @@ describe("siteProblems", () => {
     expect(siteProblems(makeSite({ readOnlyRequests: "/api/token" as any }))).toHaveLength(1);
   });
 
+  test("transport is fetch or browser; browserWindow only with transport browser (#93)", () => {
+    expect(siteProblems(makeSite({ transport: "fetch" }))).toEqual([]);
+    expect(siteProblems(makeSite({ transport: "browser", browserWindow: true }))).toEqual([]);
+    expect(siteProblems(makeSite({ transport: "curl" as any }))).toEqual(['transport must be "fetch" or "browser"']);
+    expect(siteProblems(makeSite({ browserWindow: true }))).toEqual(['browserWindow needs transport "browser"']);
+  });
+
   test("login.sessionProbe must be a path on the origin, so the session never goes to another host", () => {
     const probe = (sessionProbe: string) => siteProblems(loginSite({ login: { ...loginSite().login!, sessionProbe } }));
     expect(probe("/api/me")).toEqual([]);

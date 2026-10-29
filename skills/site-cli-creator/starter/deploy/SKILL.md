@@ -10,7 +10,7 @@ Runs one of this plugin's CLI skills in remote mode (`<skill> mcp --http`) on a 
 
 ## Pick the CLI skill
 
-The folders under `skills/` that have a `cli/` folder. Ask the Owner which one if there are several. Everything below runs from `skills/<skill>/`, which holds the `Dockerfile` and `.dockerignore`. Nothing host-specific lives there.
+The folders under `skills/` that have a `cli/` folder. Ask the Owner which one if there are several. A skill whose `cli/src/site.ts` sets `transport: "browser"` sends its requests from Chrome, which the image does not hold: its server refuses to start. Tell the Owner it cannot be deployed this way and stop. Everything below runs from `skills/<skill>/`, which holds the `Dockerfile` and `.dockerignore`. Nothing host-specific lives there.
 #@shared The plugin shares its repo with other plugins: in the Owner's checkout of `__REPO__` it is the folder `__PLUGIN_DIR__`, so `skills/<skill>/` here and in the host guides means `__PLUGIN_DIR__/skills/<skill>/`.
 
 ## The contract

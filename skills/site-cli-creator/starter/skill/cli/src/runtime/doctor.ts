@@ -108,7 +108,7 @@ export async function doctor(site: Site, options: DoctorOptions = {}) {
   }
 
   let chrome: string;
-  if (!site.needsChrome && site.auth !== "login") chrome = "not needed";
+  if (!site.needsChrome && site.auth !== "login" && site.transport !== "browser") chrome = "not needed";
   else {
     const c = findChrome(env, platform, exists);
     chrome = c.path ?? `not found (looked at ${c.checked.join(", ") || "no known path"}). ${installHint(platform)}`;
@@ -144,6 +144,7 @@ export async function doctor(site: Site, options: DoctorOptions = {}) {
     bun: Bun.version,
     os: osName(platform),
     auth: site.auth,
+    transport: site.transport ?? "fetch",
     stateDir: dir,
     ...oldStateDir,
     session,

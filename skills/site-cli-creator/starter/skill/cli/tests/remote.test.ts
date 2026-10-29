@@ -122,6 +122,15 @@ describe("remoteConfig", () => {
     expect(ok).toMatchObject({ code: 0, serve: "mcp-http" });
     expect((ok as any).remote.port).toBe(5000);
   });
+
+  test("`mcp --http` of a transport browser skill with no Chrome on the host is an input envelope, before serving (#93)", async () => {
+    const d = makeDeps(fakeFetch(happySite).fetch, home.dir);
+    d.deps.env = { ...d.deps.env, OWNER_PASSWORD: PW, PUBLIC_URL: "https://x.example", SITE_CLI_CHROME: join(home.dir, "no-chrome") };
+    const { output, code } = await run(["mcp", "--http"], makeApp(makeSite({ transport: "browser" }), d.deps));
+    expect(code).toBe(2);
+    expect((output as any).error.message).toMatch(/transport "browser".*no Chrome/);
+    expect((await run(["mcp", "--http"], makeApp(makeSite(), d.deps))).code).toBe(0); // transport fetch needs none
+  });
 });
 
 describe("Server sign-in over HTTP", () => {

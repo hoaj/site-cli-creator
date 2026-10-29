@@ -78,6 +78,14 @@ describe("doctor", () => {
     expect(out.gh).toEqual({ installed: false, hint: expect.stringContaining("gh auth login") });
   });
 
+  test("transport browser needs Chrome, even for auth none with needsChrome false, and doctor names the transport (#93)", async () => {
+    const opts = { env: { SITE_CLI_HOME: home.dir }, exec: fakeExec({}), exists: () => false, platform: "linux" as const };
+    const out = await doctor(makeSite({ transport: "browser" }), opts);
+    expect(out.chrome).toStartWith("not found (looked at /opt/google/chrome/chrome)");
+    expect(out.transport).toBe("browser");
+    expect((await doctor(makeSite(), opts)).transport).toBe("fetch");
+  });
+
   test("a login skill always needs Chrome, even if needsChrome was left false", async () => {
     const out = await doctor(loginSite({ needsChrome: false }), {
       env: { SITE_CLI_HOME: home.dir },

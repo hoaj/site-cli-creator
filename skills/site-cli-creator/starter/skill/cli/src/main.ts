@@ -11,6 +11,7 @@ import { doctor, type Exec } from "./runtime/doctor";
 import { ContractError, DryRun, EXIT, Failure, emit, errorEnvelope, note, type Surface } from "./runtime/envelope";
 import { bugFrame, bugKey, errorName, redactStack } from "./runtime/fingerprint";
 import { BUILTIN_FLAGS, commandHelp, flagDescription, flagSpecs, GLOBAL_FLAGS, help, isWriteCommand, type FlagSpec } from "./runtime/help";
+import { findChrome } from "./runtime/chrome";
 import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
 import { hashPassword, MIN_PASSWORD_LENGTH, remoteConfig, type RemoteConfig } from "./runtime/remote-config";
@@ -19,6 +20,7 @@ import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir, type Session
 import type { SessionCheck } from "./runtime/setup";
 import type { Operation } from "./runtime/operation";
 import { siteProblems, type Site } from "./runtime/site";
+import { browserTransport } from "./runtime/transport";
 import { z } from "zod";
 
 export type App = {
@@ -116,10 +118,14 @@ function parseArgs(command: Command, tokens: string[]) {
 }
 
 function defaultDeps(app: App): Deps {
+  const env = app.deps?.env ?? process.env;
+  // transport "browser": requests leave from a Chrome tab on the site; release() closes that Chrome.
+  const tab = app.site.transport === "browser" && !app.deps?.fetch ? browserTransport(app.site, { env, note: app.deps?.note ?? note }) : undefined;
   return {
-    fetch: (input, init) => fetch(input, init),
-    env: process.env,
-    login: (headless, options) => chromeLogin(app.site, { headless, note, fromProfile: options?.fromProfile }),
+    fetch: tab?.fetch ?? ((input, init) => fetch(input, init)),
+    env,
+    login: (headless, options) => chromeLogin(app.site, { headless, note, env, fromProfile: options?.fromProfile }),
+    release: async () => tab?.close(),
     sleep: (ms) => Bun.sleep(ms),
     retryDelays: [500, 1500],
     note,
@@ -146,12 +152,13 @@ const compiled = () => import.meta.path.includes("$bunfs") || import.meta.path.i
 export async function run(argv: string[], app: App): Promise<RunResult> {
   const { site } = app;
   let commandName = "main";
+  let deps: Deps | undefined;
   try {
     const problems = siteProblems(site);
     if (problems.length) throw new ContractError(`site.ts: ${problems.join("; ")}`);
     const { words, flags, account, confirm } = splitGlobals(argv);
     const commandWords = words.slice(0, 2).join(" ");
-    const deps = defaultDeps(app);
+    deps = defaultDeps(app);
     moveLegacyStateDir(site, deps);
     const client = new Client(site, deps, { confirm });
     let builtin = words[0] ?? "help";
@@ -190,6 +197,9 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
         }
         if (f.port !== undefined && !f.http) throw input("--port is for remote mode; pass it with --http");
         if (!f.http) return { output: null, code: EXIT.ok, serve: "mcp" };
+        if (site.transport === "browser" && !findChrome(deps.env).path) {
+          throw input(`this CLI skill sends its requests from Chrome (transport "browser"), and there is no Chrome here; remote mode needs Chrome in its image`);
+        }
         // Remote mode: the host's settings are checked here, so a missing password is one input envelope.
         return { output: null, code: EXIT.ok, serve: "mcp-http", remote: remoteConfig(deps.env, { port: f.port as number | undefined }) };
       }
@@ -218,6 +228,8 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
     return ok(await runTask(app, client, deps, command, parseArgs(command, flags), account));
   } catch (e) {
     return failed(e, site, commandName);
+  } finally {
+    await deps?.release?.();
   }
 }
 
@@ -270,7 +282,8 @@ function sessionReason(e: unknown, skill: string): string {
  * Session. The candidate is never saved.
  */
 export async function checkSession(app: App, candidate: Session): Promise<SessionCheck> {
-  const client = new Client(app.site, defaultDeps(app), { session: candidate, reauth: false, surface: "mcp" });
+  const deps = defaultDeps(app);
+  const client = new Client(app.site, deps, { session: candidate, reauth: false, surface: "mcp" });
   try {
     let result: Awaited<ReturnType<typeof check>>;
     try {
@@ -290,6 +303,8 @@ export async function checkSession(app: App, candidate: Session): Promise<Sessio
     return { ok: true, tried };
   } catch (e) {
     return { ok: false, reason: sessionReason(e, app.site.skill) };
+  } finally {
+    await deps.release?.();
   }
 }
 
@@ -336,6 +351,8 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
         return ok(await body(r.data));
       } catch (e) {
         return failed(e, site, commandName, "mcp");
+      } finally {
+        await deps.release?.(); // no Chrome stays open between tool calls
       }
     },
   });

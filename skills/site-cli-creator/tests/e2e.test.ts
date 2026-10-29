@@ -868,6 +868,33 @@ export default defineCommand({
       expect(r.stdout).not.toContain(work);
     }, 600_000);
 
+    test("bot-wall: plain fetch is Drift; rebuilt with transport browser, the same command answers from a Chrome tab (#93)", async () => {
+      const refused = await withDrift("bot-wall", () => cli(["subscription", "show"]));
+      expect(refused.code, refused.stderr).toBe(3);
+      expect(refused.out.error.fingerprint).toBe(`${prefix}getAccount:auth::403`);
+      expect(leaks(refused.stdout)).toEqual([]);
+
+      const siteFile = join(cliDir, "src", "site.ts");
+      const original = readFileSync(siteFile, "utf8");
+      const browserBinary = join(work, "dist-browser", `${skill}${HOST.exe}`);
+      try {
+        writeFileSync(siteFile, original.replace(/(\n[ \t]*needsChrome:[^\n]*\n)/, `$1  transport: "browser",\n`));
+        expect(readFileSync(siteFile, "utf8")).toContain('transport: "browser",');
+        mkdirSync(join(work, "dist-browser"), { recursive: true });
+        const build = await spawn([BUN, "build.ts", HOST.bunTarget, browserBinary], { cwd: cliDir, env: cleanEnv(), timeout: 240_000 });
+        expect(build.code, build.stderr).toBe(0);
+      } finally {
+        writeFileSync(siteFile, original);
+      }
+
+      const plain = await cli(["subscription", "show"]);
+      expect(plain.code, plain.stderr).toBe(0);
+      const walled = await withDrift("bot-wall", () => cli(["subscription", "show"], { bin: browserBinary }));
+      expect(walled.code, walled.stderr).toBe(0);
+      expect(walled.out).toEqual(plain.out);
+      expect((await cli(["doctor"], { bin: browserBinary })).out.transport).toBe("browser");
+    }, 600_000);
+
     // 9. Capture + draft-contract -----------------------------------------------------------------
 
     test("capture records a read Task and a write Task as shapes without values; draft-contract drafts from one", async () => {
