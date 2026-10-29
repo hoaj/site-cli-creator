@@ -177,7 +177,9 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
         keeping = keeping
           .then(async () => {
             const picked = keep({ request: requestBody(res.request()), response: await responseBody(res) });
-            kept = Object.fromEntries(Object.entries(picked ?? {}).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => [k, String(v)]));
+            const record = Object.fromEntries(Object.entries(picked ?? {}).filter(([, v]) => v !== undefined && v !== null).map(([k, v]) => [k, String(v)]));
+            // A later match keep picks nothing from (an introspection call) never wipes a kept record.
+            if (Object.keys(record).length) kept = record;
           })
           .catch(() => {}); // a keep that throws keeps nothing; renew then has nothing to trade
       });

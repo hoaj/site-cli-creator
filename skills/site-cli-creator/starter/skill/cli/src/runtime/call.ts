@@ -311,8 +311,10 @@ export class Client {
         const name = (e as Error)?.name ?? "error";
         if (name === "ZodError" || name === "SyntaxError") {
           // The site answered, but not as renew expects: it may have rotated the token already, so it
-          // is not sent again (a spent token can revoke its whole family).
+          // is dropped and never sent again, by this run or a later one (a spent token can revoke
+          // its whole family).
           this.deps.note(`renewing the sign-in failed (${name}): the token endpoint's answer no longer fits renew; signing in with Chrome instead`);
+          this.dropRefresh(current);
           return false;
         }
         if (attempt >= this.deps.retryDelays.length) {
@@ -327,13 +329,17 @@ export class Client {
       // Refused: perhaps because another run spent the token meanwhile. Its session wins.
       const newer = takeOver();
       if (newer) return this.adopt(newer, true);
-      if (current.refresh) {
-        const { refresh: _spent, ...rest } = current;
-        this.session = this.persisted ? saveSession(this.dir, rest) : rest;
-      }
+      this.dropRefresh(current);
       return false;
     }
     return this.adopt({ ...current, headers: renewed.headers, ...(renewed.refresh && { refresh: renewed.refresh }), savedAt: new Date().toISOString() });
+  }
+
+  /** Forgets a refresh record that is spent or may be: it is never sent again. */
+  private dropRefresh(current: Session): void {
+    if (!current.refresh) return;
+    const { refresh: _spent, ...rest } = current;
+    this.session = this.persisted ? saveSession(this.dir, rest) : rest;
   }
 
   /** session.json when another run saved other headers since `current` was read; null otherwise. */
@@ -493,7 +499,11 @@ export class Client {
     const raw = await this.site.accounts(this.siteCtx(s, true));
     const list: Account[] = raw.map((a) => (typeof a === "string" ? { id: a } : { id: String(a.id), ...(a.label ? { label: String(a.label) } : {}) }));
     this.fetchedAccounts = list;
-    const current = this.session ?? s;
+    // The accounts go onto session.json as it is now when it is the same login: another run may have
+    // renewed it since, and its rotated refresh token must not be overwritten with a spent one.
+    const loaded = this.session ?? s;
+    const onDisk = this.persisted ? loadSession(this.dir) : null;
+    const current = onDisk && JSON.stringify(sortedIds(onDisk.ids)) === JSON.stringify(sortedIds(loaded.ids)) ? onDisk : loaded;
     const next = { ...current, accounts: list.map((a) => ({ id: a.id })) };
     // Saved only where a session is saved anyway (login, bootstrap): an auth "none" skill without
     // bootstrap keeps nothing on disk, so a stale list can never lock it.
