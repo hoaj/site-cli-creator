@@ -10,6 +10,7 @@ const postLoginResponse = z.object({ personalInfo: z.object({ customerId: z.stri
 // carries a refresh token that works once.
 const tokenRequest = z.object({ client_id: z.string().min(1) });
 const tokenResponse = z.object({ access_token: z.string().min(1), refresh_token: z.string().min(1) });
+const renewResponse = z.object({ access_token: z.string().min(1), refresh_token: z.string().min(1).optional() });
 
 export default defineSite({
   plugin: "__PLUGIN__",
@@ -58,8 +59,12 @@ export default defineSite({
         });
         if (res.status === 400 || res.status === 401) return null; // spent or revoked: sign in with Chrome
         if (!res.ok) throw new Error(`token endpoint answered HTTP ${res.status}`); // tried again
-        const t = tokenResponse.parse(await res.json());
-        return { headers: { ...ctx.headers, authorization: `Bearer ${t.access_token}` }, refresh: { ...ctx.refresh, refreshToken: t.refresh_token } };
+        // A renewal's answer may leave refresh_token out (no rotation): the old one stays then.
+        const t = renewResponse.parse(await res.json());
+        return {
+          headers: { ...ctx.headers, authorization: `Bearer ${t.access_token}` },
+          ...(t.refresh_token && { refresh: { ...ctx.refresh, refreshToken: t.refresh_token } }),
+        };
       },
     },
   },

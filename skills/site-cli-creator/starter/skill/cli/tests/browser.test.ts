@@ -37,6 +37,13 @@ const server = Bun.serve({
       return page(`fetch("/oauth/token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ grant_type: "authorization_code", client_id: "c-1" }) })
         .then((r) => r.json())
         .then((t) => fetch("/graphql", { method: "POST", headers: { authorization: "Bearer " + t.access_token, "content-type": "application/json" }, body: JSON.stringify({ operationName: "me", query: "query me { me { id } }" }) }));`);
+    // A second token call (an introspection) after the exchange: its answer carries no refresh token.
+    if (url.pathname === "/account-refresh-twice")
+      return page(`fetch("/oauth/token", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ client_id: "c-1" }) })
+        .then((r) => r.json())
+        .then((t) => fetch("/oauth/token/introspect", { method: "POST" }).then(() => t))
+        .then((t) => fetch("/graphql", { method: "POST", headers: { authorization: "Bearer " + t.access_token, "content-type": "application/json" }, body: JSON.stringify({ operationName: "me", query: "query me { me { id } }" }) }));`);
+    if (url.pathname === "/oauth/token/introspect") return Response.json({ active: true });
     if (url.pathname === "/oauth/token") return Response.json({ access_token: "tok-1", refresh_token: "rt-1", expires_in: 300, name: "Kim Secret" });
     if (url.pathname === "/orders")
       return page(`
@@ -134,6 +141,21 @@ describe.skipIf(skip)("Chrome", () => {
     };
     const signedIn = await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } });
     expect(signedIn).toEqual({ headers: { authorization: "Bearer tok-1", cookie: "sid=abc" }, refresh: { clientId: "c-1", token: "rt-1" } });
+  }, 60_000);
+
+  test("a later matching response that keep picks nothing from does not wipe the kept record (review 3)", async () => {
+    const s = site();
+    s.login!.startUrl = `${server.url.origin}/account-refresh-twice`;
+    s.login!.refresh = {
+      from: "/oauth/token",
+      keep: ({ response }): Record<string, string> => {
+        const token = (response as any)?.refresh_token;
+        return token ? { token: String(token) } : {};
+      },
+      renew: async () => null,
+    };
+    const signedIn = await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } });
+    expect(signedIn?.refresh).toEqual({ token: "rt-1" });
   }, 60_000);
 
   test("login --from-profile writes no cookie into the CLI's own profile: nothing but session.json (review)", async () => {

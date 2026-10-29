@@ -717,6 +717,18 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
     expect(attempts).toBe(1);
     expect(loginCalls).toEqual([true]);
     expect(notes.join("\n")).toContain("no longer fits");
+    expect(loadSession(home.dir)!.refresh).toBeUndefined(); // possibly spent: never sent again, not even by a later run (review 3)
+  });
+
+  test("listAccounts never writes back a session older than another run's renewal (review 3)", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer old");
+    const { deps } = makeDeps(fetch, home.dir);
+    const c = client(loginSite({ accounts: async () => [{ id: "A1" }] }), deps);
+    c.peek();
+    saveSession(home.dir, { headers: { authorization: "Bearer new", cookie: "sid=1" }, ids: { customerId: "C-1" }, refresh: { token: "r2" } });
+    await c.listAccounts();
+    expect(loadSession(home.dir)).toMatchObject({ headers: { authorization: "Bearer new" }, refresh: { token: "r2" }, accounts: [{ id: "A1" }] });
   });
 
   test("taking over another run's session does not write session.json again (review 2)", async () => {

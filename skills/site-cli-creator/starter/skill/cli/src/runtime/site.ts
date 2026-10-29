@@ -156,6 +156,8 @@ export function siteProblems(site: Site): string[] {
     const from = refresh?.from;
     if (from !== undefined && !(typeof from === "string" && from !== "") && !(from instanceof RegExp)) {
       out.push("login.refresh.from must be a non-empty URL path substring or a RegExp");
+    } else if (from instanceof RegExp && (from.global || from.sticky)) {
+      out.push("login.refresh.from must be a RegExp without the g or y flag (its test() would skip matches)");
     } else if (from !== undefined && typeof refresh.keep !== "function") out.push("login.refresh.from needs a keep function");
   }
   const ro = site.readOnlyRequests;
