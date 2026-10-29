@@ -233,11 +233,18 @@ export class Client {
 
   /** Signs in with Chrome, runs postLogin and saves the session. Null if sign-in didn't complete. */
   async signIn(headless: boolean, options?: SignInOptions): Promise<Session | null> {
-    await this.deps.release?.(); // the sign-in needs the profile transport "browser" may hold
+    // transport "browser": its Chrome holds the old session's cookies, so it closes around the sign-in
+    // and the next request opens one with the new session.
+    await this.deps.release?.();
     const headers = await this.deps.login(headless, options);
     if (!headers) return null;
     const draft: Session = { headers, ids: {}, savedAt: new Date().toISOString() };
-    const raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
+    let raw: Record<string, unknown> | undefined;
+    try {
+      raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
+    } finally {
+      await this.deps.release?.();
+    }
     const ids: Record<string, string> = {};
     for (const [k, v] of Object.entries(raw ?? {})) if (v !== undefined && v !== null) ids[k] = String(v);
     this.session = saveSession(this.dir, { headers, ids, ...(options?.fromProfile && { fromProfile: options.fromProfile }) });

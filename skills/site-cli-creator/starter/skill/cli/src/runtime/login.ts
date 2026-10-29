@@ -90,7 +90,7 @@ export function chromeMissing(site: Site, env: Env = process.env): Failure | nul
  */
 export type LaunchOptions = { blockServiceWorkers?: boolean };
 
-export async function launch(site: Site, userDataDir: string, headless: boolean, env: Env = process.env, options: LaunchOptions = {}): Promise<BrowserContext> {
+export async function launch(site: Site, userDataDir: string, headless: boolean, env: Env = process.env): Promise<BrowserContext> {
   const missing = chromeMissing(site, env);
   if (missing) throw missing;
   const { chromium } = await import("playwright-core");
@@ -99,7 +99,6 @@ export async function launch(site: Site, userDataDir: string, headless: boolean,
     headless,
     baseURL: effectiveOrigin(site, env),
     viewport: headless ? { width: 1280, height: 900 } : null,
-    ...(options.blockServiceWorkers && { serviceWorkers: "block" as const }),
   });
 }
 
