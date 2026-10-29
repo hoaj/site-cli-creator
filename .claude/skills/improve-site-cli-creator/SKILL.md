@@ -88,7 +88,7 @@ Commit one issue per commit (`site-cli-creator: <summary> (#n)`), push, open a P
 
 Watch CI: `gh run watch <id> --repo hoaj/site-cli-creator --exit-status`. All jobs must be green. A PR runs the smoke test on linux-x64 only; the five-platform matrix runs on main and on `workflow_dispatch`. Before merging a change to `build.ts`, `install.sh`, `release.yml` or `main.ts`, run it on the branch with `gh workflow run site-cli-creator.yml --ref <branch>` and watch it.
 
-Merge when the maintainer says so; CLAUDE.md gives that yes for every PR you open, after its review. Remove your worktree first (`git worktree remove ../skills-<slug>`), then `gh pr merge <n> --merge --delete-branch`.
+Review and merge it with the procedure in the repo's CLAUDE.md (Pull requests): it holds the maintainer's standing yes, the review loop and the merge commands.
 
 ### 10. Relay
 
