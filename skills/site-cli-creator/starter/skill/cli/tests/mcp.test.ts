@@ -109,6 +109,17 @@ describe("tools/call", () => {
     expect(result.structuredContent).toEqual(textOf(result));
   });
 
+  test("each tool call releases the Chrome transport browser opened, so none stays open between calls (#93)", async () => {
+    let released = 0;
+    const d = makeDeps(fakeFetch(happySite).fetch, home.dir);
+    d.deps.release = async () => void released++;
+    saveSession(home.dir, { headers: {}, ids: { customerId: "C-1" } });
+    const server = mcpServer(makeApp(makeSite(), d.deps));
+    await callTool(server, "products_show", {});
+    await callTool(server, "order_rename", { orderId: "O1", name: "New" });
+    expect(released).toBe(2);
+  });
+
   test("the result matches the CLI's for the same Task", async () => {
     const { server, deps } = await serverFor();
     const cli = await run(["products", "show", "--limit", "1"], makeApp(makeSite(), deps));

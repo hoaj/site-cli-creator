@@ -174,6 +174,18 @@ describe("auth login", () => {
     expect(s.ids).toEqual({ customerId: "C-1" });
   });
 
+  test("a sign-in first releases the Chrome that transport browser sends from, since both need the profile (#93)", async () => {
+    saved();
+    const order: string[] = [];
+    const { fetch } = fakeFetch((r) => (r.headers.authorization === "Bearer new" ? json({ data: { getCustomer: { id: "C-1", name: "n" } } }) : json({}, 401)));
+    const { deps } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+    const login = deps.login;
+    deps.login = (headless, options) => (order.push("login"), login(headless, options));
+    deps.release = async () => void order.push("release");
+    await client(loginSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(order).toEqual(["release", "login"]);
+  });
+
   test("headless refresh fails → headed login → retry", async () => {
     saved();
     const { fetch } = fakeFetch((r) => (r.headers.authorization === "Bearer new" ? json({ data: { getCustomer: { id: "C-1", name: "n" } } }) : json({}, 403)));

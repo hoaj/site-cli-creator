@@ -84,7 +84,13 @@ export function chromeMissing(site: Site, env: Env = process.env): Failure | nul
   return new Failure(kind, chromeNotFound(chrome));
 }
 
-export async function launch(site: Site, userDataDir: string, headless: boolean, env: Env = process.env): Promise<BrowserContext> {
+/**
+ * `blockServiceWorkers`: pages register none, so every request a page sends goes to the network,
+ * where Playwright sees it and its redirects (transport "browser").
+ */
+export type LaunchOptions = { blockServiceWorkers?: boolean };
+
+export async function launch(site: Site, userDataDir: string, headless: boolean, env: Env = process.env, options: LaunchOptions = {}): Promise<BrowserContext> {
   const missing = chromeMissing(site, env);
   if (missing) throw missing;
   const { chromium } = await import("playwright-core");
@@ -93,6 +99,7 @@ export async function launch(site: Site, userDataDir: string, headless: boolean,
     headless,
     baseURL: effectiveOrigin(site, env),
     viewport: headless ? { width: 1280, height: 900 } : null,
+    ...(options.blockServiceWorkers && { serviceWorkers: "block" as const }),
   });
 }
 
@@ -101,13 +108,18 @@ export async function launch(site: Site, userDataDir: string, headless: boolean,
  * profileState()): another profile's sign-in, in memory only, gone when it closes. Close it with
  * closeContext(), which closes the browser too.
  */
-export async function launchInMemory(site: Site, headless: boolean, env: Env = process.env, state?: ProfileState): Promise<BrowserContext> {
+export async function launchInMemory(site: Site, headless: boolean, env: Env = process.env, state?: ProfileState, options: LaunchOptions = {}): Promise<BrowserContext> {
   const missing = chromeMissing(site, env);
   if (missing) throw missing;
   const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ ...chromeLaunchOptions(findChrome(env)), headless });
   try {
-    return await browser.newContext({ baseURL: effectiveOrigin(site, env), viewport: headless ? { width: 1280, height: 900 } : null, storageState: state });
+    return await browser.newContext({
+      baseURL: effectiveOrigin(site, env),
+      viewport: headless ? { width: 1280, height: 900 } : null,
+      storageState: state,
+      ...(options.blockServiceWorkers && { serviceWorkers: "block" as const }),
+    });
   } catch (error) {
     await browser.close().catch(() => {});
     throw error;

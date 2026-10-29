@@ -96,6 +96,15 @@ describe("flag parsing", () => {
 describe("routing and envelopes", () => {
   const app = () => makeApp(makeSite(), makeDeps(fakeFetch(happySite).fetch, home.dir).deps);
 
+  test("every run releases the Chrome transport browser opened, also when the command fails (#93)", async () => {
+    let released = 0;
+    const a = app();
+    a.deps!.release = async () => void released++;
+    expect((await run(["help"], a)).code).toBe(0);
+    expect((await run(["crash", "now"], a)).code).toBe(1);
+    expect(released).toBe(2);
+  });
+
   test("help is JSON with commands, write markers, flags, built-ins and exit codes", async () => {
     const { output, code } = await run(["help"], app());
     const h = output as any;

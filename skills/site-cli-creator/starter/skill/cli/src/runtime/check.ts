@@ -154,6 +154,7 @@ export async function check(client: Client, operations: Operation[], options: Ch
     const reads = operations.filter((op) => op.effect === "read");
     const declaredWrites = operations.filter((op) => op.effect === "write");
     try {
+      if (!checkWrites) await client.deps.release?.(); // the triggers' Chrome needs the profile transport "browser" may hold
       const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env, client.fromProfile()))(withTrigger, reads, declaredWrites);
       for (const op of withTrigger) {
         const d = outcome.get(op.name);
