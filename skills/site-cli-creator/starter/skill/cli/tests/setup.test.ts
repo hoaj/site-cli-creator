@@ -503,6 +503,19 @@ describe("checkSession", () => {
     expect(existsSync(sessionFile(home.dir))).toBe(false);
   });
 
+  test("an upload whose access token expired but whose refresh token works is renewed, and the renewed Session is what gets stored (#94, review)", async () => {
+    const site = loginSite({
+      login: {
+        ...loginSite().login!,
+        refresh: { renew: async (ctx) => (ctx.refresh.token === "r1" ? { headers: { cookie: `sid=${GOOD}` }, refresh: { token: "r2" } } : null) },
+      },
+    });
+    const app = makeApp(site, makeDeps(fakeFetch(sessionSite).fetch, home.dir).deps);
+    const r = await checkSession(app, { headers: { cookie: "sid=expired" }, ids: { customerId: "C-1" }, refresh: { token: "r1" }, savedAt: "2026-01-01T00:00:00.000Z" });
+    expect(r).toMatchObject({ ok: true, session: { headers: { cookie: `sid=${GOOD}` }, refresh: { token: "r2" } } });
+    expect(existsSync(sessionFile(home.dir))).toBe(false); // the check itself saves nothing
+  });
+
   test("the site refusing the Session says so and names `<skill> login`", async () => {
     const r = await checkSession(appWith(() => json({}, 401)), candidate);
     expect(r.ok).toBe(false);

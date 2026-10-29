@@ -177,7 +177,9 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
   - **When:** a login-flow call in the Capture (`loginFlow: true`, usually `POST /oauth/token` or `.../token/refresh`) answers with a `refresh_token` field, or sets a cookie named like one.
   - **`from`:** that call's path (substring or RegExp). Leave it out when the refresh token is a cookie: the session's cookie header already carries it.
   - **`keep`:** picks what renewing needs from that request's body and its answer (each parsed: JSON, a form as an object). Usually that is the refresh token and the client id the frontend sent. Parse with Zod, so a changed shape keeps nothing instead of the wrong thing.
-  - **`renew`:** sends the same call, with the content-type the Capture's request used, using `ctx.fetch` and `ctx.refresh`, as the frontend would when its token runs out. The grant is `grant_type: "refresh_token"`, the OAuth standard; the Capture shows only that the field is a string. It returns every header to send from now on (`{ ...ctx.headers, authorization: ... }`) and the new refresh record when the answer carries a new refresh token (most sites rotate it), or `null` when the site refuses.
+  - **`renew`:** sends the same call, with the content-type the Capture's request used, using `ctx.fetch` and `ctx.refresh`, as the frontend would when its token runs out. The grant is `grant_type: "refresh_token"`, the OAuth standard; the Capture shows only that the field is a string. It returns every header to send from now on (`{ ...ctx.headers, authorization: ... }`) and the new refresh record when the answer carries a new refresh token (most sites rotate it).
+    - **`null`** only when the site refuses the refresh token (usually 400 or 401): the CLI drops it and signs in with Chrome.
+    - **Throw** on anything else (a 5xx, a 429, a failed connection): the CLI tries again, as it does for reads.
   - **Check it** once the first Contract exists: `login --from-profile`, then `session.json` must list the record's keys (`bun -e 'console.log(Object.keys(JSON.parse(await Bun.file("<stateDir>/session.json").text()).refresh ?? {}))'`). Set the `authorization` header in `session.json` to a made-up token, then `SITE_CLI_NONINTERACTIVE=1 bun src/main.ts check` must exit 0, and its stderr must say "renewing the sign-in" and nothing about signing in again from a Chrome profile. That line is the proof: a broken `renew` falls back to a silent headless sign-in, which also exits 0.
 
   ```ts
@@ -194,7 +196,8 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
         headers: { "content-type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: ctx.refresh.refreshToken ?? "", client_id: ctx.refresh.clientId ?? "" }).toString(),
       });
-      if (!res.ok) return null;
+      if (res.status === 400 || res.status === 401) return null; // the refresh token is spent or revoked
+      if (!res.ok) throw new Error(`token endpoint answered HTTP ${res.status}`); // tried again
       const t = z.object({ access_token: z.string(), refresh_token: z.string() }).parse(await res.json());
       return { headers: { ...ctx.headers, authorization: `Bearer ${t.access_token}` }, refresh: { ...ctx.refresh, refreshToken: t.refresh_token } };
     },

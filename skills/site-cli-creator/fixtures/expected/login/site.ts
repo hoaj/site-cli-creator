@@ -56,7 +56,8 @@ export default defineSite({
           headers: { "content-type": "application/x-www-form-urlencoded" },
           body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: ctx.refresh.refreshToken ?? "", client_id: ctx.refresh.clientId ?? "" }).toString(),
         });
-        if (!res.ok) return null; // spent or revoked: sign in with Chrome
+        if (res.status === 400 || res.status === 401) return null; // spent or revoked: sign in with Chrome
+        if (!res.ok) throw new Error(`token endpoint answered HTTP ${res.status}`); // tried again
         const t = tokenResponse.parse(await res.json());
         return { headers: { ...ctx.headers, authorization: `Bearer ${t.access_token}` }, refresh: { ...ctx.refresh, refreshToken: t.refresh_token } };
       },

@@ -245,7 +245,7 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
       checked = await serial(async () => {
         const result = await o.checkSession({ headers, ids, accounts, refresh, savedAt: at });
         if (!result.ok) return result;
-        saveSession(o.dir, { headers, ids, accounts, ...(refresh && { refresh }), savedAt: at });
+        saveSession(o.dir, result.session ? { ...result.session, savedAt: at } : { headers, ids, accounts, ...(refresh && { refresh }), savedAt: at });
         if (result.tried > 0) checkedStatus(o.dir, at, "valid", at);
         else writeStatus(o.dir, { state: "unchecked", uploadedAt: at });
         return result;
