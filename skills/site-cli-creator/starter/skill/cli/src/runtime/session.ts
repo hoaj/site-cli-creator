@@ -139,12 +139,15 @@ export async function withRenewLock<T>(dir: string, fn: () => Promise<T>, sleep:
     } catch (e) {
       if ((e as NodeJS.ErrnoException)?.code !== "EEXIST") throw e;
       try {
-        if (now() - statSync(file).mtimeMs > RENEW_STALE_MS) {
+        const seen = statSync(file);
+        if (now() - seen.mtimeMs > RENEW_STALE_MS) {
           const away = `${file}.${mine}.stale`;
           renameSync(file, away); // throws for every run but one
-          // Between the stat and the rename another run may have taken it over and made a fresh lock:
-          // then that one moved, and it goes back (link fails when a third run already holds the path).
-          if (now() - statSync(away).mtimeMs <= RENEW_STALE_MS) {
+          // Between the stat and the rename another run may have taken it over and made a fresh lock
+          // (another file): then that one moved, and it goes back (link fails when a third run already
+          // holds the path). Rare races left: a put-back lock whose holder has just finished stays
+          // until it goes stale (the cost: Chrome sign-ins meanwhile, never a token sent twice).
+          if (statSync(away).ino !== seen.ino) {
             try {
               linkSync(away, file);
             } catch {

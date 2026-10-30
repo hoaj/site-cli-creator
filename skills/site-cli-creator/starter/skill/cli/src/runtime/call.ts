@@ -312,16 +312,23 @@ export class Client {
     if (done !== "busy") return done;
     const disk = this.onDisk(current);
     if (disk.kind === "renewed") return this.adopt(disk.session, true);
-    this.deps.note("another run is still renewing the sign-in; signing in with Chrome instead");
+    this.deps.note(
+      disk.kind === "dropped"
+        ? "another run found the refresh token spent; signing in with Chrome instead"
+        : "another run is still renewing the sign-in; signing in with Chrome instead",
+    );
     return false;
   }
 
-  /** Under the lock: another run's renewal (or dropped token) wins; otherwise trade. */
+  /**
+   * Under the lock: another run's renewal wins, a dropped token is not sent, and a newer refresh
+   * record another run saved is the one traded; otherwise this run's own.
+   */
   private async tradeUnlessDone(refresh: RefreshConfig, current: Session): Promise<boolean> {
     const disk = this.onDisk(current);
     if (disk.kind === "renewed") return this.adopt(disk.session, true);
     if (disk.kind === "dropped") return false; // another run found the token spent: Chrome next, nothing sent
-    return this.trade(refresh, current);
+    return this.trade(refresh, disk.kind === "rotated" ? disk.session : current);
   }
 
   /** One renew call (under the lock when the session is saved): see renew(). */
@@ -358,10 +365,11 @@ export class Client {
       }
     }
     if (!renewed?.headers) {
-      // Refused: perhaps because another run spent the token meanwhile. Its session wins.
+      // Refused: perhaps because another run spent the token meanwhile. Its session wins, and a
+      // session.json another run already changed is left as it is.
       const disk = this.onDisk(current);
       if (disk.kind === "renewed") return this.adopt(disk.session, true);
-      this.dropRefresh(current);
+      if (disk.kind === "same") this.dropRefresh(current);
       return false;
     }
     return this.adopt({ ...current, headers: renewed.headers, ...(renewed.refresh && { refresh: renewed.refresh }), savedAt: new Date().toISOString() });
@@ -375,22 +383,23 @@ export class Client {
   }
 
   /**
-   * session.json against `current`, as read when this run started: "renewed" when another run saved
-   * other headers (use them), "dropped" when it kept the headers but dropped the refresh record (the
-   * token is spent: this run takes that session and sends nothing), else "same".
+   * session.json against `current`, as read when this run started:
+   * - "renewed": another run saved other headers (use them);
+   * - "dropped": the same headers and no refresh record (another run found the token spent: send nothing);
+   * - "rotated": the same headers and another, non-empty refresh record (trade that one);
+   * - "same": nothing changed.
+   * Except for "same", this run takes the saved session as its own.
    */
-  private onDisk(current: Session): { kind: "renewed" | "dropped"; session: Session } | { kind: "same" } {
+  private onDisk(current: Session): { kind: "renewed" | "dropped" | "rotated"; session: Session } | { kind: "same" } {
     const saved = this.persisted ? loadSession(this.dir) : null;
     if (!saved) return { kind: "same" };
     if (JSON.stringify(saved.headers) !== JSON.stringify(current.headers)) {
       this.deps.note("another run renewed the sign-in; using its session");
       return { kind: "renewed", session: saved };
     }
-    if (JSON.stringify(saved.refresh ?? {}) !== JSON.stringify(current.refresh ?? {})) {
-      this.session = saved;
-      return { kind: "dropped", session: saved };
-    }
-    return { kind: "same" };
+    if (JSON.stringify(saved.refresh ?? {}) === JSON.stringify(current.refresh ?? {})) return { kind: "same" };
+    this.session = saved;
+    return { kind: Object.keys(saved.refresh ?? {}).length === 0 ? "dropped" : "rotated", session: saved };
   }
 
   /**
