@@ -1,6 +1,6 @@
 // The classification table (SPEC §10), row by row, against a fake fetch.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { existsSync, utimesSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { buildRequest, Client } from "../src/runtime/call";
@@ -660,6 +660,86 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
     expect(sent).toBe(1);
     expect([...a.loginCalls, ...b.loginCalls]).toEqual([]);
     expect(existsSync(join(home.dir, "renew.lock"))).toBe(false);
+  });
+
+  test("a silent re-sign-in reads the record after postLogin: another run's rotation during it is kept, not overwritten (review 4)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer chrome" } });
+    const s = refreshSite();
+    const slow = {
+      ...s,
+      login: {
+        ...s.login!,
+        postLogin: async () => {
+          // Another run renews (r1 → r2) while this sign-in's postLogin is in flight.
+          saveSession(home.dir, { headers: { authorization: "Bearer new", cookie: "sid=1" }, ids: { customerId: "C-1" }, refresh: { token: "r2" } });
+          return { customerId: "C-1" };
+        },
+      },
+    };
+    await client(slow, deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r2" });
+  });
+
+  test("a sign-in that saw a token exchange keep could not read keeps no old record: that exchange may have rotated it (review 4)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer chrome" }, exchanged: true });
+    await client(refreshSite(), deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)!.refresh).toBeUndefined();
+  });
+
+  test("a sign-in from another profile than the saved one keeps no old record, even with equal (empty) ids (review 4)", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: {}, fromProfile: "/profiles/a", refresh: { token: "r-of-a" } });
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer b" } });
+    const s = refreshSite();
+    await client({ ...s, login: { ...s.login!, postLogin: async () => ({}) } }, deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)!.refresh).toBeUndefined();
+  });
+
+  test("another run that dropped the record (same headers) is noticed: the dropped token is not sent (review 4)", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    let renewed = 0;
+    const c = client(refreshSite(async () => (renewed++, null)), deps);
+    c.peek();
+    saveSession(home.dir, { headers: { authorization: "Bearer old", cookie: "sid=1" }, ids: { customerId: "C-1" } }); // dropped by another run
+    await c.call(getCustomer, { customerId: "C-1" });
+    expect(renewed).toBe(0);
+    expect(loginCalls).toEqual([true]);
+  });
+
+  test("renew's ctx.fetch is plain fetch, also with transport browser: renewing needs no Chrome (review 4)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    const used: string[] = [];
+    deps.plainFetch = async () => (used.push("plain"), json({}));
+    const s = refreshSite(async (ctx) => {
+      await ctx.fetch("https://auth.example.test/token");
+      return { headers: { ...ctx.headers, authorization: "Bearer new" } };
+    });
+    await client(s, deps).call(getCustomer, { customerId: "C-1" });
+    expect(used).toEqual(["plain"]);
+  });
+
+  test("a renew.lock another run holds is waited for by attempts, not wall time, then given up on (review 4)", async () => {
+    savedWithRefresh();
+    writeFileSync(join(home.dir, "renew.lock"), "other-run");
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls, notes } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    const started = Date.now();
+    await client(refreshSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(Date.now() - started).toBeLessThan(2_000); // the test deps' sleep is instant
+    expect(loginCalls).toEqual([true]);
+    expect(notes.join("\n")).toContain("still renewing");
+    expect(readFileSync(join(home.dir, "renew.lock"), "utf8")).toBe("other-run"); // never removed another run's lock
   });
 
   test("a renew.lock left by a run that died is taken over (review 3)", async () => {
