@@ -4,11 +4,15 @@
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { isAbsolute, join, relative, resolve, sep } from "node:path";
 import { esc, page } from "./owner-auth";
-import { ensureStateDir, sessionFile, writePrivateJson } from "./session";
+import { ensureStateDir, sessionFile, writePrivateJson, type Session } from "./session";
 import type { Env } from "./site";
 
-/** What the live check of an uploaded Session found: tried = how many reads worked with it (0: none could run without input). */
-export type SessionCheck = { ok: true; tried: number } | { ok: false; reason: string };
+/**
+ * What the live check of an uploaded Session found: tried = how many reads worked with it (0: none
+ * could run without input). `session`: the Session the check renewed (login.refresh); it is stored
+ * instead of the upload, whose refresh token the renewal spent.
+ */
+export type SessionCheck = { ok: true; tried: number; session?: Session } | { ok: false; reason: string };
 
 export type SessionState = "valid" | "expired" | "missing" | "unchecked";
 export type SessionStatus = { state: SessionState; uploadedAt?: string; checkedAt?: string; reason?: string };
