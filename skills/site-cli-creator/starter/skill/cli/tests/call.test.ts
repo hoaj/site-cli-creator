@@ -637,6 +637,7 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
     await client(reset, deps).call(getCustomer, { customerId: "C-1" });
     expect(attempts).toBe(1);
     expect(loginCalls).toEqual([true]);
+    expect(loadSession(home.dir)!.refresh).toBeUndefined(); // may be spent: never sent again (review 5)
   });
 
   test("two runs at once: one renews under renew.lock, the other waits and takes its session over; the token is sent once (review 3)", async () => {
@@ -704,8 +705,8 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
 
   test("another run that dropped the record (same headers) is noticed: the dropped token is not sent (review 4)", async () => {
     savedWithRefresh();
-    const { fetch } = site("Bearer chrome");
-    const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    const { fetch, calls } = site("Bearer chrome");
+    const { deps, loginCalls, notes } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
     let renewed = 0;
     const c = client(refreshSite(async () => (renewed++, null)), deps);
     c.peek();
@@ -713,6 +714,34 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
     await c.call(getCustomer, { customerId: "C-1" });
     expect(renewed).toBe(0);
     expect(loginCalls).toEqual([true]);
+    // Same expired headers: not sent again as if renewed (review 5).
+    expect(calls.filter((r) => r.headers.authorization === "Bearer old")).toHaveLength(1);
+    expect(notes.join("\n")).not.toContain("another run renewed");
+  });
+
+  test("any renew failure whose request may have reached the site drops the record: a $ZodError, a timeout, a 5xx thrown (review 5)", async () => {
+    for (const thrown of [Object.assign(new Error("shape"), { name: "$ZodError" }), Object.assign(new Error("slow"), { name: "TimeoutError" }), new Error("token endpoint answered HTTP 502")]) {
+      savedWithRefresh();
+      const { fetch } = site("Bearer chrome");
+      const { deps } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+      await client(refreshSite(async () => { throw thrown; }), deps).call(getCustomer, { customerId: "C-1" });
+      expect(loadSession(home.dir)!.refresh).toBeUndefined();
+    }
+  });
+
+  test("renew's fetch carries an AbortSignal, so a renew that runs out of time is cancelled, not left open (review 5)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    const signals: unknown[] = [];
+    deps.plainFetch = async (_input, init) => (signals.push(init?.signal), json({}));
+    const s = refreshSite(async (ctx) => {
+      await ctx.fetch("https://auth.example.test/token", { method: "POST" });
+      return { headers: { ...ctx.headers, authorization: "Bearer new" } };
+    });
+    await client(s, deps).call(getCustomer, { customerId: "C-1" });
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
   });
 
   test("renew's ctx.fetch is plain fetch, also with transport browser: renewing needs no Chrome (review 4)", async () => {
@@ -848,7 +877,7 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
     await client(changed, deps).call(getCustomer, { customerId: "C-1" });
     expect(attempts).toBe(1);
     expect(loginCalls).toEqual([true]);
-    expect(notes.join("\n")).toContain("no longer fits");
+    expect(notes.join("\n")).toContain("so it is dropped");
     expect(loadSession(home.dir)!.refresh).toBeUndefined(); // possibly spent: never sent again, not even by a later run (review 3)
   });
 

@@ -3,7 +3,7 @@
 // renew.lock exists only while a run renews the session (login.refresh).
 // SITE_CLI_HOME overrides the dir (tests, and the Deploy skill's separate sign-in for a server).
 import { randomBytes } from "node:crypto";
-import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -114,11 +114,9 @@ export function writePrivateJson(file: string, value: unknown): void {
 const RENEW_POLL_MS = 100;
 /** 15 s of polls: how long a run waits for another run's renewal. Counted in polls, not wall time. */
 const RENEW_WAIT_POLLS = 150;
-/**
- * A renew.lock older than this was left by a run that died: a renewal holds it at most
- * RENEW_TIMEOUT_MS (call.ts) plus a moment.
- */
+/** A renew.lock untouched for this long was left by a run that died: a live holder touches it every 10 s. */
 const RENEW_STALE_MS = 60_000;
+const RENEW_HEARTBEAT_MS = 10_000;
 
 /**
  * Runs `fn` holding `<dir>/renew.lock`, so one run at a time renews: a rotating refresh token works
@@ -144,6 +142,15 @@ export async function withRenewLock<T>(dir: string, fn: () => Promise<T>, sleep:
         if (now() - statSync(file).mtimeMs > RENEW_STALE_MS) {
           const away = `${file}.${mine}.stale`;
           renameSync(file, away); // throws for every run but one
+          // Between the stat and the rename another run may have taken it over and made a fresh lock:
+          // then that one moved, and it goes back (link fails when a third run already holds the path).
+          if (now() - statSync(away).mtimeMs <= RENEW_STALE_MS) {
+            try {
+              linkSync(away, file);
+            } catch {
+              // the path is held again: that run's lock stands
+            }
+          }
           rmSync(away, { force: true });
           continue;
         }
@@ -154,9 +161,20 @@ export async function withRenewLock<T>(dir: string, fn: () => Promise<T>, sleep:
       await sleep(RENEW_POLL_MS);
     }
   }
+  // While held, the lock is touched every 10 s, so a slow renewal (retries, a slow endpoint) never
+  // looks stale to another run.
+  const heartbeat = setInterval(() => {
+    try {
+      if (readFileSync(file, "utf8") === mine) utimesSync(file, new Date(), new Date());
+    } catch {
+      // gone: nothing to keep alive
+    }
+  }, RENEW_HEARTBEAT_MS);
+  heartbeat.unref?.();
   try {
     return await fn();
   } finally {
+    clearInterval(heartbeat);
     try {
       if (readFileSync(file, "utf8") === mine) rmSync(file, { force: true });
     } catch {

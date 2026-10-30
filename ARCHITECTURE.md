@@ -255,15 +255,21 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
 - `chrome.ts` finds Chrome at the fixed per-OS paths (SPEC §9), `SITE_CLI_CHROME` overrides.
 - `login(headless)` uses `chromium.launchPersistentContext(profile, {channel: "chrome", headless})`, opens `site.login.startUrl`, waits for `tokenRequest`, collects the `authorization` header and the cookies for the site origin, runs `postLogin`, saves the session. `chromeLogin()` returns `SignedIn` (`{headers, refresh?}`, also `Deps.login`'s type): with `login.refresh.from` and `keep`, each 2xx response to a matching request is read in memory (`requestBody()`: JSON, a form as an object, else undefined; the answer's JSON) and `keep` picks the record, values made strings; a `keep` that throws or picks nothing keeps what an earlier match kept. `siteProblems` refuses a `from` RegExp with the g or y flag. The sign-in waits up to 5 s for that read after `tokenRequest`.
 - `Client.renew()` (`login.refresh`): at most once per `Client`, with a session. In order:
-  1. **Another run renewed first:** when the `Client` saves sessions and `session.json`'s headers or refresh record differ from the ones in memory (`newerOnDisk()`), it takes that session over without calling `renew` or writing the file (`adopt(session, true)`).
+  1. **Another run was first** (`onDisk()`, when the `Client` saves sessions):
+     - **Other headers in `session.json`:** `"renewed"`. It takes that session over without calling `renew` or writing the file (`adopt(session, true)`).
+     - **Same headers but another refresh record:** `"dropped"` (another run found the token spent). It takes that session in memory and returns false, sending nothing.
   2. **Nothing kept:** with `from` set and an empty `session.refresh`, it returns false.
   3. **Renew:** otherwise it runs `renew()` with `siteCtx(session)` whose `fetch` is `Deps.plainFetch` (plain fetch even under transport "browser"), bounded to 30 s (`withTimeout()`; a timeout is a `TimeoutError`, not sent again).
      - **The lock:** with a saved session, steps 1–3 run inside `withRenewLock(dir, fn, deps.sleep)`.
        - **Taking it:** `renew.lock` is created with `wx` and holds a random token; `finally` removes it only while it still holds that token.
        - **Waiting:** another run's lock is waited for, 150 polls of 100 ms counted in polls, then `"busy"`: take over a newer `session.json` or go on to Chrome.
-       - **A stale lock:** one older than 60 s is renamed away (one run's rename wins), then taken.
+       - **Heartbeat:** the holder touches the lock's mtime every 10 s (`setInterval`, unref'd), so a slow renewal never looks stale.
+       - **A stale lock:** one untouched for 60 s is renamed away (one run's rename wins). A renamed file that is fresh after all goes back with `linkSync` (which fails when the path is held again), then the run tries again.
        - **No lock:** the Setup page's in-memory check calls `trade()` directly.
-     - **A throw** is noted by the error's name only. It is tried again after `deps.retryDelays` only when `neverSent(e)` (its `code`, or its `cause`'s, is ECONNREFUSED, ENOTFOUND, EAI_AGAIN, EHOSTUNREACH, ENETUNREACH, ConnectionRefused or FailedToOpenSocket); otherwise false, keeping the record. A `ZodError` or `SyntaxError` is not tried again and drops `refresh`, since the site may already have rotated the token. `listAccounts()` writes its ids onto `session.json` as it is now (same ids), never over another run's renewal.
+     - **The call:** `renew` gets a `fetch` that adds an `AbortSignal`; `withTimeout(…, 30 s, abort)` cancels the request when time runs out.
+     - **A throw** is noted by `errorName()` only.
+       - **`neverSent(e)`** (its `code`, or its `cause`'s, is ECONNREFUSED, ENOTFOUND, EAI_AGAIN, EHOSTUNREACH, ENETUNREACH, ConnectionRefused or FailedToOpenSocket): tried again after `deps.retryDelays`, then false keeping the record.
+       - **Anything else** (a TimeoutError, ECONNRESET, a thrown 5xx, any Zod or JSON error): `dropRefresh()` and false, since the site may have rotated the token. `listAccounts()` writes its ids onto `session.json` as it is now (same ids), never over another run's renewal.
      - **Null** checks `newerOnDisk()` again (another run may have spent the token), else drops `refresh` from the session.
   4. **Headers back:** `adopt()` saves the session with them (and a returned `refresh`), sets `renewed`, calls `deps.release()` (so transport "browser" reopens with the new cookies), and the request is retried.
 - **Where it runs:** `reauthenticate()` and `probeSession()` try it before `signInOrFail()`, so an MCP tool call and a remote server renew too. `probeSession()` asks the probe again after a renew (`askProbe()`) and signs in when it still says signed out.

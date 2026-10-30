@@ -20,7 +20,7 @@
 import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
-import { driftFingerprint, fieldPath, zodDiff, type BreakType } from "./fingerprint";
+import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
 import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type RefreshConfig, type Site, type SiteCtx } from "./site";
@@ -297,8 +297,10 @@ export class Client {
    * are saved, the ids kept.
    * - One run at a time renews (renew.lock in the state dir); a run that waited for another one, or
    *   finds a newer session.json, uses that session instead, so a rotated token is never sent twice.
-   * - A renew that throws is tried again only when its request never left (connection refused, DNS).
-   * - null means the site refused the refresh token: the record is dropped, never sent again.
+   * - Conservative: only a clear answer keeps or drops nothing by guesswork. New headers are used; a
+   *   refusal (null) drops the record. Any other failure whose request may have reached the site (a
+   *   timeout, a reset, a thrown 5xx, an answer that no longer parses) drops it too, since the site
+   *   may have rotated it. Only a request that never left (connection refused, DNS) is tried again.
    */
   private async renew(): Promise<boolean> {
     const refresh = this.site.auth === "login" ? this.site.login?.refresh : undefined;
@@ -306,19 +308,20 @@ export class Client {
     if (!refresh || !current || this.renewTried) return false;
     this.renewTried = true;
     if (!this.persisted) return this.trade(refresh, current); // the Setup page's check: in memory, its own copy
-    const done = await withRenewLock(
-      this.dir,
-      async () => {
-        const theirs = this.newerOnDisk(current);
-        return theirs ? this.adopt(theirs, true) : this.trade(refresh, current);
-      },
-      (ms) => this.deps.sleep(ms),
-    );
+    const done = await withRenewLock(this.dir, () => this.tradeUnlessDone(refresh, current), (ms) => this.deps.sleep(ms));
     if (done !== "busy") return done;
-    const theirs = this.newerOnDisk(current);
-    if (theirs) return this.adopt(theirs, true);
+    const disk = this.onDisk(current);
+    if (disk.kind === "renewed") return this.adopt(disk.session, true);
     this.deps.note("another run is still renewing the sign-in; signing in with Chrome instead");
     return false;
+  }
+
+  /** Under the lock: another run's renewal (or dropped token) wins; otherwise trade. */
+  private async tradeUnlessDone(refresh: RefreshConfig, current: Session): Promise<boolean> {
+    const disk = this.onDisk(current);
+    if (disk.kind === "renewed") return this.adopt(disk.session, true);
+    if (disk.kind === "dropped") return false; // another run found the token spent: Chrome next, nothing sent
+    return this.trade(refresh, current);
   }
 
   /** One renew call (under the lock when the session is saved): see renew(). */
@@ -326,36 +329,38 @@ export class Client {
     if (refresh.from !== undefined && Object.keys(current.refresh ?? {}).length === 0) return false; // nothing kept to trade
     this.deps.note(`renewing the sign-in to ${this.site.origin} with its refresh token`);
     let renewed: Awaited<ReturnType<typeof refresh.renew>>;
+    const plain = this.deps.plainFetch ?? this.deps.fetch;
     for (let attempt = 0; ; attempt++) {
+      // Plain fetch, never transport "browser"'s Chrome; bounded, and cancelled when time runs out,
+      // so no request is left open after the lock is released.
+      const abort = new AbortController();
+      const fetch: Fetch = (input, init) => plain(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, abort.signal]) : abort.signal });
       try {
-        // Plain fetch, never transport "browser"'s Chrome; and bounded, so the lock is never held long.
-        const ctx = { ...this.siteCtx(current, false), fetch: this.deps.plainFetch ?? this.deps.fetch };
-        renewed = await withTimeout(refresh.renew(ctx), RENEW_TIMEOUT_MS);
+        renewed = await withTimeout(refresh.renew({ ...this.siteCtx(current, false), fetch }), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
         // The error's name only: its message may carry what the site sent.
-        const name = (e as Error)?.name ?? "error";
-        if (name === "ZodError" || name === "SyntaxError") {
-          // The site answered, but not as renew expects: it may have rotated the token already, so it
-          // is dropped and never sent again, by this run or a later one (a spent token can revoke
-          // its whole family).
-          this.deps.note(`renewing the sign-in failed (${name}): the token endpoint's answer no longer fits renew; signing in with Chrome instead`);
-          this.dropRefresh(current);
-          return false;
+        const name = errorName(e);
+        if (neverSent(e) && attempt < this.deps.retryDelays.length) {
+          this.deps.note(`renewing the sign-in failed (${name}), trying again`);
+          await this.deps.sleep(this.deps.retryDelays[attempt]!);
+          continue;
         }
-        // Only a request that never left may go again: one that reached the site may have rotated the token.
-        if (!neverSent(e) || attempt >= this.deps.retryDelays.length) {
+        if (neverSent(e)) {
           this.deps.note(`renewing the sign-in failed (${name}); signing in with Chrome instead`);
-          return false;
+          return false; // never reached the site: the record stays good
         }
-        this.deps.note(`renewing the sign-in failed (${name}), trying again`);
-        await this.deps.sleep(this.deps.retryDelays[attempt]!);
+        // It may have reached the site, which may have rotated the token: dropped, never sent again
+        // by this run or a later one (a spent token can revoke its whole family).
+        this.deps.note(`renewing the sign-in failed (${name}); the refresh token may be spent, so it is dropped; signing in with Chrome instead`);
+        this.dropRefresh(current);
+        return false;
       }
     }
     if (!renewed?.headers) {
       // Refused: perhaps because another run spent the token meanwhile. Its session wins.
-      const newer = this.newerOnDisk(current);
-      if (newer) return this.adopt(newer, true);
+      const disk = this.onDisk(current);
+      if (disk.kind === "renewed") return this.adopt(disk.session, true);
       this.dropRefresh(current);
       return false;
     }
@@ -369,13 +374,23 @@ export class Client {
     this.session = this.persisted ? saveSession(this.dir, rest) : rest;
   }
 
-  /** session.json when another run saved other headers since `current` was read; null otherwise. */
-  private newerOnDisk(current: Session): Session | null {
-    const onDisk = this.persisted ? loadSession(this.dir) : null;
-    // Headers or refresh record: another run may have renewed it, or dropped a spent token.
-    if (!onDisk || (JSON.stringify(onDisk.headers) === JSON.stringify(current.headers) && JSON.stringify(onDisk.refresh ?? {}) === JSON.stringify(current.refresh ?? {}))) return null;
-    this.deps.note("another run renewed the sign-in; using its session");
-    return onDisk;
+  /**
+   * session.json against `current`, as read when this run started: "renewed" when another run saved
+   * other headers (use them), "dropped" when it kept the headers but dropped the refresh record (the
+   * token is spent: this run takes that session and sends nothing), else "same".
+   */
+  private onDisk(current: Session): { kind: "renewed" | "dropped"; session: Session } | { kind: "same" } {
+    const saved = this.persisted ? loadSession(this.dir) : null;
+    if (!saved) return { kind: "same" };
+    if (JSON.stringify(saved.headers) !== JSON.stringify(current.headers)) {
+      this.deps.note("another run renewed the sign-in; using its session");
+      return { kind: "renewed", session: saved };
+    }
+    if (JSON.stringify(saved.refresh ?? {}) !== JSON.stringify(current.refresh ?? {})) {
+      this.session = saved;
+      return { kind: "dropped", session: saved };
+    }
+    return { kind: "same" };
   }
 
   /**
@@ -673,10 +688,16 @@ function sameLogin(saved: Session, ids: Record<string, string>): boolean {
 const RENEW_TIMEOUT_MS = 30_000;
 
 /** `work`, or a TimeoutError after `ms`: the request may have reached the site, so it is not sent again. */
-async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+async function withTimeout<T>(work: Promise<T>, ms: number, onTimeout: () => void): Promise<T> {
   let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      onTimeout(); // cancel the request itself, not only the wait for it
+      reject(Object.assign(new Error("renew took too long"), { name: "TimeoutError" }));
+    }, ms);
+  });
   try {
-    return await Promise.race([work, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(Object.assign(new Error("renew took too long"), { name: "TimeoutError" })), ms)))]);
+    return await Promise.race([work, late]);
   } finally {
     clearTimeout(timer);
   }

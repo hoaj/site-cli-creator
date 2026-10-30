@@ -123,7 +123,8 @@ function defaultDeps(app: App): Deps {
   const tab = app.site.transport === "browser" && !app.deps?.fetch ? browserTransport(app.site, { env, note: app.deps?.note ?? note }) : undefined;
   return {
     fetch: tab?.fetch ?? ((input, init) => fetch(input, init)),
-    plainFetch: (input, init) => fetch(input, init), // login.refresh.renew: never through transport "browser"'s Chrome
+    // login.refresh.renew: never through transport "browser"'s Chrome; a test's fake fetch when it gave one.
+    plainFetch: app.deps?.fetch ?? ((input, init) => fetch(input, init)),
     env,
     login: (headless, options) => chromeLogin(app.site, { headless, note, env, fromProfile: options?.fromProfile }),
     release: async () => tab?.close(),

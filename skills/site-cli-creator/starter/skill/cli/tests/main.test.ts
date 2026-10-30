@@ -332,6 +332,33 @@ describe("--account", () => {
   });
 });
 
+describe("login.refresh through run() (#94)", () => {
+  test("a test's fake fetch is also renew's fetch: renewing never reaches the real network (review 5)", async () => {
+    const seen: string[] = [];
+    const { fetch } = fakeFetch((r) => {
+      seen.push(new URL(r.url).host);
+      if (r.url.endsWith("/token")) return json({ access_token: "new" });
+      return r.headers.authorization === "Bearer new" ? happySite(r) : json({}, 401);
+    });
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
+    const site = loginSite({
+      login: {
+        ...loginSite().login!,
+        refresh: {
+          renew: async (ctx) => {
+            const t = (await (await ctx.fetch("https://auth.example.test/token", { method: "POST" })).json()) as { access_token: string };
+            return { headers: { authorization: `Bearer ${t.access_token}` } };
+          },
+        },
+      },
+    });
+    expect((await run(["products", "show"], makeApp(site, deps))).code).toBe(0);
+    expect(seen).toContain("auth.example.test");
+    expect(loginCalls).toEqual([]);
+  });
+});
+
 describe("login", () => {
   test("login signs in headed, runs postLogin, prints id names only", async () => {
     const { deps } = makeDeps(fakeFetch(happySite).fetch, home.dir, [{ authorization: "Bearer t" }]);
