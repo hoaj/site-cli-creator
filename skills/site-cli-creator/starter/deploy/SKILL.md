@@ -50,13 +50,18 @@ The guide covers the host's steps, in order, from the project to the first check
 
 ## Give the server a Session
 
-Skills whose Tasks need a sign-in only; the others skip this. On the Owner's computer run `bin/<skill> login`, then upload the `session.json` from the CLI skill's state dir (`~/.__PLUGIN__/` when the skill is named `__PLUGIN__`, else `~/.__PLUGIN__-<skill>/`) on `https://<domain>/setup` with the Owner password. The page answers one of:
+Skills whose Tasks need a sign-in only; the others skip this. Which `session.json` to upload depends on the skill's `cli/src/site.ts`:
+
+- **No `login.refresh`:** on the Owner's computer run `bin/<skill> login`, then upload the `session.json` from the CLI skill's state dir (`~/.__PLUGIN__/` when the skill is named `__PLUGIN__`, else `~/.__PLUGIN__-<skill>/`).
+- **With `login.refresh`:** the server needs a sign-in of its own. A refresh token usually works once, so a copy the computer also holds is spent by whichever renews first. Run `SITE_CLI_HOME="$(mktemp -d)" bin/<skill> login`: Chrome opens on a fresh profile, the Owner signs in, and the output's `stateDir` names a throwaway dir. Upload `<stateDir>/session.json`, then delete that dir (`rm -rf <stateDir>`). The computer's own sign-in is untouched.
+
+Upload it on `https://<domain>/setup` with the Owner password. The page answers one of:
 
 - "Session stored and checked against <site>." It works.
 - "Session stored, but not checked: ..." Fine. The page then shows the Session as unchecked.
 - "Not stored: <reason>." The old Session is kept. Fix the reason and upload again.
 
-The Session is never shown again; the Owner uploads a fresh one when it expires. Do not read or print the file yourself.
+The Session is never shown again; the Owner uploads a fresh one when it expires. A skill with `login.refresh` renews it on the server for as long as its refresh token lasts, so that is rare; upload a fresh one the same throwaway way. Do not read or print the file yourself.
 
 ## Connect claude.ai and the phone
 

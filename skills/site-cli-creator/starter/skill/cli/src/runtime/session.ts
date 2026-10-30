@@ -1,8 +1,9 @@
 // State lives in ~/.<plugin>/ for a skill named after its plugin, else ~/.<plugin>-<skill>/ (0700):
 // session.json (0600) and, for login skills, profile/ (the tool-owned Chrome user-data dir).
-// SITE_CLI_HOME overrides the dir (tests).
+// renew.lock exists only while a run renews the session (login.refresh).
+// SITE_CLI_HOME overrides the dir (tests, and the Deploy skill's separate sign-in for a server).
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -20,6 +21,8 @@ export type Session = {
    * profile/ holds no sign-in then.
    */
   fromProfile?: string;
+  /** What login.refresh.keep kept (a refresh token): renew trades it for a new session. Never logged. */
+  refresh?: Record<string, string>;
   savedAt: string;
 };
 
@@ -31,6 +34,7 @@ export const sessionUploadSchema = z.object({
   headers: z.record(z.string(), z.string()),
   ids: z.record(z.string(), z.string()),
   accounts: z.array(z.object({ id: z.string() })).optional(),
+  refresh: z.record(z.string(), z.string()).optional(),
   savedAt: z.string().optional(),
 });
 
@@ -105,4 +109,79 @@ export function writePrivateJson(file: string, value: unknown): void {
   writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, file);
+}
+
+const RENEW_POLL_MS = 100;
+/** 15 s of polls: how long a run waits for another run's renewal. Counted in polls, not wall time. */
+const RENEW_WAIT_POLLS = 150;
+/** A renew.lock untouched for this long was left by a run that died: a live holder touches it every 10 s. */
+const RENEW_STALE_MS = 60_000;
+const RENEW_HEARTBEAT_MS = 10_000;
+
+/**
+ * Runs `fn` holding `<dir>/renew.lock`, so one run at a time renews: a rotating refresh token works
+ * once, and two runs sending it at once can revoke its whole family.
+ * - The lock is created exclusively and holds this run's own random token. It is removed only
+ *   while it still holds that token, so a run never removes another run's lock.
+ * - Another run's lock is waited for (150 polls of 100 ms), then this answers "busy".
+ * - A lock older than 60 s is taken over by renaming it away first: only one run's rename succeeds.
+ */
+export async function withRenewLock<T>(dir: string, fn: () => Promise<T>, sleep: (ms: number) => Promise<void>, now: () => number = Date.now): Promise<T | "busy"> {
+  ensureStateDir(dir);
+  const file = join(dir, "renew.lock");
+  const mine = randomBytes(8).toString("hex");
+  for (let polls = 0; ; polls++) {
+    try {
+      const fd = openSync(file, "wx", 0o600);
+      writeFileSync(fd, mine);
+      closeSync(fd);
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== "EEXIST") throw e;
+      try {
+        const seen = statSync(file);
+        if (now() - seen.mtimeMs > RENEW_STALE_MS) {
+          const away = `${file}.${mine}.stale`;
+          renameSync(file, away); // throws for every run but one
+          // Between the stat and the rename another run may have taken it over and made a fresh lock
+          // (another file): then that one moved, and it goes back (link fails when a third run already
+          // holds the path). Rare races left: a put-back lock whose holder has just finished stays
+          // until it goes stale (the cost: Chrome sign-ins meanwhile, never a token sent twice).
+          if (statSync(away).ino !== seen.ino) {
+            try {
+              linkSync(away, file);
+            } catch {
+              // the path is held again: that run's lock stands
+            }
+          }
+          rmSync(away, { force: true });
+          continue;
+        }
+      } catch {
+        continue; // released or taken over meanwhile: try again
+      }
+      if (polls >= RENEW_WAIT_POLLS) return "busy";
+      await sleep(RENEW_POLL_MS);
+    }
+  }
+  // While held, the lock is touched every 10 s, so a slow renewal (retries, a slow endpoint) never
+  // looks stale to another run.
+  const heartbeat = setInterval(() => {
+    try {
+      if (readFileSync(file, "utf8") === mine) utimesSync(file, new Date(), new Date());
+    } catch {
+      // gone: nothing to keep alive
+    }
+  }, RENEW_HEARTBEAT_MS);
+  heartbeat.unref?.();
+  try {
+    return await fn();
+  } finally {
+    clearInterval(heartbeat);
+    try {
+      if (readFileSync(file, "utf8") === mine) rmSync(file, { force: true });
+    } catch {
+      // already gone
+    }
+  }
 }

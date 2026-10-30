@@ -236,16 +236,16 @@ export async function serveHttp(o: ServeOptions): Promise<RemoteServer> {
       return refuse(res, 400, `That is not a session.json from ${o.site.skill} login${fields.length ? ` (check: ${fields.join(", ")})` : ""}.`);
     }
     const at = new Date(clock()).toISOString();
-    const { headers, ids, accounts } = parsed.data;
+    const { headers, ids, accounts, refresh } = parsed.data;
     if (Object.keys(headers).length === 0) return refuse(res, 400, `This session.json holds no sign-in (no headers); upload the file ${o.site.skill} login wrote.`);
     let checked: SessionCheck;
     try {
       // One turn in the tool calls' queue for the check, the save and the status, so a delete or a
       // call that refreshes a Session never lands between them.
       checked = await serial(async () => {
-        const result = await o.checkSession({ headers, ids, accounts, savedAt: at });
+        const result = await o.checkSession({ headers, ids, accounts, refresh, savedAt: at });
         if (!result.ok) return result;
-        saveSession(o.dir, { headers, ids, accounts, savedAt: at });
+        saveSession(o.dir, result.session ? { ...result.session, savedAt: at } : { headers, ids, accounts, ...(refresh && { refresh }), savedAt: at });
         if (result.tried > 0) checkedStatus(o.dir, at, "valid", at);
         else writeStatus(o.dir, { state: "unchecked", uploadedAt: at });
         return result;

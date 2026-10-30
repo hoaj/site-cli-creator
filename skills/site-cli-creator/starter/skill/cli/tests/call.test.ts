@@ -1,5 +1,7 @@
 // The classification table (SPEC §10), row by row, against a fake fetch.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { buildRequest, Client } from "../src/runtime/call";
 import { DryRun, Failure } from "../src/runtime/envelope";
@@ -496,4 +498,408 @@ test("an Operation with neither graphql nor rest is a ContractError (bug)", asyn
   const { fetch } = fakeFetch(() => json({}));
   const e = await client(makeSite(), makeDeps(fetch, home.dir).deps).call(broken, {}).catch((x) => x);
   expect(e.name).toBe("ContractError");
+});
+
+describe("login.refresh: renew the session with plain fetch before Chrome (#94)", () => {
+  type Renew = NonNullable<NonNullable<ReturnType<typeof loginSite>["login"]>["refresh"]>["renew"];
+  /** renew turns refresh token r1 into "Bearer new" and rotates it to r2. */
+  const refreshSite = (renew?: Renew) =>
+    loginSite({
+      login: {
+        ...loginSite().login!,
+        refresh: {
+          renew: renew ?? (async (ctx) => (ctx.refresh.token === "r1" ? { headers: { ...ctx.headers, authorization: "Bearer new" }, refresh: { token: "r2" } } : null)),
+        },
+      },
+    });
+  /** The site accepts only `accepted`. */
+  const site = (accepted = "Bearer new") =>
+    fakeFetch((r) => (r.headers.authorization === accepted ? json({ data: { getCustomer: { id: "C-1", name: "n" } } }) : json({}, 401)));
+  const savedWithRefresh = () => saveSession(home.dir, { headers: { authorization: "Bearer old", cookie: "sid=1" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
+
+  test("a 401 renews with the kept refresh token: no Chrome, the new headers and the rotated token are saved, ids kept", async () => {
+    savedWithRefresh();
+    const { fetch, calls } = site();
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    const out: any = await client(refreshSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(out.data.getCustomer.id).toBe("C-1");
+    expect(loginCalls).toEqual([]);
+    expect(calls.map((c) => c.headers.authorization)).toEqual(["Bearer old", "Bearer new"]);
+    const s = loadSession(home.dir)!;
+    expect(s.headers).toEqual({ authorization: "Bearer new", cookie: "sid=1" });
+    expect(s.refresh).toEqual({ token: "r2" });
+    expect(s.ids).toEqual({ customerId: "C-1" });
+  });
+
+  test("renew answers null (the refresh token no longer works): Chrome signs in as before", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "expired" } });
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    await client(refreshSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(loginCalls).toEqual([true]);
+  });
+
+  test("renew works but the site still refuses the new token: Chrome signs in before anything counts as Drift", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    const out: any = await client(refreshSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(out.data.getCustomer.id).toBe("C-1");
+    expect(loginCalls).toEqual([true]);
+  });
+
+  test("renew throws: noted, and Chrome signs in", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls, notes } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    const failing = refreshSite(async () => {
+      throw new Error("token endpoint answered 500");
+    });
+    await client(failing, deps).call(getCustomer, { customerId: "C-1" });
+    expect(loginCalls).toEqual([true]);
+    expect(notes.join("\n")).toContain("renewing the sign-in failed");
+  });
+
+  test("an MCP tool call renews too, where it would never open Chrome", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    const out: any = await new Client(refreshSite(), deps, { surface: "mcp" }).call(getCustomer, { customerId: "C-1" });
+    expect(out.data.getCustomer.id).toBe("C-1");
+    expect(loginCalls).toEqual([]);
+  });
+
+  test("a sessionProbe that says signed out renews first", async () => {
+    savedWithRefresh();
+    const { fetch, calls } = fakeFetch((r) => {
+      const signedIn = r.headers.authorization === "Bearer new";
+      if (r.url.endsWith("/api/me")) return signedIn ? json({ ok: true }) : json({}, 401);
+      return signedIn ? json({ id: "1", total: 5 }) : json({}, 404);
+    });
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    const s = refreshSite();
+    const probed = { ...s, login: { ...s.login!, sessionProbe: "/api/me" } };
+    expect(await client(probed, deps).call(getOrder, { orderId: "1" })).toEqual({ id: "1", total: 5 });
+    expect(loginCalls).toEqual([]);
+    expect(calls.at(-1)!.headers.authorization).toBe("Bearer new");
+  });
+
+  test("a sign-in as someone else (other ids) that captured no record drops the old one: never another login's refresh token (review)", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r-of-C-1" } });
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer other" } });
+    const s = refreshSite();
+    const other = { ...s, login: { ...s.login!, postLogin: async () => ({ customerId: "C-2" }) } };
+    await client(other, deps).signIn(true);
+    expect(loadSession(home.dir)).toMatchObject({ ids: { customerId: "C-2" } });
+    expect(loadSession(home.dir)!.refresh).toBeUndefined();
+  });
+
+  test("after a renew the sessionProbe is asked again; still anonymous means Chrome (review)", async () => {
+    savedWithRefresh();
+    const { fetch } = fakeFetch((r) => {
+      const signedIn = r.headers.authorization === "Bearer chrome";
+      if (r.url.endsWith("/api/me")) return signedIn ? json({ ok: true }) : json({}, 401);
+      return signedIn ? json({ id: "1", total: 5 }) : json({}, 404);
+    });
+    const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    const s = refreshSite(); // renews to "Bearer new", which this site serves as anonymous
+    const probed = { ...s, login: { ...s.login!, sessionProbe: "/api/me" } };
+    expect(await client(probed, deps).call(getOrder, { orderId: "1" })).toEqual({ id: "1", total: 5 });
+    expect(loginCalls).toEqual([true]);
+  });
+
+  test("a renew that throws is tried again (a token endpoint that blinked), before Chrome (review)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    let attempts = 0;
+    const flaky = refreshSite(async (ctx) => {
+      // The connection was refused: the request never left, so sending the token again is safe.
+      if (++attempts === 1) throw Object.assign(new TypeError("Unable to connect"), { code: "ECONNREFUSED" });
+      return { headers: { ...ctx.headers, authorization: "Bearer new" }, refresh: { token: "r2" } };
+    });
+    await client(flaky, deps).call(getCustomer, { customerId: "C-1" });
+    expect(attempts).toBe(2);
+    expect(loginCalls).toEqual([]);
+  });
+
+  test("a renew that failed after its request may have left (a reset connection) is not sent again in this run (review 3)", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    let attempts = 0;
+    const reset = refreshSite(async () => {
+      attempts++;
+      throw Object.assign(new TypeError("The socket connection was closed unexpectedly"), { code: "ECONNRESET" });
+    });
+    await client(reset, deps).call(getCustomer, { customerId: "C-1" });
+    expect(attempts).toBe(1);
+    expect(loginCalls).toEqual([true]);
+    expect(loadSession(home.dir)!.refresh).toBeUndefined(); // may be spent: never sent again (review 5)
+  });
+
+  test("two runs at once: one renews under renew.lock, the other waits and takes its session over; the token is sent once (review 3)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    let sent = 0;
+    const slow = refreshSite(async (ctx) => {
+      sent++;
+      await Bun.sleep(80);
+      return { headers: { ...ctx.headers, authorization: "Bearer new" }, refresh: { token: "r2" } };
+    });
+    const run = () => {
+      const { deps, loginCalls } = makeDeps(fetch, home.dir);
+      deps.sleep = (ms) => Bun.sleep(ms);
+      return { c: client(slow, deps), loginCalls };
+    };
+    const a = run();
+    const b = run();
+    const [x, y] = await Promise.all([a.c.call(getCustomer, { customerId: "C-1" }), b.c.call(getCustomer, { customerId: "C-1" })]);
+    expect([x, y].map((r: any) => r.data.getCustomer.id)).toEqual(["C-1", "C-1"]);
+    expect(sent).toBe(1);
+    expect([...a.loginCalls, ...b.loginCalls]).toEqual([]);
+    expect(existsSync(join(home.dir, "renew.lock"))).toBe(false);
+  });
+
+  test("a silent re-sign-in reads the record after postLogin: another run's rotation during it is kept, not overwritten (review 4)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer chrome" } });
+    const s = refreshSite();
+    const slow = {
+      ...s,
+      login: {
+        ...s.login!,
+        postLogin: async () => {
+          // Another run renews (r1 → r2) while this sign-in's postLogin is in flight.
+          saveSession(home.dir, { headers: { authorization: "Bearer new", cookie: "sid=1" }, ids: { customerId: "C-1" }, refresh: { token: "r2" } });
+          return { customerId: "C-1" };
+        },
+      },
+    };
+    await client(slow, deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r2" });
+  });
+
+  test("a sign-in that saw a token exchange keep could not read keeps no old record: that exchange may have rotated it (review 4)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer chrome" }, exchanged: true });
+    await client(refreshSite(), deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)!.refresh).toBeUndefined();
+  });
+
+  test("a sign-in from another profile than the saved one keeps no old record, even with equal (empty) ids (review 4)", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: {}, fromProfile: "/profiles/a", refresh: { token: "r-of-a" } });
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer b" } });
+    const s = refreshSite();
+    await client({ ...s, login: { ...s.login!, postLogin: async () => ({}) } }, deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)!.refresh).toBeUndefined();
+  });
+
+  test("another run that dropped the record (same headers) is noticed: the dropped token is not sent (review 4)", async () => {
+    savedWithRefresh();
+    const { fetch, calls } = site("Bearer chrome");
+    const { deps, loginCalls, notes } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    let renewed = 0;
+    const c = client(refreshSite(async () => (renewed++, null)), deps);
+    c.peek();
+    saveSession(home.dir, { headers: { authorization: "Bearer old", cookie: "sid=1" }, ids: { customerId: "C-1" } }); // dropped by another run
+    await c.call(getCustomer, { customerId: "C-1" });
+    expect(renewed).toBe(0);
+    expect(loginCalls).toEqual([true]);
+    // Same expired headers: not sent again as if renewed (review 5).
+    expect(calls.filter((r) => r.headers.authorization === "Bearer old")).toHaveLength(1);
+    expect(notes.join("\n")).not.toContain("another run renewed");
+  });
+
+  test("any renew failure whose request may have reached the site drops the record: a $ZodError, a timeout, a 5xx thrown (review 5)", async () => {
+    for (const thrown of [Object.assign(new Error("shape"), { name: "$ZodError" }), Object.assign(new Error("slow"), { name: "TimeoutError" }), new Error("token endpoint answered HTTP 502")]) {
+      savedWithRefresh();
+      const { fetch } = site("Bearer chrome");
+      const { deps } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+      await client(refreshSite(async () => { throw thrown; }), deps).call(getCustomer, { customerId: "C-1" });
+      expect(loadSession(home.dir)!.refresh).toBeUndefined();
+    }
+  });
+
+  test("renew's fetch carries an AbortSignal, so a renew that runs out of time is cancelled, not left open (review 5)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    const signals: unknown[] = [];
+    deps.plainFetch = async (_input, init) => (signals.push(init?.signal), json({}));
+    const s = refreshSite(async (ctx) => {
+      await ctx.fetch("https://auth.example.test/token", { method: "POST" });
+      return { headers: { ...ctx.headers, authorization: "Bearer new" } };
+    });
+    await client(s, deps).call(getCustomer, { customerId: "C-1" });
+    expect(signals).toHaveLength(1);
+    expect(signals[0]).toBeInstanceOf(AbortSignal);
+  });
+
+  test("renew's ctx.fetch is plain fetch, also with transport browser: renewing needs no Chrome (review 4)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    const used: string[] = [];
+    deps.plainFetch = async () => (used.push("plain"), json({}));
+    const s = refreshSite(async (ctx) => {
+      await ctx.fetch("https://auth.example.test/token");
+      return { headers: { ...ctx.headers, authorization: "Bearer new" } };
+    });
+    await client(s, deps).call(getCustomer, { customerId: "C-1" });
+    expect(used).toEqual(["plain"]);
+  });
+
+  test("a renew.lock another run holds is waited for by attempts, not wall time, then given up on (review 4)", async () => {
+    savedWithRefresh();
+    writeFileSync(join(home.dir, "renew.lock"), "other-run");
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls, notes } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    const started = Date.now();
+    await client(refreshSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(Date.now() - started).toBeLessThan(2_000); // the test deps' sleep is instant
+    expect(loginCalls).toEqual([true]);
+    expect(notes.join("\n")).toContain("still renewing");
+    expect(readFileSync(join(home.dir, "renew.lock"), "utf8")).toBe("other-run"); // never removed another run's lock
+  });
+
+  test("a renew.lock left by a run that died is taken over (review 3)", async () => {
+    savedWithRefresh();
+    writeFileSync(join(home.dir, "renew.lock"), "");
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(join(home.dir, "renew.lock"), old, old);
+    const { fetch } = site();
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    await client(refreshSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(loginCalls).toEqual([]);
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r2" });
+  });
+
+  test("another run renewed first (session.json moved on): its session is used, the spent token is not sent (review)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    let renewed = 0;
+    const c = client(refreshSite(async () => (renewed++, null)), deps);
+    c.peek(); // this run read the old session
+    saveSession(home.dir, { headers: { authorization: "Bearer new", cookie: "sid=1" }, ids: { customerId: "C-1" }, refresh: { token: "r2" } });
+    await c.call(getCustomer, { customerId: "C-1" });
+    expect(renewed).toBe(0);
+    expect(loginCalls).toEqual([]);
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r2" });
+  });
+
+  test("with `from` set and no record kept, renew is not tried (review)", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" } });
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls, notes } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    let renewed = 0;
+    const s = loginSite({ login: { ...loginSite().login!, refresh: { from: "/oauth/token", keep: () => ({}), renew: async () => (renewed++, null) } } });
+    await client(s, deps).call(getCustomer, { customerId: "C-1" });
+    expect(renewed).toBe(0);
+    expect(loginCalls).toEqual([true]);
+    expect(notes.join("\n")).not.toContain("renewing the sign-in");
+  });
+
+  test("a refused refresh token is dropped from session.json, so it is never sent again (review)", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "dead" } });
+    const { fetch } = site("Bearer chrome");
+    const { deps } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    await client(refreshSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(loadSession(home.dir)!.refresh).toBeUndefined();
+  });
+
+  test("a renew closes transport browser's Chrome, so the retry carries the renewed cookies (review)", async () => {
+    savedWithRefresh();
+    const order: string[] = [];
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.release = async () => void order.push("release");
+    await client(refreshSite(async (ctx) => (order.push("renew"), { headers: { ...ctx.headers, authorization: "Bearer new" } })), deps).call(getCustomer, { customerId: "C-1" });
+    expect(order).toEqual(["renew", "release"]);
+  });
+
+  test("a sign-in saves the refresh record login captured; a silent re-sign-in that captured none keeps the old one, an explicit login does not", async () => {
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer new" }, refresh: { token: "r0" } });
+    await client(refreshSite(), deps).signIn(false);
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r0" });
+    deps.login = async () => ({ headers: { authorization: "Bearer newer" } });
+    await client(refreshSite(), deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)).toMatchObject({ headers: { authorization: "Bearer newer" }, refresh: { token: "r0" } });
+    // `login` (no keepRefresh): the computer must not keep a token it may share with a server (review 2).
+    await client(refreshSite(), deps).signIn(false);
+    expect(loadSession(home.dir)!.refresh).toBeUndefined();
+  });
+
+  test("a silent re-sign-in keeps the record also when postLogin returns no ids, as long as they match (review 2)", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: {}, refresh: { token: "r1" } });
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.login = async () => ({ headers: { authorization: "Bearer new" } });
+    const s = refreshSite();
+    await client({ ...s, login: { ...s.login!, postLogin: async () => ({}) } }, deps).signIn(true, { keepRefresh: true });
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r1" });
+  });
+
+  test("a refused renew rereads session.json: another run's renewal is taken over, never overwritten (review 2)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    const racing = refreshSite(async () => {
+      // Another run renews while this one's request is in flight; this one's token is then spent.
+      saveSession(home.dir, { headers: { authorization: "Bearer new", cookie: "sid=1" }, ids: { customerId: "C-1" }, refresh: { token: "r2" } });
+      return null;
+    });
+    await client(racing, deps).call(getCustomer, { customerId: "C-1" });
+    expect(loginCalls).toEqual([]);
+    expect(loadSession(home.dir)).toMatchObject({ headers: { authorization: "Bearer new" }, refresh: { token: "r2" } });
+  });
+
+  test("a renew whose answer no longer parses (ZodError, SyntaxError) is not sent again: the token may already be rotated (review 2)", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls, notes } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    let attempts = 0;
+    const changed = refreshSite(async () => {
+      attempts++;
+      throw Object.assign(new Error("bad shape"), { name: "ZodError" });
+    });
+    await client(changed, deps).call(getCustomer, { customerId: "C-1" });
+    expect(attempts).toBe(1);
+    expect(loginCalls).toEqual([true]);
+    expect(notes.join("\n")).toContain("so it is dropped");
+    expect(loadSession(home.dir)!.refresh).toBeUndefined(); // possibly spent: never sent again, not even by a later run (review 3)
+  });
+
+  test("listAccounts never writes back a session older than another run's renewal (review 3)", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer old");
+    const { deps } = makeDeps(fetch, home.dir);
+    const c = client(loginSite({ accounts: async () => [{ id: "A1" }] }), deps);
+    c.peek();
+    saveSession(home.dir, { headers: { authorization: "Bearer new", cookie: "sid=1" }, ids: { customerId: "C-1" }, refresh: { token: "r2" } });
+    await c.listAccounts();
+    expect(loadSession(home.dir)).toMatchObject({ headers: { authorization: "Bearer new" }, refresh: { token: "r2" }, accounts: [{ id: "A1" }] });
+  });
+
+  test("taking over another run's session does not write session.json again (review 2)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    const { deps } = makeDeps(fetch, home.dir);
+    const c = client(refreshSite(async () => null), deps);
+    c.peek();
+    const theirs = saveSession(home.dir, { headers: { authorization: "Bearer new" }, ids: { customerId: "C-1" }, refresh: { token: "r2" }, savedAt: "2026-01-02T00:00:00.000Z" });
+    await c.call(getCustomer, { customerId: "C-1" });
+    expect(loadSession(home.dir)!.savedAt).toBe(theirs.savedAt);
+  });
 });

@@ -236,6 +236,13 @@ describe("the Session upload", () => {
     expect((await upload(base, { file: sessionJson(), text: "not json at all" })).status).toBe(200);
   });
 
+  test("an uploaded Session keeps its refresh record, so the server can renew without Chrome (#94)", async () => {
+    const { base } = await start();
+    expect((await upload(base, { text: sessionJson({ ...goodSession, refresh: { token: "rt-planted" } }) })).status).toBe(200);
+    expect(JSON.parse(stored()).refresh).toEqual({ token: "rt-planted" });
+    expect((await req(`${base}/setup`)).text).not.toContain("rt-planted");
+  });
+
   test("bad input is rejected and an earlier working Session is kept", async () => {
     const { base } = await start();
     expect((await upload(base, { file: sessionJson() })).status).toBe(200);
@@ -494,6 +501,29 @@ describe("checkSession", () => {
   test("a working Session: ok, with the reads that were tried, and nothing is saved", async () => {
     expect(await checkSession(appWith(sessionSite), candidate)).toEqual({ ok: true, tried: 2 });
     expect(existsSync(sessionFile(home.dir))).toBe(false);
+  });
+
+  test("an upload whose access token expired but whose refresh token works is renewed, and the renewed Session is what gets stored (#94, review)", async () => {
+    const site = loginSite({
+      login: {
+        ...loginSite().login!,
+        refresh: { renew: async (ctx) => (ctx.refresh.token === "r1" ? { headers: { cookie: `sid=${GOOD}` }, refresh: { token: "r2" } } : null) },
+      },
+    });
+    const app = makeApp(site, makeDeps(fakeFetch(sessionSite).fetch, home.dir).deps);
+    const r = await checkSession(app, { headers: { cookie: "sid=expired" }, ids: { customerId: "C-1" }, refresh: { token: "r1" }, savedAt: "2026-01-01T00:00:00.000Z" });
+    expect(r).toMatchObject({ ok: true, session: { headers: { cookie: `sid=${GOOD}` }, refresh: { token: "r2" } } });
+    expect(existsSync(sessionFile(home.dir))).toBe(false); // the check itself saves nothing
+  });
+
+  test("an upload the sessionProbe calls signed out, with no renewal that helps, is refused, not stored as working (#94, review 2)", async () => {
+    const site = loginSite({ login: { ...loginSite().login!, sessionProbe: "/api/me" } });
+    // Serves the expired upload as anonymous: /api/me 401, every read 200 with data.
+    const anonymous = (r: Recorded) => (new URL(r.url).pathname === "/api/me" ? json({}, 401) : sessionSite(r));
+    const app = makeApp(site, makeDeps(fakeFetch(anonymous).fetch, home.dir).deps);
+    const r = await checkSession(app, candidate);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toMatch(/did not accept this Session/);
   });
 
   test("the site refusing the Session says so and names `<skill> login`", async () => {

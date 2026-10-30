@@ -332,6 +332,33 @@ describe("--account", () => {
   });
 });
 
+describe("login.refresh through run() (#94)", () => {
+  test("a test's fake fetch is also renew's fetch: renewing never reaches the real network (review 5)", async () => {
+    const seen: string[] = [];
+    const { fetch } = fakeFetch((r) => {
+      seen.push(new URL(r.url).host);
+      if (r.url.endsWith("/token")) return json({ access_token: "new" });
+      return r.headers.authorization === "Bearer new" ? happySite(r) : json({}, 401);
+    });
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
+    const site = loginSite({
+      login: {
+        ...loginSite().login!,
+        refresh: {
+          renew: async (ctx) => {
+            const t = (await (await ctx.fetch("https://auth.example.test/token", { method: "POST" })).json()) as { access_token: string };
+            return { headers: { authorization: `Bearer ${t.access_token}` } };
+          },
+        },
+      },
+    });
+    expect((await run(["products", "show"], makeApp(site, deps))).code).toBe(0);
+    expect(seen).toContain("auth.example.test");
+    expect(loginCalls).toEqual([]);
+  });
+});
+
 describe("login", () => {
   test("login signs in headed, runs postLogin, prints id names only", async () => {
     const { deps } = makeDeps(fakeFetch(happySite).fetch, home.dir, [{ authorization: "Bearer t" }]);
@@ -355,7 +382,8 @@ describe("login", () => {
     const answers = [{ authorization: "Bearer t" }, null];
     deps.login = async (headless, options) => {
       seen.push({ headless, options });
-      return answers.shift() ?? null;
+      const headers = answers.shift();
+      return headers ? { headers } : null;
     };
     const ok = await run(["login", "--from-profile", "/tmp/capture-profile"], makeApp(loginSite(), deps));
     expect(ok.code).toBe(0);
@@ -371,7 +399,7 @@ describe("login", () => {
     const { deps } = makeDeps(fakeFetch(happySite).fetch, home.dir);
     deps.login = async (_headless, options) => {
       seen.push(options?.fromProfile);
-      return { authorization: "Bearer t" };
+      return { headers: { authorization: "Bearer t" } };
     };
     for (const arg of ["--from-profile=~/.site-cli-creator/profile", "--from-profile=~"]) {
       expect((await run(["login", arg], makeApp(loginSite(), deps))).code).toBe(0);
@@ -389,7 +417,8 @@ describe("login", () => {
       deps.env = { ...deps.env, SITE_CLI_NONINTERACTIVE: "1" };
       deps.login = async (headless, options) => {
         seen.push({ headless, fromProfile: options?.fromProfile });
-        return answers.shift() ?? null;
+        const headers = answers.shift();
+        return headers ? { headers } : null;
       };
       expect((await run(["login", "--from-profile", source.dir], makeApp(loginSite(), deps))).code).toBe(0);
       expect(loadSession(home.dir)!.fromProfile).toBe(source.dir);
@@ -422,7 +451,7 @@ describe("login", () => {
       let seeded: Error = new ProfileUnavailable(`--from-profile: could not open ${source.dir} (in use)`);
       deps.login = async (_headless, options) => {
         if (options?.fromProfile) throw seeded;
-        return { authorization: "Bearer t2" };
+        return { headers: { authorization: "Bearer t2" } };
       };
       saveSession(home.dir, { headers: { authorization: "Bearer t1" }, ids: { customerId: "C-1" }, fromProfile: source.dir });
       expect((await run(["products", "show"], makeApp(loginSite(), deps))).code).toBe(0);

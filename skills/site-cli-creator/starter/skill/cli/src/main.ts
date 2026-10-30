@@ -123,6 +123,8 @@ function defaultDeps(app: App): Deps {
   const tab = app.site.transport === "browser" && !app.deps?.fetch ? browserTransport(app.site, { env, note: app.deps?.note ?? note }) : undefined;
   return {
     fetch: tab?.fetch ?? ((input, init) => fetch(input, init)),
+    // login.refresh.renew: never through transport "browser"'s Chrome; a test's fake fetch when it gave one.
+    plainFetch: app.deps?.fetch ?? ((input, init) => fetch(input, init)),
     env,
     login: (headless, options) => chromeLogin(app.site, { headless, note, env, fromProfile: options?.fromProfile }),
     release: async () => tab?.close(),
@@ -278,12 +280,13 @@ function sessionReason(e: unknown, skill: string): string {
 
 /**
  * The Setup page's live check: the read Operations, called as `check` does but with the uploaded
- * Session and no sign-in or refresh, so a bad upload is refused before it replaces a working
- * Session. The candidate is never saved.
+ * Session and no sign-in, so a bad upload is refused before it replaces a working Session. Only
+ * login.refresh may renew it, in memory: then the renewed Session comes back to be stored, since the
+ * upload's refresh token is spent. Nothing is saved here.
  */
 export async function checkSession(app: App, candidate: Session): Promise<SessionCheck> {
   const deps = defaultDeps(app);
-  const client = new Client(app.site, deps, { session: candidate, reauth: false, surface: "mcp" });
+  const client = new Client(app.site, deps, { session: candidate, reauth: "renew", surface: "mcp" });
   try {
     let result: Awaited<ReturnType<typeof check>>;
     try {
@@ -300,7 +303,8 @@ export async function checkSession(app: App, candidate: Session): Promise<Sessio
     // missing ("no value for <key>"; a "needs <operation>" skip only follows from another row's).
     const lacking = result.operations.some((r) => r.effect === "read" && r.status === "skipped" && r.reason?.startsWith("no value for"));
     if (tried === 0 && lacking) return { ok: false, reason: `this session.json lacks what the site's reads need; upload the file \`${app.site.skill} login\` wrote` };
-    return { ok: true, tried };
+    const now = client.peek();
+    return client.renewed && now ? { ok: true, tried, session: now } : { ok: true, tried };
   } catch (e) {
     return { ok: false, reason: sessionReason(e, app.site.skill) };
   } finally {

@@ -16,6 +16,8 @@ export type SiteCtx = {
   origin: string;
   headers: Record<string, string>;
   ids: Record<string, string>;
+  /** What login.refresh.keep kept (a refresh token, a client id); {} when nothing was. */
+  refresh: Record<string, string>;
   decodeJwt(token: string): Record<string, unknown>;
   /** Performs one Operation with classification, like a command's ctx.call. */
   call: Call;
@@ -43,6 +45,31 @@ export type LoginConfig = {
   timeoutMs?: number;
   /** Derives chain-root ids after login. Returns ids to store, never personal data. */
   postLogin?: (ctx: SiteCtx) => Promise<Record<string, string>>;
+  /**
+   * Renews an expired session with plain fetch, as the site's frontend does with its refresh
+   * token, before Chrome is tried (SPEC §7). Works where Chrome cannot run (remote mode).
+   */
+  refresh?: RefreshConfig;
+};
+
+export type RefreshConfig = {
+  /**
+   * URL substring or RegExp of a request the sign-in sends whose JSON answer carries the refresh
+   * token (an OAuth token endpoint). Leave it out when the refresh token is a cookie the session's
+   * cookie header already holds.
+   */
+  from?: string | RegExp;
+  /**
+   * Picks what renew needs from that request's body and its JSON answer (each parsed, or undefined):
+   * the refresh token, a client id. Never personal data; saved in session.json as `refresh`.
+   */
+  keep?: (exchange: { request: unknown; response: unknown }) => Record<string, string>;
+  /**
+   * Trades ctx.refresh (and ctx.headers) for a new session with ctx.fetch. Returns every header to
+   * send from now on, and `refresh` when the site rotated what keep kept; null when the refresh
+   * token no longer works, so the CLI signs in with Chrome instead.
+   */
+  renew: (ctx: SiteCtx) => Promise<{ headers: Record<string, string>; refresh?: Record<string, string> } | null>;
 };
 
 export type SiteConfig = {
@@ -122,6 +149,16 @@ export function siteProblems(site: Site): string[] {
   const probe = site.login?.sessionProbe;
   if (probe !== undefined && !(typeof probe === "string" && /^\/(?![/\\])/.test(probe))) {
     out.push("login.sessionProbe must be a path on the origin, starting with a single /");
+  }
+  const refresh = site.login?.refresh;
+  if (refresh !== undefined) {
+    if (typeof refresh?.renew !== "function") out.push("login.refresh needs a renew function");
+    const from = refresh?.from;
+    if (from !== undefined && !(typeof from === "string" && from !== "") && !(from instanceof RegExp)) {
+      out.push("login.refresh.from must be a non-empty URL path substring or a RegExp");
+    } else if (from instanceof RegExp && (from.global || from.sticky)) {
+      out.push("login.refresh.from must be a RegExp without the g or y flag (its test() would skip matches)");
+    } else if (from !== undefined && typeof refresh.keep !== "function") out.push("login.refresh.from needs a keep function");
   }
   const ro = site.readOnlyRequests;
   if (ro !== undefined && (!Array.isArray(ro) || ro.some((p) => !(typeof p === "string" && p !== "") && !(p instanceof RegExp)))) {

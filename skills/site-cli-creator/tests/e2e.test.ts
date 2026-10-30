@@ -303,6 +303,23 @@ for (const auth of ["none", "login"] as const) {
         for (const v of [USER.cpr, USER.email, ACCOUNT.name]) expect(saved).not.toContain(v);
       }, 120_000);
 
+      test("an expired access token is renewed with the kept refresh token: no Chrome, the token rotates (#94)", async () => {
+        const file = join(home, "session.json");
+        const before = JSON.parse(readFileSync(file, "utf8"));
+        expect(Object.keys(before.refresh ?? {}).sort()).toEqual(["clientId", "refreshToken"]);
+        site.expireAccessTokens();
+        // No Chrome to sign in with, and no waiting for one: only the refresh token can bring it back.
+        const r = await cli(["subscription", "show"], { env: { SITE_CLI_CHROME: join(work, "no-chrome"), SITE_CLI_NONINTERACTIVE: "1" } });
+        expect(r.code, r.stderr).toBe(0);
+        expect(r.out.customer).toBe(ACCOUNT.name);
+        const after = JSON.parse(readFileSync(file, "utf8"));
+        expect(after.refresh.refreshToken).not.toBe(before.refresh.refreshToken);
+        expect(after.headers.authorization).not.toBe(before.headers.authorization);
+        expect(after.ids).toEqual(before.ids);
+        expect(r.stdout + r.stderr).not.toContain(before.refresh.refreshToken);
+        expect(r.stdout + r.stderr).not.toContain(after.refresh.refreshToken);
+      }, 120_000);
+
       test("a command without a session signs in by itself (no exit 4)", async () => {
         unlinkSync(join(home, "session.json"));
         const r = await cli(["subscription", "show"]);

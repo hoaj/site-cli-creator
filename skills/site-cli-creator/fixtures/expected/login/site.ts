@@ -6,6 +6,11 @@ import { z } from "zod";
 import { defineSite } from "./runtime/site";
 
 const postLoginResponse = z.object({ personalInfo: z.object({ customerId: z.string().min(1) }) });
+// The sign-in's token exchange (POST /oauth/token): the frontend sends its client id, the answer
+// carries a refresh token that works once.
+const tokenRequest = z.object({ client_id: z.string().min(1) });
+const tokenResponse = z.object({ access_token: z.string().min(1), refresh_token: z.string().min(1) });
+const renewResponse = z.object({ access_token: z.string().min(1), refresh_token: z.string().min(1).optional() });
 
 export default defineSite({
   plugin: "__PLUGIN__",
@@ -39,6 +44,28 @@ export default defineSite({
       // The response also carries CPR and email; only the chain root is kept.
       const { personalInfo } = postLoginResponse.parse(await res.json());
       return { customerId: personalInfo.customerId };
+    },
+    refresh: {
+      from: "/oauth/token",
+      keep: ({ request, response }) => ({
+        clientId: tokenRequest.parse(request).client_id,
+        refreshToken: tokenResponse.parse(response).refresh_token,
+      }),
+      renew: async (ctx) => {
+        const res = await ctx.fetch(`${ctx.origin}/oauth/token`, {
+          method: "POST",
+          headers: { "content-type": "application/x-www-form-urlencoded" },
+          body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: ctx.refresh.refreshToken ?? "", client_id: ctx.refresh.clientId ?? "" }).toString(),
+        });
+        if (res.status === 400 || res.status === 401) return null; // spent or revoked: sign in with Chrome
+        if (!res.ok) throw new Error(`token endpoint answered HTTP ${res.status}`); // Chrome next; the record is kept
+        // A renewal's answer may leave refresh_token out (no rotation): the old one stays then.
+        const t = renewResponse.parse(await res.json());
+        return {
+          headers: { ...ctx.headers, authorization: `Bearer ${t.access_token}` },
+          ...(t.refresh_token && { refresh: { ...ctx.refresh, refreshToken: t.refresh_token } }),
+        };
+      },
     },
   },
 });
