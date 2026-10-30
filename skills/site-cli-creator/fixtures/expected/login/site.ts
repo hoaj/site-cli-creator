@@ -58,7 +58,7 @@ export default defineSite({
           body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: ctx.refresh.refreshToken ?? "", client_id: ctx.refresh.clientId ?? "" }).toString(),
         });
         if (res.status === 400 || res.status === 401) return null; // spent or revoked: sign in with Chrome
-        if (!res.ok) throw new Error(`token endpoint answered HTTP ${res.status}`); // tried again
+        if (!res.ok) throw new Error(`token endpoint answered HTTP ${res.status}`); // Chrome next; the record is kept
         // A renewal's answer may leave refresh_token out (no rotation): the old one stays then.
         const t = renewResponse.parse(await res.json());
         return {

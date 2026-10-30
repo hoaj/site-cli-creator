@@ -197,7 +197,7 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
         body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: ctx.refresh.refreshToken ?? "", client_id: ctx.refresh.clientId ?? "" }).toString(),
       });
       if (res.status === 400 || res.status === 401) return null; // the refresh token is spent or revoked
-      if (!res.ok) throw new Error(`token endpoint answered HTTP ${res.status}`); // tried again
+      if (!res.ok) throw new Error(`token endpoint answered HTTP ${res.status}`); // Chrome next; the record is kept
       // refresh_token is optional: a site that does not rotate leaves it out, and the old one stays.
       const t = z.object({ access_token: z.string(), refresh_token: z.string().optional() }).parse(await res.json());
       return {

@@ -111,40 +111,56 @@ export function writePrivateJson(file: string, value: unknown): void {
   renameSync(tmp, file);
 }
 
-const RENEW_WAIT_MS = 15_000;
-/** A renew.lock older than this was left by a run that died; renewing never takes this long. */
+const RENEW_POLL_MS = 100;
+/** 15 s of polls: how long a run waits for another run's renewal. Counted in polls, not wall time. */
+const RENEW_WAIT_POLLS = 150;
+/**
+ * A renew.lock older than this was left by a run that died: a renewal holds it at most
+ * RENEW_TIMEOUT_MS (call.ts) plus a moment.
+ */
 const RENEW_STALE_MS = 60_000;
 
 /**
- * Runs `fn` holding `<dir>/renew.lock`, created exclusively, so one run at a time renews: a
- * rotating refresh token works once, and two runs sending it at once can revoke its whole family.
- * Waits up to 15 s for another run's lock, then answers "busy"; takes over a lock older than 60 s.
+ * Runs `fn` holding `<dir>/renew.lock`, so one run at a time renews: a rotating refresh token works
+ * once, and two runs sending it at once can revoke its whole family.
+ * - The lock is created exclusively and holds this run's own random token. It is removed only
+ *   while it still holds that token, so a run never removes another run's lock.
+ * - Another run's lock is waited for (150 polls of 100 ms), then this answers "busy".
+ * - A lock older than 60 s is taken over by renaming it away first: only one run's rename succeeds.
  */
 export async function withRenewLock<T>(dir: string, fn: () => Promise<T>, sleep: (ms: number) => Promise<void>, now: () => number = Date.now): Promise<T | "busy"> {
   ensureStateDir(dir);
   const file = join(dir, "renew.lock");
-  const deadline = now() + RENEW_WAIT_MS;
-  for (;;) {
+  const mine = randomBytes(8).toString("hex");
+  for (let polls = 0; ; polls++) {
     try {
-      closeSync(openSync(file, "wx", 0o600));
+      const fd = openSync(file, "wx", 0o600);
+      writeFileSync(fd, mine);
+      closeSync(fd);
       break;
     } catch (e) {
       if ((e as NodeJS.ErrnoException)?.code !== "EEXIST") throw e;
       try {
         if (now() - statSync(file).mtimeMs > RENEW_STALE_MS) {
-          rmSync(file, { force: true });
+          const away = `${file}.${mine}.stale`;
+          renameSync(file, away); // throws for every run but one
+          rmSync(away, { force: true });
           continue;
         }
       } catch {
-        continue; // released meanwhile
+        continue; // released or taken over meanwhile: try again
       }
-      if (now() > deadline) return "busy";
-      await sleep(100);
+      if (polls >= RENEW_WAIT_POLLS) return "busy";
+      await sleep(RENEW_POLL_MS);
     }
   }
   try {
     return await fn();
   } finally {
-    rmSync(file, { force: true });
+    try {
+      if (readFileSync(file, "utf8") === mine) rmSync(file, { force: true });
+    } catch {
+      // already gone
+    }
   }
 }

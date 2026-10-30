@@ -167,6 +167,7 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
     : await launch(site, ensureProfileDir(site, env), headless, env);
   const refresh = login.refresh;
   let kept: Record<string, string> | undefined;
+  let exchanged = false;
   /** The refresh exchange being read, so the sign-in does not end before it is. */
   let keeping: Promise<void> = Promise.resolve();
   try {
@@ -174,6 +175,7 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
       const { from, keep } = refresh;
       context.on("response", (res) => {
         if (!tokenMatches(from, res.url()) || res.status() < 200 || res.status() >= 300) return;
+        exchanged = true; // even when keep reads nothing from it, it may have rotated the old token
         keeping = keeping
           .then(async () => {
             const picked = keep({ request: requestBody(res.request()), response: await responseBody(res) });
@@ -181,7 +183,7 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
             // A later match keep picks nothing from (an introspection call) never wipes a kept record.
             if (Object.keys(record).length) kept = record;
           })
-          .catch(() => {}); // a keep that throws keeps nothing; renew then has nothing to trade
+          .catch(() => {}); // a keep that throws keeps nothing (and `exchanged` stops the old record)
       });
     }
     const done = new Promise<Request | "logged-out" | null>((resolve) => {
@@ -228,7 +230,8 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
       await Promise.race([keeping, new Promise<void>((resolve) => (timer = setTimeout(resolve, KEEP_WAIT_MS)))]);
       clearTimeout(timer);
     }
-    return kept && Object.keys(kept).length ? { headers, refresh: kept } : { headers };
+    if (kept && Object.keys(kept).length) return { headers, refresh: kept };
+    return exchanged ? { headers, exchanged: true } : { headers };
   } finally {
     await closeContext(context);
   }

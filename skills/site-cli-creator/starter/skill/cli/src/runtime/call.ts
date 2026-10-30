@@ -36,12 +36,21 @@ export type SignInOptions = {
   keepRefresh?: boolean;
 };
 
-/** A finished sign-in: the captured authorization + cookie headers, and what login.refresh.keep kept. */
-export type SignedIn = { headers: Record<string, string>; refresh?: Record<string, string> };
+/**
+ * A finished sign-in: the captured authorization + cookie headers, and what login.refresh.keep kept.
+ * `exchanged`: a login.refresh.from exchange happened but keep kept nothing from it; that exchange
+ * may have rotated the old token, so the old record is not kept either.
+ */
+export type SignedIn = { headers: Record<string, string>; refresh?: Record<string, string>; exchanged?: boolean };
 
 export type Deps = {
   fetch: Fetch;
   env: Env;
+  /**
+   * Plain fetch for login.refresh.renew, which must reach the token endpoint without transport
+   * "browser"'s Chrome. Defaults to `fetch`.
+   */
+  plainFetch?: Fetch;
   /** Opens Chrome on the login profile; null when sign-in didn't complete (headless: the profile is logged out). */
   login(headless: boolean, options?: SignInOptions): Promise<SignedIn | null>;
   /**
@@ -260,8 +269,6 @@ export class Client {
     const signedIn = await this.deps.login(headless, options);
     if (!signedIn) return null;
     const { headers } = signedIn;
-    // As saved now: another run may have rotated its refresh record since this one started.
-    const previous = loadSession(this.dir) ?? this.session;
     const draft: Session = { headers, ids: {}, ...(signedIn.refresh && { refresh: signedIn.refresh }), savedAt: new Date().toISOString() };
     let raw: Record<string, unknown> | undefined;
     try {
@@ -271,10 +278,12 @@ export class Client {
     }
     const ids: Record<string, string> = {};
     for (const [k, v] of Object.entries(raw ?? {})) if (v !== undefined && v !== null) ids[k] = String(v);
-    // A silent re-sign-in that saw no token exchange (the frontend reused its cached token) keeps the
-    // refresh record it had, but only for the same login (the same ids): never another login's token.
-    const sameLogin = !!options?.keepRefresh && !!previous && JSON.stringify(sortedIds(previous.ids)) === JSON.stringify(sortedIds(ids));
-    const refresh = signedIn.refresh ?? (sameLogin ? previous!.refresh : undefined);
+    // A silent re-sign-in that saw no token exchange at all (the frontend reused its cached token)
+    // keeps the refresh record it had, but only for the same login: the same ids and the same profile,
+    // never another login's token. Read as saved now, after postLogin: another run may have rotated it.
+    const previous = loadSession(this.dir) ?? this.session;
+    const keepOld = !!options?.keepRefresh && !signedIn.exchanged && !!previous && sameLogin(previous, ids) && previous.fromProfile === options?.fromProfile;
+    const refresh = signedIn.refresh ?? (keepOld ? previous!.refresh : undefined);
     this.session = saveSession(this.dir, { headers, ids, ...(refresh && { refresh }), ...(options?.fromProfile && { fromProfile: options.fromProfile }) });
     this.persisted = true;
     this.fresh = true;
@@ -319,7 +328,9 @@ export class Client {
     let renewed: Awaited<ReturnType<typeof refresh.renew>>;
     for (let attempt = 0; ; attempt++) {
       try {
-        renewed = await refresh.renew(this.siteCtx(current, false));
+        // Plain fetch, never transport "browser"'s Chrome; and bounded, so the lock is never held long.
+        const ctx = { ...this.siteCtx(current, false), fetch: this.deps.plainFetch ?? this.deps.fetch };
+        renewed = await withTimeout(refresh.renew(ctx), RENEW_TIMEOUT_MS);
         break;
       } catch (e) {
         // The error's name only: its message may carry what the site sent.
@@ -361,7 +372,8 @@ export class Client {
   /** session.json when another run saved other headers since `current` was read; null otherwise. */
   private newerOnDisk(current: Session): Session | null {
     const onDisk = this.persisted ? loadSession(this.dir) : null;
-    if (!onDisk || JSON.stringify(onDisk.headers) === JSON.stringify(current.headers)) return null;
+    // Headers or refresh record: another run may have renewed it, or dropped a spent token.
+    if (!onDisk || (JSON.stringify(onDisk.headers) === JSON.stringify(current.headers) && JSON.stringify(onDisk.refresh ?? {}) === JSON.stringify(current.refresh ?? {}))) return null;
     this.deps.note("another run renewed the sign-in; using its session");
     return onDisk;
   }
@@ -519,7 +531,7 @@ export class Client {
     // renewed it since, and its rotated refresh token must not be overwritten with a spent one.
     const loaded = this.session ?? s;
     const onDisk = this.persisted ? loadSession(this.dir) : null;
-    const current = onDisk && JSON.stringify(sortedIds(onDisk.ids)) === JSON.stringify(sortedIds(loaded.ids)) ? onDisk : loaded;
+    const current = onDisk && sameLogin(onDisk, loaded.ids) && onDisk.fromProfile === loaded.fromProfile ? onDisk : loaded;
     const next = { ...current, accounts: list.map((a) => ({ id: a.id })) };
     // Saved only where a session is saved anyway (login, bootstrap): an auth "none" skill without
     // bootstrap keeps nothing on disk, so a stale list can never lock it.
@@ -650,4 +662,22 @@ function neverSent(e: unknown): boolean {
 /** Ids in key order, so two sessions' ids compare equal whatever order postLogin returned them in. */
 function sortedIds(ids: Record<string, string>): [string, string][] {
   return Object.entries(ids).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/** Whether a saved session has these chain-root ids (empty equals empty). */
+function sameLogin(saved: Session, ids: Record<string, string>): boolean {
+  return JSON.stringify(sortedIds(saved.ids)) === JSON.stringify(sortedIds(ids));
+}
+
+/** How long one renew call may take; well under renew.lock's 60 s staleness. */
+const RENEW_TIMEOUT_MS = 30_000;
+
+/** `work`, or a TimeoutError after `ms`: the request may have reached the site, so it is not sent again. */
+async function withTimeout<T>(work: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([work, new Promise<never>((_, reject) => (timer = setTimeout(() => reject(Object.assign(new Error("renew took too long"), { name: "TimeoutError" })), ms)))]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
