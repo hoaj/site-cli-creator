@@ -1,5 +1,7 @@
 // The classification table (SPEC §10), row by row, against a fake fetch.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { existsSync, utimesSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { z } from "zod";
 import { buildRequest, Client } from "../src/runtime/call";
 import { DryRun, Failure } from "../src/runtime/envelope";
@@ -614,12 +616,62 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
     const { deps, loginCalls } = makeDeps(fetch, home.dir);
     let attempts = 0;
     const flaky = refreshSite(async (ctx) => {
-      if (++attempts === 1) throw new TypeError("fetch failed");
+      // The connection was refused: the request never left, so sending the token again is safe.
+      if (++attempts === 1) throw Object.assign(new TypeError("Unable to connect"), { code: "ECONNREFUSED" });
       return { headers: { ...ctx.headers, authorization: "Bearer new" }, refresh: { token: "r2" } };
     });
     await client(flaky, deps).call(getCustomer, { customerId: "C-1" });
     expect(attempts).toBe(2);
     expect(loginCalls).toEqual([]);
+  });
+
+  test("a renew that failed after its request may have left (a reset connection) is not sent again in this run (review 3)", async () => {
+    savedWithRefresh();
+    const { fetch } = site("Bearer chrome");
+    const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer chrome" }]);
+    let attempts = 0;
+    const reset = refreshSite(async () => {
+      attempts++;
+      throw Object.assign(new TypeError("The socket connection was closed unexpectedly"), { code: "ECONNRESET" });
+    });
+    await client(reset, deps).call(getCustomer, { customerId: "C-1" });
+    expect(attempts).toBe(1);
+    expect(loginCalls).toEqual([true]);
+  });
+
+  test("two runs at once: one renews under renew.lock, the other waits and takes its session over; the token is sent once (review 3)", async () => {
+    savedWithRefresh();
+    const { fetch } = site();
+    let sent = 0;
+    const slow = refreshSite(async (ctx) => {
+      sent++;
+      await Bun.sleep(80);
+      return { headers: { ...ctx.headers, authorization: "Bearer new" }, refresh: { token: "r2" } };
+    });
+    const run = () => {
+      const { deps, loginCalls } = makeDeps(fetch, home.dir);
+      deps.sleep = (ms) => Bun.sleep(ms);
+      return { c: client(slow, deps), loginCalls };
+    };
+    const a = run();
+    const b = run();
+    const [x, y] = await Promise.all([a.c.call(getCustomer, { customerId: "C-1" }), b.c.call(getCustomer, { customerId: "C-1" })]);
+    expect([x, y].map((r: any) => r.data.getCustomer.id)).toEqual(["C-1", "C-1"]);
+    expect(sent).toBe(1);
+    expect([...a.loginCalls, ...b.loginCalls]).toEqual([]);
+    expect(existsSync(join(home.dir, "renew.lock"))).toBe(false);
+  });
+
+  test("a renew.lock left by a run that died is taken over (review 3)", async () => {
+    savedWithRefresh();
+    writeFileSync(join(home.dir, "renew.lock"), "");
+    const old = new Date(Date.now() - 120_000);
+    utimesSync(join(home.dir, "renew.lock"), old, old);
+    const { fetch } = site();
+    const { deps, loginCalls } = makeDeps(fetch, home.dir);
+    await client(refreshSite(), deps).call(getCustomer, { customerId: "C-1" });
+    expect(loginCalls).toEqual([]);
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r2" });
   });
 
   test("another run renewed first (session.json moved on): its session is used, the spent token is not sent (review)", async () => {

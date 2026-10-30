@@ -22,8 +22,8 @@ import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
 import { driftFingerprint, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import type { Operation } from "./operation";
-import { loadSession, saveSession, stateDir, type Session } from "./session";
-import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type Site, type SiteCtx } from "./site";
+import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
+import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type RefreshConfig, type Site, type SiteCtx } from "./site";
 
 /** `fromProfile`: seed the sign-in from another Chrome profile's cookies (`login --from-profile`). */
 export type SignInOptions = {
@@ -286,9 +286,9 @@ export class Client {
    * login.refresh: trades the kept refresh token for a new session with plain fetch, once per run,
    * before Chrome is tried (SPEC §7). True when it did; the new headers and a rotated refresh record
    * are saved, the ids kept.
-   * - Another run that renewed meanwhile left a newer session.json: that one is used instead, so a
-   *   rotated (spent) refresh token is never sent.
-   * - A renew that throws (the token endpoint blinked) is tried again after deps.retryDelays.
+   * - One run at a time renews (renew.lock in the state dir); a run that waited for another one, or
+   *   finds a newer session.json, uses that session instead, so a rotated token is never sent twice.
+   * - A renew that throws is tried again only when its request never left (connection refused, DNS).
    * - null means the site refused the refresh token: the record is dropped, never sent again.
    */
   private async renew(): Promise<boolean> {
@@ -296,9 +296,24 @@ export class Client {
     const current = this.peek();
     if (!refresh || !current || this.renewTried) return false;
     this.renewTried = true;
-    const takeOver = () => this.newerOnDisk(current);
-    const theirs = takeOver();
+    if (!this.persisted) return this.trade(refresh, current); // the Setup page's check: in memory, its own copy
+    const done = await withRenewLock(
+      this.dir,
+      async () => {
+        const theirs = this.newerOnDisk(current);
+        return theirs ? this.adopt(theirs, true) : this.trade(refresh, current);
+      },
+      (ms) => this.deps.sleep(ms),
+    );
+    if (done !== "busy") return done;
+    const theirs = this.newerOnDisk(current);
     if (theirs) return this.adopt(theirs, true);
+    this.deps.note("another run is still renewing the sign-in; signing in with Chrome instead");
+    return false;
+  }
+
+  /** One renew call (under the lock when the session is saved): see renew(). */
+  private async trade(refresh: RefreshConfig, current: Session): Promise<boolean> {
     if (refresh.from !== undefined && Object.keys(current.refresh ?? {}).length === 0) return false; // nothing kept to trade
     this.deps.note(`renewing the sign-in to ${this.site.origin} with its refresh token`);
     let renewed: Awaited<ReturnType<typeof refresh.renew>>;
@@ -317,7 +332,8 @@ export class Client {
           this.dropRefresh(current);
           return false;
         }
-        if (attempt >= this.deps.retryDelays.length) {
+        // Only a request that never left may go again: one that reached the site may have rotated the token.
+        if (!neverSent(e) || attempt >= this.deps.retryDelays.length) {
           this.deps.note(`renewing the sign-in failed (${name}); signing in with Chrome instead`);
           return false;
         }
@@ -327,7 +343,7 @@ export class Client {
     }
     if (!renewed?.headers) {
       // Refused: perhaps because another run spent the token meanwhile. Its session wins.
-      const newer = takeOver();
+      const newer = this.newerOnDisk(current);
       if (newer) return this.adopt(newer, true);
       this.dropRefresh(current);
       return false;
@@ -621,6 +637,14 @@ export class Client {
   private fail(op: Operation, breakType: BreakType, path: string, code: string, why: string, diff: DiffEntry[] = []): never {
     throw this.drift(op, breakType, path, code, why, diff);
   }
+}
+
+/** Error codes of a request that never reached the site (Bun's fetch, Node's): safe to send again. */
+const NEVER_SENT = new Set(["ECONNREFUSED", "ENOTFOUND", "EAI_AGAIN", "EHOSTUNREACH", "ENETUNREACH", "ConnectionRefused", "FailedToOpenSocket"]);
+
+function neverSent(e: unknown): boolean {
+  const code = (e as { code?: unknown })?.code ?? (e as { cause?: { code?: unknown } })?.cause?.code;
+  return typeof code === "string" && NEVER_SENT.has(code);
 }
 
 /** Ids in key order, so two sessions' ids compare equal whatever order postLogin returned them in. */

@@ -1,8 +1,9 @@
 // State lives in ~/.<plugin>/ for a skill named after its plugin, else ~/.<plugin>-<skill>/ (0700):
 // session.json (0600) and, for login skills, profile/ (the tool-owned Chrome user-data dir).
-// SITE_CLI_HOME overrides the dir (tests).
+// renew.lock exists only while a run renews the session (login.refresh).
+// SITE_CLI_HOME overrides the dir (tests, and the Deploy skill's separate sign-in for a server).
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { z } from "zod";
@@ -108,4 +109,42 @@ export function writePrivateJson(file: string, value: unknown): void {
   writeFileSync(tmp, JSON.stringify(value, null, 2) + "\n", { mode: 0o600 });
   chmodSync(tmp, 0o600);
   renameSync(tmp, file);
+}
+
+const RENEW_WAIT_MS = 15_000;
+/** A renew.lock older than this was left by a run that died; renewing never takes this long. */
+const RENEW_STALE_MS = 60_000;
+
+/**
+ * Runs `fn` holding `<dir>/renew.lock`, created exclusively, so one run at a time renews: a
+ * rotating refresh token works once, and two runs sending it at once can revoke its whole family.
+ * Waits up to 15 s for another run's lock, then answers "busy"; takes over a lock older than 60 s.
+ */
+export async function withRenewLock<T>(dir: string, fn: () => Promise<T>, sleep: (ms: number) => Promise<void>, now: () => number = Date.now): Promise<T | "busy"> {
+  ensureStateDir(dir);
+  const file = join(dir, "renew.lock");
+  const deadline = now() + RENEW_WAIT_MS;
+  for (;;) {
+    try {
+      closeSync(openSync(file, "wx", 0o600));
+      break;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException)?.code !== "EEXIST") throw e;
+      try {
+        if (now() - statSync(file).mtimeMs > RENEW_STALE_MS) {
+          rmSync(file, { force: true });
+          continue;
+        }
+      } catch {
+        continue; // released meanwhile
+      }
+      if (now() > deadline) return "busy";
+      await sleep(100);
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    rmSync(file, { force: true });
+  }
 }
