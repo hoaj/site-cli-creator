@@ -4,6 +4,8 @@ import { fail } from "./output";
 
 const COMMANDS_START = "<!-- commands:start -->";
 const COMMANDS_END = "<!-- commands:end -->";
+const NEVER_START = "<!-- never:start -->";
+const NEVER_END = "<!-- never:end -->";
 
 /** The modules regen imports: *.ts in a folder, tests and declarations left out, sorted by file name. */
 export function moduleFiles(dir: string): string[] {
@@ -153,6 +155,21 @@ export function replaceCommandsBlock(skillMd: string, table: string): string {
     fail(`SKILL.md needs ${COMMANDS_START} and ${COMMANDS_END} around the command table`);
   }
   return `${skillMd.slice(0, start + COMMANDS_START.length)}\n${table}\n${skillMd.slice(end)}`;
+}
+
+/**
+ * SKILL.md with site.never listed between its never markers (under ## When NOT to use), one bullet
+ * per rule; undefined when SKILL.md has no such markers (a plugin made before 0.16.0).
+ */
+export function replaceNeverBlock(skillMd: string, never: { request: string; why: string }[]): string | undefined {
+  const start = skillMd.indexOf(NEVER_START);
+  const end = skillMd.indexOf(NEVER_END);
+  if (start === -1 || end === -1 || end < start) return undefined;
+  const lines = never.map((n) => {
+    const why = n.why.trim().replace(/\s*\n\s*/g, " ");
+    return `- ${/[.!?]$/.test(why) ? why : `${why}.`} The CLI never sends \`${n.request}\`; the user does it on the site.`;
+  });
+  return `${skillMd.slice(0, start + NEVER_START.length)}\n${lines.map((l) => `${l}\n`).join("")}${skillMd.slice(end)}`;
 }
 
 export function cliPaths(skillDir: string) {

@@ -14,6 +14,7 @@ import { BUILTIN_FLAGS, commandHelp, flagDescription, flagSpecs, GLOBAL_FLAGS, h
 import { findChrome } from "./runtime/chrome";
 import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
+import { neverList, neverNext, NeverSent } from "./runtime/never";
 import { hashPassword, MIN_PASSWORD_LENGTH, remoteConfig, type RemoteConfig } from "./runtime/remote-config";
 import { selftest } from "./runtime/selftest";
 import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir, type Session } from "./runtime/session";
@@ -242,12 +243,13 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
   if (app.site.auth === "login") await client.ensureSession();
   const chosen = await client.resolveAccount(account);
   deps.note(`${command.name}: ${command.uses.map((o) => o.name).join(" → ") || "no Operations"}`);
-  const result = await command.run(args as never, {
+  // A refusal the command caught (a fallback) still ends it: the user does that step on the site.
+  const result = await client.withRefusals(() => command.run(args as never, {
     call: client.call,
     session: { get ids() { return client.peek()?.ids ?? {}; } },
     account: chosen,
     note: deps.note,
-  });
+  }));
   return result ?? null;
 }
 
@@ -257,7 +259,12 @@ function failed(e: unknown, site: Site, commandName: string, surface: Surface = 
   if (e instanceof Failure) return { output: errorEnvelope(e, site, surface), code: EXIT[e.kind] };
   const stack = e instanceof Error ? e.stack : undefined;
   const what = e instanceof ContractError ? e.message : `${errorName(e)} in ${bugFrame(stack)}`;
-  const bug = new Failure("bug", what, { fingerprint: bugKey(site, commandName, e), stack: redactStack(e) });
+  const bug = new Failure("bug", what, {
+    fingerprint: bugKey(site, commandName, e),
+    stack: redactStack(e),
+    // A Task that tried it: the user does it on the site. check's own refusal is a plain bug in the plugin.
+    ...(e instanceof NeverSent && commandName !== "check" && { next: neverNext(e.rule, site, surface) }),
+  });
   return { output: errorEnvelope(bug, site, surface), code: EXIT.bug };
 }
 
@@ -429,11 +436,13 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
       () => doctor(site, { env: deps.env, exec: app.exec, compiled: compiled() }))]),
   ];
 
+  const never = neverList(site);
   const instructions = [
     `These tools run Tasks on ${site.origin}${site.auth === "login" ? " as the signed-in user" : ""}; every result is JSON.`,
     `A tool with a confirm argument writes: call it without confirm first, show the user the dry run it returns, and call it again with confirm: true only after the user's explicit yes.`,
     `A failed call returns {"error": {kind, message, next}}: do what next says. On kind drift, stop and do not work around it.`,
     ...(options.remote ? [`When a tool fails with kind session, the Owner must give this server a new Session on its Setup page; do what next says.`] : []),
+    ...(never.length ? [`These tools never do the following; the user does it on the site themselves: ${never.map((n) => n.why.trim().replace(/[.!?]+$/, "")).join("; ")}.`] : []),
   ].join(" ");
   return { info: { name: site.skill === site.plugin ? site.plugin : `${site.plugin}-${site.skill}`, version: site.version, instructions }, tools };
 }
