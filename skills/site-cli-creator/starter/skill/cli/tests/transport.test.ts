@@ -220,6 +220,24 @@ describe.skipIf(skip)("transport browser", () => {
     expect(await run(["ok", "show"], a)).toEqual({ output: { id: "ok", total: 0 }, code: 0 });
   }, 60_000);
 
+  test("ctx.cookies() on a site Chrome cannot load is a network failure, not an empty jar the hook takes for a bug (#95, review)", async () => {
+    const gone = Bun.serve({ port: 0, fetch: () => new Response("") });
+    const origin = gone.url.origin;
+    gone.stop(true);
+    const a = app({
+      origin,
+      transport: "browser",
+      bootstrap: async (ctx) => {
+        const token = (await ctx.cookies()).csrf;
+        if (!token) throw new Error("no csrf cookie");
+        return { headers: { cookie: `csrf=${token}` } };
+      },
+    });
+    const r = await run(["ok", "show"], a);
+    expect(r.code).toBe(5);
+    expect((r.output as { error: { kind: string } }).error.kind).toBe("network");
+  }, 60_000);
+
   test("a front page that reloads itself once its script has run is waited for (review)", async () => {
     const mini = miniSite(
       () =>

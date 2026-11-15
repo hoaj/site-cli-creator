@@ -1012,6 +1012,15 @@ describe("bot block: network with `blocked`, never Drift, no sign-in spent on it
     expect(blockSignal(403, h(), `<div class="g-recaptcha"></div>`)).toBe("captcha");
     expect(blockSignal(403, h({ "x-datadome": "protected" }), `<script src="https://geo.captcha-delivery.com/c.js"></script>`)).toBe("datadome");
     expect(blockSignal(200, h(), "<title>Just a moment...</title>")).toBe("cloudflare");
+    // An API call is blocked with JSON by DataDome and PerimeterX (review 2).
+    expect(blockSignal(403, h(), { url: "https://geo.captcha-delivery.com/captcha/?initialCid=x" })).toBe("datadome");
+    expect(blockSignal(403, h(), { appId: "PXabc", blockScript: "/abc/captcha.js", jsClientSrc: "/abc/init.js" })).toBe("perimeterx");
+    expect(blockSignal(403, h(), { error: "forbidden" })).toBeUndefined();
+    expect(blockSignal(200, h(), { url: "https://geo.captcha-delivery.com/captcha/" })).toBeUndefined(); // data, not a refusal
+    // A sign-in page with a captcha stays a sign-in page, even as a 403 (review 2).
+    expect(blockSignal(403, h(), `<form action="/login"><input type="password" name="pw"><div class="g-recaptcha"></div></form>`)).toBeUndefined();
+    // Akamai writes its markers as HTML entities (review 2).
+    expect(blockSignal(403, h(), "<H1>Access Denied</H1> Reference&#32;&#35;18&#46;a1b2c3d4&#46;1700000000&#46;5e6f7a8b <P>https&#58;&#47;&#47;errors&#46;edgesuite&#46;net&#47;")).toBe("akamai");
   });
 
   test("a hook's own request that meets the wall is a block too, never a bug; renew keeps its token (review)", async () => {
@@ -1025,16 +1034,66 @@ describe("bot block: network with `blocked`, never Drift, no sign-in spent on it
     const { fetch } = fakeFetch(wall);
     const e = await failure(client(boot, makeDeps(fetch, home.dir).deps).call(getCustomer, { customerId: "C" }));
     expect([e.kind, e.details.blocked]).toEqual(["network", "cloudflare"]);
-    // renew's request
+    // renew's request: only the token endpoint is walled, so Chrome signs in instead (review 2);
+    // the refresh token, which the site never took, stays.
     saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
-    const renewing = loginSite({ login: { ...loginSite().login!, refresh: { renew: async (ctx) => {
+    const renewing = loginSite({ login: { ...loginSite().login!, postLogin: async () => ({ customerId: "C-1" }), refresh: { renew: async (ctx) => {
       const res = await ctx.fetch("https://auth.example.test/token");
       return res.ok ? { headers: { authorization: "Bearer new" } } : null;
     } } } });
-    const site401 = fakeFetch((r) => (r.url.includes("auth.example.test") ? wall() : json({}, 401)));
-    const r = await failure(client(renewing, makeDeps(site401.fetch, home.dir).deps).call(getCustomer, { customerId: "C-1" }));
-    expect([r.kind, r.details.blocked]).toEqual(["network", "cloudflare"]);
-    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r1" }); // the site never took it
+    const site401 = fakeFetch((r) =>
+      r.url.includes("auth.example.test") ? wall() : r.headers.authorization === "Bearer chrome" ? json({ data: { getCustomer: { id: "C-1", name: "n" } } }) : json({}, 401),
+    );
+    const d = makeDeps(site401.fetch, home.dir);
+    d.deps.login = async () => ({ headers: { authorization: "Bearer chrome" } });
+    const out: any = await client(renewing, d.deps).call(getCustomer, { customerId: "C-1" });
+    expect(out.data.getCustomer.id).toBe("C-1");
+    expect(d.notes.join("\n")).toContain("automated traffic");
+  });
+
+  test("a hook reads an answer as an Operation does: a JSON refusal is a block, an HTML page labelled JSON is read too (review 2)", async () => {
+    const boot = (answer: () => Response) => {
+      const site = makeSite({ bootstrap: async (ctx) => {
+        const res = await ctx.fetch(`${ctx.origin}/`);
+        if (!res.ok) throw new Error(`front page answered HTTP ${res.status}`);
+        return { headers: {} };
+      } });
+      return failure(client(site, makeDeps(fakeFetch(answer).fetch, home.dir).deps).call(getCustomer, { customerId: "C" }));
+    };
+    const dd = await boot(() => json({ url: "https://geo.captcha-delivery.com/captcha/?initialCid=x" }, 403));
+    expect([dd.kind, dd.details.blocked]).toEqual(["network", "datadome"]);
+    const mislabelled = await boot(() => new Response(challenge, { status: 403, headers: { "content-type": "application/json" } }));
+    expect([mislabelled.kind, mislabelled.details.blocked]).toEqual(["network", "cloudflare"]);
+  });
+
+  test("a block that comes as a redirect to a captcha host is a block, not offsite Drift (review 2)", async () => {
+    saved();
+    const { fetch } = fakeFetch(() => new Response(null, { status: 302, headers: { location: "https://geo.captcha-delivery.com/captcha/?initialCid=x" } }));
+    const { deps } = makeDeps(fetch, home.dir);
+    const e = await failure(client(loginSite(), deps).call(getCustomer, { customerId: "C-1" }));
+    expect([e.kind, e.details.blocked]).toEqual(["network", "datadome"]);
+  });
+
+  test("ctx.cookies(): the session's cookie whatever the header's case, and only cookies of the site's own hosts (review 2)", async () => {
+    saveSession(home.dir, { headers: { Cookie: "sid=s1" }, ids: {} });
+    const asked: (string | undefined)[] = [];
+    let seen: Record<string, string> = {};
+    const site = loginSite({
+      accounts: async (ctx) => {
+        await ctx.fetch("https://auth.example.test/x");
+        await ctx.fetch(`${ctx.origin}/y`);
+        seen = await ctx.cookies();
+        return [];
+      },
+    });
+    const { fetch } = fakeFetch((r) =>
+      new Response("{}", { headers: [["content-type", "application/json"], ["set-cookie", r.url.includes("auth.example.test") ? "csrf=other-host" : "csrf=ours"]] }),
+    );
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.cookies = async (cookie) => (asked.push(cookie), {});
+    await client(site, deps).listAccounts(true);
+    expect(asked).toEqual(["sid=s1"]);
+    expect(seen).toEqual({ csrf: "ours" });
   });
 
   test("a sessionProbe answered by a challenge is not a sign-out: no sign-in, the Operation reports the block", async () => {

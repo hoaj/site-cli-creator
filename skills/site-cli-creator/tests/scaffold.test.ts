@@ -83,8 +83,8 @@ beforeAll(() => {
   work = mkdtempSync(join(tmpdir(), "scaffold-test-"));
   fakeStarter = join(work, "starter");
   makeFakeStarter(fakeStarter);
-});
-afterAll(() => rmSync(work, { recursive: true, force: true }));
+}, HOOK_TIMEOUT_MS); // slow under the full suite's load, as the hooks below
+afterAll(() => rmSync(work, { recursive: true, force: true }), HOOK_TIMEOUT_MS);
 
 describe("new.ts", () => {
   test("writes manifests, generated.json, README, the Deploy skill and the Feedback skill", () => {
