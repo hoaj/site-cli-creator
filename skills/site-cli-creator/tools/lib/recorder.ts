@@ -594,6 +594,14 @@ export class CaptureRecorder {
       }
     }
     const claims = outcome.headers ? bearerClaims(header(outcome.headers, "authorization")) : undefined;
+    // Computed once for a body every call shares (a split batch has a value per call): outlining HTML in JSON is not cheap.
+    const ok = response !== undefined && response.status >= 200 && response.status < 300;
+    const embeddedOf = (json: unknown) => {
+      const embedded = json === undefined ? [] : htmlInJson(json);
+      const isData = embedded.length > 0 && htmlIsTheData(embedded, htmlCharsInJson(json), JSON.stringify(json).length);
+      return { embedded, isData };
+    };
+    const shared = response && !splitBodies ? embeddedOf(parsed?.ok ? parsed.value : undefined) : undefined;
     // Shapes are never changed once built, so every call of the request shares this one. A page's texts are never
     // values to redact paths by: a link's label is often a route's name ("Mine regninger" for /mine-regninger).
     const whole = response ? bodyShape(response.body, contentType, parsed) : undefined;
@@ -613,13 +621,12 @@ export class CaptureRecorder {
             : whole!;
         const cookies = setCookieNames(header(response.headers, "set-cookie"));
         const headers = headerShape(response.headers, (n) => n === "set-cookie");
-        const json = splitBodies && call.responseIndex !== undefined ? splitBodies[call.responseIndex] : parsed?.ok ? parsed.value : undefined;
-        const embedded = json === undefined ? [] : htmlInJson(json);
+        const { embedded, isData } =
+          shared ?? embeddedOf(splitBodies && call.responseIndex !== undefined ? splitBodies[call.responseIndex] : parsed?.ok ? parsed.value : undefined);
         // Marked only when a 2xx answer's HTML is the data: not an error or bot-wall page, not a SPA's empty
         // shell, not one rich-text field of a JSON API.
-        const ok = response.status >= 200 && response.status < 300;
         const pageData = body.kind === "html" && outlineHasData(body.outline);
-        if (ok && (pageData || (embedded.length > 0 && htmlIsTheData(embedded, htmlCharsInJson(json), JSON.stringify(json).length)))) shape.html = true;
+        if (ok && (pageData || isData)) shape.html = true;
         shape.responses = [
           {
             status: response.status,

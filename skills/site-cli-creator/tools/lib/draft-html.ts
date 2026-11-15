@@ -121,26 +121,25 @@ class Skeleton {
   }
 }
 
-/** `:nth-of-type(k)` for `node` among `siblings` with its tag, when it is not the only one. */
-function nthOfType(node: HtmlNode, siblings: HtmlNode[]): string {
-  const same = siblings.filter((s) => s.tag === node.tag);
-  return same.length > 1 ? `:nth-of-type(${same.indexOf(node) + 1})` : "";
-}
-
 /**
- * A selector for `path`'s last node, run from `scope` (whose children are `top`): the first of its own selector,
- * the nearest named ancestor's with it, the child path, and the child path with positions, that picks it on the
- * skeleton. With none, the last (it may still pick the right element on the real page).
+ * A selector for `path`'s last node, run from `scope`: the first of its own selector, the nearest named ancestor's
+ * with it, and the child path, that picks it on the skeleton. Never a position (`:nth-of-type`): the outline
+ * collapses repeated siblings, so it cannot know one. With none, the child path, with a TODO for the agent.
  */
-function verifiedSelector(path: HtmlNode[], top: HtmlNode[], sk: Skeleton, scope: HtmlNode | null, anchored = false): string {
+function verifiedSelector(path: HtmlNode[], sk: Skeleton, scope: HtmlNode | null, pool: HtmlNode[], anchored = false): string {
   const target = path.at(-1)!;
   const own = selectorOf(target);
   const named = [...path.slice(0, -1)].reverse().find((n) => !isPlain(n));
-  const positioned = path.map((n, i) => `${selectorOf(n)}${nthOfType(n, i === 0 ? top : (path[i - 1]!.children ?? []))}`).join(" > ");
+  const child = path.map(selectorOf).join(" > ");
   const withNamed = named ? [`${selectorOf(named)} ${own}`] : [];
+  // Set apart from other elements of its tag by the classes they have and it lacks (`span:not(.icon)`), or by having none.
+  const others = pool.filter((n) => n !== target && n.tag === target.tag);
+  const lacks = [...new Set(others.flatMap((n) => n.classes ?? []))].filter((c) => !(target.classes ?? []).includes(c) && /^-?[A-Za-z_][\w-]*$/.test(c));
+  const negated = [...(lacks.length ? [`${own}${lacks.map((c) => `:not(.${c})`).join("")}`] : []), ...(!target.classes?.length && others.some((n) => n.classes?.length) ? [`${own}:not([class])`] : [])];
   // A container that is a bare tag (`ul`) breaks as soon as the page gains an earlier one: anchor it to a named ancestor first.
-  const candidates = anchored && isPlain(target) ? [...withNamed, own, path.map(selectorOf).join(" > "), positioned] : [own, ...withNamed, path.map(selectorOf).join(" > "), positioned];
-  return candidates.find((css) => sk.picks(css, scope, target)) ?? positioned;
+  const candidates = anchored && isPlain(target) ? [...withNamed, own, child, ...negated] : [own, ...withNamed, ...negated, child];
+  const found = candidates.find((css) => sk.picks(css, scope, target));
+  return found ? JSON.stringify(found) : `${JSON.stringify(child)} /* TODO: an earlier element matches this too: make it specific */`;
 }
 
 function uniqueName(name: string, used: Set<string>): string {
@@ -160,9 +159,12 @@ function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean, sk: Skel
     }
   }
   const found = leaves(root);
+  const pool: HtmlNode[] = [];
+  const gather = (n: HtmlNode) => (n.children ?? []).forEach((c) => (pool.push(c), gather(c)));
+  gather(root);
   for (const { node, path } of found) {
     if (fields.length >= MAX_FIELDS) break;
-    const css = verifiedSelector(path, root.children ?? [], sk, scope);
+    const css = verifiedSelector(path, sk, scope, pool);
     const base = camel([node.classes?.[0] ?? (node.id !== ":id" ? node.id : undefined) ?? TAG_NAMES[node.tag] ?? node.tag].filter((x): x is string => !!x));
     if (node.json) {
       const type = node.type ? `[type=${JSON.stringify(node.type)}]` : "";
@@ -172,11 +174,11 @@ function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean, sk: Skel
     // A repeated element (tags, several dates) reads every match, so no value is lost.
     const all = node.many ? ", all: true" : "";
     const valueZod = node.many ? "z.array(z.string())" : "z.string().nullable()";
-    if (node.text) fields.push({ name: uniqueName(base, used), source: node.many ? `{ css: ${JSON.stringify(css)}${all} }` : JSON.stringify(css), zod: valueZod });
+    if (node.text) fields.push({ name: uniqueName(base, used), source: node.many ? `{ css: ${css}${all} }` : css, zod: valueZod });
     for (const a of node.attrs ?? []) {
       if (!VALUE_ATTRS.includes(a) && !a.startsWith("data-")) continue;
       const name = node.text || base === (TAG_NAMES[node.tag] ?? node.tag) ? `${base}${attrName(a)[0]!.toUpperCase()}${attrName(a).slice(1)}` : base;
-      fields.push({ name: uniqueName(name, used), source: `{ css: ${JSON.stringify(css)}, attr: ${JSON.stringify(a)}${all} }`, zod: node.many ? "z.array(z.string().nullable())" : valueZod });
+      fields.push({ name: uniqueName(name, used), source: `{ css: ${css}, attr: ${JSON.stringify(a)}${all} }`, zod: node.many ? "z.array(z.string().nullable())" : valueZod });
     }
   }
   return fields.slice(0, MAX_FIELDS);
@@ -201,15 +203,19 @@ export function draftHtml(outline: HtmlNode[], from?: string): string[] {
   if (list) {
     const parent = list.above.at(-1);
     // The container is the first element its selector matches on the page (a nav's ul comes first): verified.
-    const container = parent ? verifiedSelector(list.above, outline, sk, null, true) : undefined;
-    const each = parent ? verifiedSelector([list.item], parent.children ?? [], sk, parent) : selectorOf(list.item);
+    const everything: HtmlNode[] = [];
+    const gatherAll = (ns: HtmlNode[]) => ns.forEach((n) => (everything.push(n), gatherAll(n.children ?? [])));
+    gatherAll(outline);
+    const container = parent ? verifiedSelector(list.above, sk, null, everything, true) : undefined;
+    // `each` must match every item, not just the first: the item's own selector, never narrowed to one element.
+    const each = JSON.stringify(selectorOf(list.item));
     const listName = camel([parent?.classes?.[0] ?? (parent?.id !== ":id" ? parent?.id : undefined) ?? "items"].filter((x): x is string => !!x));
     const itemFields = fieldsOf(list.item, new Set(), true, sk, list.item);
     const name = uniqueName(listName === parent?.tag ? "items" : listName, used);
-    const inPart = container ? `, in: ${JSON.stringify(container)}` : "";
+    const inPart = container ? `, in: ${container}` : "";
     fieldsSource = [
       `      ${name}: {`,
-      `        each: ${JSON.stringify(each)}${inPart},`,
+      `        each: ${each}${inPart},`,
       "        fields: {",
       objectLines(itemFields, 5, "source"),
       "        },",
@@ -217,7 +223,7 @@ export function draftHtml(outline: HtmlNode[], from?: string): string[] {
     ].join("\n");
     responseSource = [`  response: z.object({`, `    ${name}: z.array(`, "      z.object({", objectLines(itemFields, 4, "zod"), "      }),", "    ),", "  }),"].join("\n");
     lines.push(`  // The page answers HTML: html.fields picks the values with CSS selectors (the outline is in the shape`);
-    lines.push(`  // file). Drafted: the repeated ${selectorOf(list.item)} as the list${container ? `, in its container ${container}, which must be on` : "; give it a container (`in`) that is on"}`);
+    lines.push(`  // file). Drafted: the repeated ${selectorOf(list.item)} as the list${container ? `, in its container ${JSON.parse(container.split(" /*")[0]!)}, which must be on` : "; give it a container (`in`) that is on"}`);
     lines.push(`  // the page even when the list is empty, so a changed layout is Drift instead of an empty list.`);
   } else {
     const fields = fieldsOf({ tag: "#root", children: outline }, used, false, sk, null);

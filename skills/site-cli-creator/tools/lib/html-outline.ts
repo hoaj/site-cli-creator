@@ -97,16 +97,29 @@ function unwrap(nodes: HtmlNode[]): HtmlNode[] {
   return nodes.flatMap((n) => (n.tag === "html" || n.tag === "body") && !n.id && !n.classes ? unwrap(n.children ?? []) : [n]);
 }
 
-/** A record number inside a name is data: `post-123` → `post-:id` (one digit stays: `col-md-6`). */
-function withoutNumbers(name: string): string {
+/** Class and id prefixes a CMS puts before a value: WordPress's `category-jazz`, `tag-<slug>`, `author-<name>`. */
+const VALUE_PREFIX = /^(category|tag|author|term|postid|post_tag|cat|taxonomy|user|member|profile)[-_](?=.)/i;
+
+/**
+ * A name with data in it keeps only its pattern: a record number (`post-123` → `post-:id`; one digit stays,
+ * `col-md-6`), or the value after a CMS prefix (`author-jensen` → `author-:id`).
+ */
+function withoutValues(name: string): string {
+  const prefix = VALUE_PREFIX.exec(name);
+  if (prefix) return `${prefix[0]}:id`;
   return name.replace(/\d{2,}/g, ":id");
+}
+
+/** An id that is a slug of words (a heading's anchor, `mit-foredrag-om-jazz`) is the page's text, not site code. */
+function isTextId(id: string): boolean {
+  return id.split(/[-_]/).filter(Boolean).length >= 4;
 }
 
 function describe(el: Element): Omit<HtmlNode, "tag"> {
   const out: Omit<HtmlNode, "tag"> = {};
   const attribs = el.attribs ?? {};
-  if (attribs.id !== undefined && attribs.id !== "") out.id = isIdLike(attribs.id) ? ":id" : withoutNumbers(attribs.id);
-  const classes = [...new Set((attribs.class ?? "").split(/\s+/).filter((c) => c && !isIdLike(c)).map(withoutNumbers))].sort();
+  if (attribs.id !== undefined && attribs.id !== "") out.id = isIdLike(attribs.id) || isTextId(attribs.id) ? ":id" : withoutValues(attribs.id);
+  const classes = [...new Set((attribs.class ?? "").split(/\s+/).filter((c) => c && !isIdLike(c)).map(withoutValues))].sort();
   if (classes.length) out.classes = classes;
   const attrs = Object.keys(attribs)
     .map((a) => a.toLowerCase())
@@ -130,9 +143,13 @@ function inlineJson(el: Element): HtmlNode | null {
   return node;
 }
 
-/** What makes two siblings one list: tag, classes and type. Ids differ per item (`ev-101`, `ev-102`). */
+/**
+ * What makes two siblings one list: tag, classes, type, and a stable id (`#header` and `#content` are two
+ * sections). An id with data in it (`ev-:id`) differs per item, so it does not count.
+ */
 function signature(n: HtmlNode): string {
-  return [n.tag, (n.classes ?? []).join("."), n.type ?? ""].join("|");
+  const id = n.id && !n.id.includes(":id") ? n.id : "";
+  return [n.tag, (n.classes ?? []).join("."), n.type ?? "", id].join("|");
 }
 
 /** Siblings with the same tag and classes become one node marked `many`, their outlines joined. */

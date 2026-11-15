@@ -86,7 +86,8 @@ export type ClientOptions = {
 };
 
 export type Request = { method: string; url: string; headers: Record<string, string>; body?: string };
-type Response_ = { status: number; body: unknown; loginRedirect?: boolean; offsite?: boolean };
+/** `text` and `contentType`: the raw answer, for an HTML Operation (an HTML text that happens to parse as JSON stays HTML). */
+type Response_ = { status: number; body: unknown; text?: string; contentType?: string; loginRedirect?: boolean; offsite?: boolean };
 
 /** What a browser asks for when it loads a page. */
 const HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
@@ -150,13 +151,13 @@ function formBody(name: string, value: unknown): string {
   return form.toString();
 }
 
-async function readBody(r: Response): Promise<unknown> {
+async function readBody(r: Response): Promise<{ body: unknown; text: string }> {
   const text = await r.text();
-  if (!text.trim()) return undefined;
+  if (!text.trim()) return { body: undefined, text };
   try {
-    return JSON.parse(text);
+    return { body: JSON.parse(text), text };
   } catch {
-    return text;
+    return { body: text, text };
   }
 }
 
@@ -632,7 +633,10 @@ export class Client {
     for (let hop = 0; hop < 6; hop++) {
       const r = await this.deps.fetch(url, { method, headers: req.headers, body, redirect: "manual" });
       const location = r.headers.get("location");
-      if (r.status < 300 || r.status >= 400 || !location) return { status: r.status, body: await readBody(r) };
+      if (r.status < 300 || r.status >= 400 || !location) {
+        const { body, text } = await readBody(r);
+        return { status: r.status, body, text, contentType: r.headers.get("content-type") ?? undefined };
+      }
       const next = new URL(location, url);
       if (this.site.auth === "login" && isLoginHost(this.site, next.toString())) return { status: r.status, body: undefined, loginRedirect: true };
       if (next.origin !== new URL(url).origin) return { status: r.status, body: undefined, offsite: true };
@@ -665,7 +669,7 @@ export class Client {
     }
     if (status === 400 || status === 422) return this.fail(op, "input-rejected", "", String(status), `the site rejected variables that passed the Contract (HTTP ${status})`);
     if (status < 200 || status >= 300) return this.fail(op, "http", "", String(status), `unexpected HTTP ${status}`);
-    const picked = op.html ? this.pickHtml(op, op.html, body) : body;
+    const picked = op.html ? this.pickHtml(op, op.html, res) : body;
     const parsed = op.response.safeParse(picked);
     if (parsed.success) return parsed.data;
     const diff = zodDiff(parsed.error.issues, picked, op.response);
@@ -674,8 +678,12 @@ export class Client {
   }
 
   /** The values html.fields picks from the page (or from the HTML html.from finds in a JSON answer); a changed layout is Drift. */
-  private pickHtml(op: Operation, html: HtmlContract, body: unknown): Record<string, unknown> {
+  private pickHtml(op: Operation, html: HtmlContract, res: Response_): Record<string, unknown> {
+    const { body } = res;
     let page: unknown = body;
+    if (!html.from && res.text !== undefined && !/json/i.test(res.contentType ?? "") && (res.contentType !== undefined || typeof body === "string")) {
+      page = res.text; // an answer that is not JSON by its content-type is read as the text it is (`3` is a fragment, not a number)
+    }
     if (html.from) {
       try {
         page = html.from(body);

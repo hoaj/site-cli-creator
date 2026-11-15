@@ -41,6 +41,8 @@ const ENTRIES: Entry[] = [
   { operation: "createQuote", kind: "graphql", effect: "write", host: "www.example.dk", file: "createQuote.shape.json", pages: ["/"], aborted: 1 },
   { operation: "GET /api/bills", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-api-bills.shape.json", pages: ["/bills"] },
   { operation: "GET /bills", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-bills.shape.json", pages: ["/bills"], navigation: true, html: true },
+  { operation: "GET /views/ajax", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-views-ajax.shape.json", pages: ["/events"], html: true },
+  { operation: "GET /events", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-events.shape.json", pages: ["/events"], navigation: true, html: true },
   { operation: "GET /api/bills/:id", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-api-bills-id.shape.json", pages: ["/bills/:id"] },
   { operation: "GET /api/status", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-api-status.shape.json", pages: [] },
   { operation: "GET /api/status", kind: "rest", effect: "read", host: "api.example.dk", file: "api.example.dk-GET-api-status.shape.json", pages: [] },
@@ -138,10 +140,16 @@ describe("split-capture.ts", () => {
     const r = split(["--task", "bill-page", "--op", "GET /bills"]);
     expect(r.code, JSON.stringify(r.out)).toBe(0);
     expect(r.out.warnings).toEqual([
-      "GET /bills is a page load, and its page also called JSON reads (getCustomer, GET /api/bills): keep those instead when they carry the Task's data, and drop the page load (reference/add-task.md step 3).",
+      "GET /bills is a page load, and its page also called reads (getCustomer, GET /api/bills): keep those instead when they carry the Task's data (JSON, or HTML inside JSON), and drop the page load (reference/add-task.md step 3).",
     ]);
     // Taken together with the JSON call it would replace, it still warns; alone on an HTML-only page it does not.
     expect(split(["--task", "bill-page-2", "--op", "GET /bills", "--op", "GET /api/bills"]).out.warnings).toBeDefined();
+  });
+
+  test("the warning names a call whose JSON carries the HTML too (Drupal's /views/ajax) (review 3)", () => {
+    const r = split(["--task", "event-page", "--op", "GET /events"]);
+    expect(r.code, JSON.stringify(r.out)).toBe(0);
+    expect(r.out.warnings?.join("")).toContain("GET /views/ajax");
   });
 
   test("refuses to replace an existing Capture of the Task", () => {
