@@ -38,6 +38,23 @@ export type HtmlContract = {
 
 export type Extracted = { ok: true; value: Record<string, unknown> } | { ok: false; path: string; code: "no_match" | "invalid_json" };
 
+/** The lists in `fields` with no container (`in`), as paths (`events`, `events[].tags`): regen.ts warns about each. */
+export function listsWithoutContainer(fields: HtmlFields, prefix = ""): string[] {
+  const out: string[] = [];
+  for (const [name, field] of Object.entries(fields)) {
+    if (typeof field !== "object" || !("each" in field)) continue;
+    const path = prefix ? `${prefix}.${name}` : name;
+    if (field.in === undefined) out.push(path);
+    out.push(...listsWithoutContainer(field.fields, `${path}[]`));
+  }
+  return out;
+}
+
+/** regen.ts's warning for a list `listsWithoutContainer` found. */
+export function noContainerWarning(operation: string, path: string): string {
+  return `${operation}: the html list ${path} has no container (in), so a changed layout reads as an empty list instead of Drift. Set in to the element that holds the list, which the page has even when the list is empty.`;
+}
+
 type Doc = ReturnType<typeof parseDocument>;
 type Node = Doc["children"][number];
 type Element = Parameters<typeof DomUtils.getAttributeValue>[0];
