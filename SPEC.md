@@ -174,7 +174,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 - **`auth: "none"`:** there is no `login` command, no `profile/`, no post-login step, and exit 4 (session) never happens. Commands use plain `fetch`.
   - **Optional `bootstrap`** (`site.ts`), written by the agent from the Capture, fetches what a public API still needs, such as a front-page cookie or a CSRF token, with plain `fetch`. It is cached in `session.json` like a session and reruns silently when it expires.
   - **On a 401 or 403,** the CLI reruns `bootstrap` and retries once. If it still fails, it's Drift: the site now wants a login, a new token, or blocks the CLI. A 429 is `network`.
-  - A site behind a bot wall needs `transport: "browser"` (below). Captchas stay out of scope.
+  - A site behind a bot wall needs `transport: "browser"` (below). Captchas stay out of scope. A wall the CLI recognises is reported as a bot block (exit 5 with `blocked`, §10), not as Drift.
   - `check --writes` on an `auth: "none"` skill runs `trigger(page)` in a fresh temporary profile, deleted afterwards ([Gaps found in the final spec read](https://github.com/hoaj/site-cli-creator/issues/31)).
 - **`transport: "browser"`** (`site.ts`, either `auth`), decided in [send a CLI skill's requests from inside Chrome](https://github.com/hoaj/site-cli-creator/issues/93). It is for a site that refuses plain `fetch` but answers a browser: a bot wall a real Chrome passes on its own (a challenge its scripts solve, cookies they set), or a check of Chrome's own TLS and headers.
   - **How requests go:** every Operation, and every `fetch` of a site hook, is sent from a tab of the user's Chrome open on the origin, as the page's own `fetch` with the page's cookies and no HTTP cache.
@@ -218,7 +218,7 @@ The envelope is everything the Feedback skill needs, and the CLI is responsible 
 | 2 | input | fix the flags (see `help`). If the error lists accounts, ask the user which one and pass `--account <id>` from then on |
 | 3 | drift | stop, offer to file it through the Feedback skill with this envelope (filed only on a yes), and don't work around it with raw calls |
 | 4 | session | run `login` (the user signs in to Chrome), then rerun. Never happens for `auth: "none"` |
-| 5 | network | tell the user the site isn't responding, and stop |
+| 5 | network | tell the user the site isn't responding, and stop. With `blocked` (a bot block, §10): tell the user the site refused the request as automated traffic and stop, without retrying even to find out; ask the user whether it happens every time, and if so offer a feature request through the Feedback skill (filed only on a yes) |
 
 **Writes:** decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cli-creator/issues/11). A write command without `--confirm` validates its input, resolves the chain, prints `{"dryRun": true, "would": {...}}` and exits 0. SKILL.md tells the agent to show the user the dry run and get an explicit yes before rerunning with `--confirm`.
 
@@ -304,6 +304,11 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
   - the server rejecting input that passed the variables schema.
 - **session:** a 401, a 403, a redirect to login, or a session probe that does not answer 2xx (handled as in §7). Only for `auth: "login"`.
 - **network:** 5xx responses, 429 and transport errors, retried 1–2 times.
+- **network, `blocked`:** a bot protection refused the request as automated traffic. Decided in [report a bot block as its own failure, not as Drift](https://github.com/hoaj/site-cli-creator/issues/95).
+  - **Signals:** a `cf-mitigated` header (Cloudflare), an `x-datadome` header on a refusal (DataDome), or, in an answer that is not JSON, a known challenge or block page (Cloudflare's "Just a moment…", DataDome's captcha host, PerimeterX, Imperva, Akamai, a reCAPTCHA or hCaptcha). Any status counts, since a challenge can come as 200. Only the vendor's name is kept: the envelope's `blocked` field says which, and nothing the site sent leaves the check.
+  - **Behaviour:** it is checked before anything else, so it is never Drift, never retried, and no sign-in, `bootstrap` rerun or renewal is spent on it. A `sessionProbe` answered by a block is not a sign-out.
+  - **What the agent does:** exit 5 like other network failures, but its `next` says the site refused the request as automated traffic: tell the user, stop, and work around nothing. If it keeps happening, the plugin cannot reach the site this way, and the agent offers a feature request ("the site blocks the CLI") through the Feedback skill; the maintainer then looks at `transport: "browser"` (§7).
+  - **Unrecognised walls:** a wall with none of these signals is still an `auth` or `zod` Drift, which `fix` traces to `transport: "browser"` (§7).
 - **input:** fails the variables or flag schema, so no call is made.
 - **bug:** anything else thrown.
 
@@ -317,7 +322,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 - **Nothing runs `check` automatically.** Users run it on demand, to answer "is the site broken or is it me?". The generator runs it, with `--writes`, in `add-task` and `fix`. A Task command validates only the Operations it calls. After Drift, nobody sweeps the other Operations: `fix` runs the full `check` anyway. The maintainer schedules no proactive runs in v1, so users surface Drift. CI doesn't run `check`: login skills need a real account, and for `auth: "none"` skills the same no-automatic-runs rule keeps v1 simple.
 
 **The Feedback skill** (`skills/<plugin>-feedback/`, one per plugin, covering every CLI skill in it):
-- **When:** exit 3 (Drift), exit 1 (bug), a Task the plugin can't do (a feature request for `add-task`), or the user saying "report this". Never for session, network or input failures.
+- **When:** exit 3 (Drift), exit 1 (bug), a Task the plugin can't do (a feature request for `add-task`), a bot block that keeps happening (exit 5 with `blocked`: a feature request, "the site blocks the CLI"), or the user saying "report this". Never for other session, network or input failures.
 - **Input:** the error envelope the CLI just printed (§8). The skill never reads the state dir and never sees response values.
 - **Always asks first, Drift included.** It drafts the issue, shows it to the user and files it only on a yes, using the user's own `gh`.
 - **Dedup**, as SKILL.md steps:

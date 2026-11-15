@@ -25,7 +25,8 @@ The fixture's `__ORIGIN__` and other `__TOKENS__` are filled in when it is copie
 - `inputFailure(message)` ends the command with exit 2 (input). Use it when a value the user gave does not exist; never throw your own errors for that (anything else thrown is a bug, exit 1).
 - `trigger(page)` starts on `about:blank` in a fresh page: navigate first (`await page.goto("/")`). Relative URLs resolve against the site's origin.
 - In `site.ts` hooks, `ctx.fetch` is plain `fetch`: it adds no headers and keeps no cookie jar. Pass `ctx.headers` (the captured `authorization` and `cookie`) yourself.
-- With `transport: "browser"`, `ctx.fetch` is the Chrome tab the Operations use, so a hook needs no workaround for a bot wall. It still reads `Set-Cookie` and follows redirects as `fetch` does, but it takes text or `URLSearchParams` bodies only, and a call to another host must pass that host's CORS rules. `ctx.decodeJwt(token)` takes the token with or without `Bearer `.
+- With `transport: "browser"`, `ctx.fetch` is the Chrome tab the Operations use, so a hook needs no workaround for a bot wall. It follows redirects as `fetch` does, but it takes text or `URLSearchParams` bodies only, and a call to another host must pass that host's CORS rules. `ctx.decodeJwt(token)` takes the token with or without `Bearer `.
+- **Read a cookie the site sets with `ctx.cookies()`**, never from `Set-Cookie`. It holds the cookies `ctx.fetch`'s answers set, and with `transport: "browser"` everything Chrome holds for the origin. That matters there: the tab loads the front page before the hook runs, so a site that sets a cookie only when the browser lacks it sends no `Set-Cookie` to the hook.
 - There is no cookie jar anywhere: what a call needs (a cookie, a CSRF header) is what `bootstrap` returns in `headers`, or what `login` captured.
 - Host names in `login.hosts` (and `capture.ts --login-host`) are host names without scheme or port: `login.example.com`.
 
@@ -168,7 +169,7 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
 | `accounts(ctx)` | one login holds several accounts | `[{ id, label }]`; with more than one, commands need `--account` |
 | `readOnlyRequests` | the pages send non-GET requests that change no data (token refresh, post-login, analytics the page waits for) | a list of URL path substrings or RegExps (a RegExp is tested against the whole URL) |
 
-`ctx` is `{ fetch, origin, headers, ids, decodeJwt, call }`: `headers` holds the captured `authorization` and `cookie`, `ids` what `postLogin` returned, and `call` performs an Operation like a command does.
+`ctx` is `{ fetch, cookies, origin, headers, ids, refresh, decodeJwt, call }`: `headers` holds the captured `authorization` and `cookie`, `ids` what `postLogin` returned, `cookies()` the cookies the site set (below), `refresh` what `login.refresh.keep` kept, and `call` performs an Operation like a command does.
 
 - `startUrl`: the page that leads into the site's login. `hosts`: every host the login flow passes through (host names, no port); a redirect to one means logged out.
 - `tokenRequest`: a substring or RegExp of a request with an `authorization` header that **every** load of the start page sends, even when already signed in: frontends often cache their token, so a token or post-login call seen in the first Capture may never come again. Compare two Captures of the same page and pick one that is in both (usually the API or GraphQL endpoint). For cookie-only sites, a path that only answers 2xx when logged in.
@@ -208,9 +209,9 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
   },
   ```
 - `postLogin` returns ids and nothing else. Which JWT claims it needs is in the Capture: `request.bearerClaims` in a shape file lists the bearer's claim names and types (never values; a claim whose name is itself a value, such as an email, shows as `:id`). A post-login response often carries names, national ids, addresses, emails and phone numbers: parse the one field you need with Zod and drop the rest.
-- `bootstrap` uses plain `fetch` only. Which cookie it needs is in the Capture: `responses[].setCookies` names the cookies a response set (the front page, usually), and the API shapes list the request headers that carry it back (`cookie`, `x-csrf-token`). A site that needs a real browser or a solved challenge to answer is behind a bot wall: see `transport` below.
+- `bootstrap` calls the site with `ctx.fetch` and reads the cookie it needs with `ctx.cookies()` (the example below), which works with either transport. Which cookie it needs is in the Capture: `responses[].setCookies` names the cookies a response set (the front page, usually), and the API shapes list the request headers that carry it back (`cookie`, `x-csrf-token`). A site that needs a real browser or a solved challenge to answer is behind a bot wall: see `transport` below.
 - `transport: "browser"`: leave it out unless the site refuses plain `fetch` where Chrome gets through. It sends every request from a Chrome tab open on the origin, with Chrome's own TLS, headers and cookies (also the ones its scripts set). Contracts, `check` and Drift work as before. The cost is that Chrome starts on every run (seconds), and remote mode then needs Chrome in its image.
-  - **When:** a call answers in the Capture but, sent by the CLI, gets a 403 (exit 3, `auth` Fingerprint) or an HTML page where the Contract expects JSON (exit 3, `zod` Fingerprint with an empty path). The same `curl` as in [add-skill.md](add-skill.md#4-fill-in-sitets) step 4 shows it: a 403, or an HTML challenge page ("checking your browser", "just a moment").
+  - **When:** a call answers in the Capture but, sent by the CLI, is refused as automated traffic. The CLI names a wall it recognises: exit 5 with `blocked` in the envelope (`"cloudflare"`, `"datadome"` …). A wall it does not recognise still shows as a 403 (exit 3, `auth` Fingerprint) or an HTML page where the Contract expects JSON (exit 3, `zod` Fingerprint with an empty path). The same `curl` as in [add-skill.md](add-skill.md#4-fill-in-sitets) step 4 shows either: a 403, or an HTML challenge page ("checking your browser", "just a moment").
   - **Then:** set `transport: "browser"` and run `check` again; it must exit 0.
   - **Still refused:** add `browserWindow: true`, for a site that refuses headless Chrome (a window then opens on every run).
   - **Still refused after that:** a captcha, or a request the page signs one by one, is out of scope. Tell the user.
@@ -223,7 +224,7 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
 bootstrap: async (ctx) => {
   const res = await ctx.fetch(`${ctx.origin}/`, { redirect: "manual" });
   if (!res.ok) throw new Error(`front page answered HTTP ${res.status}`);
-  const token = res.headers.getSetCookie().map((c) => c.split(";")[0]!).find((c) => c.startsWith("csrf_token="))?.slice("csrf_token=".length);
+  const token = (await ctx.cookies()).csrf_token; // also under transport "browser", whose tab may have taken it
   if (!token) throw new Error("front page set no csrf_token cookie");
   return { headers: { cookie: `csrf_token=${token}`, "x-csrf-token": decodeURIComponent(token) } };
 },

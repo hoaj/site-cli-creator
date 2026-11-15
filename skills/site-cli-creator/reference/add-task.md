@@ -12,6 +12,8 @@ When the user can't name the Tasks yet, or wants several read Tasks from one wal
 
 **A plugin in a shared repo** (its `generated.json` has a `pluginDir` other than `.`): find its feature requests with `gh issue list --repo <owner/name> --state open --label feature --label <plugin>`, and run every `cd <plugin>` in `plugins/<plugin>`.
 
+**"The site blocks the CLI"** (a feature request filed after exit 5 with `blocked` in the envelope) asks for no new Task: the site refuses the CLI's requests as automated traffic. Reproduce it with `SITE_CLI_NONINTERACTIVE=1 bun src/main.ts check` (the same exit 5 and `blocked`), set `transport: "browser"` ([contracts.md](contracts.md#sitets)), run `check` again until it exits 0, then bump and open the PR with `Fixes #<n>` as in step 6. Still blocked: the wall is out of scope; close the issue saying so.
+
 If the issue asks for a Task the maintainer's account cannot perform (a product they lack, a role they don't hold), there can be no Capture and no Contract. Close the issue:
 
 ```sh

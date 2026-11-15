@@ -885,10 +885,14 @@ export default defineCommand({
       expect(r.stdout).not.toContain(work);
     }, 600_000);
 
-    test("bot-wall: plain fetch is Drift; rebuilt with transport browser, the same command answers from a Chrome tab (#93)", async () => {
+    test("bot-wall: plain fetch is a bot block (exit 5, #95); rebuilt with transport browser, the same command answers from a Chrome tab (#93)", async () => {
+      // Reported as a bot block (#95): network with `blocked`, no Fingerprint, no sign-in spent on it.
       const refused = await withDrift("bot-wall", () => cli(["subscription", "show"]));
-      expect(refused.code, refused.stderr).toBe(3);
-      expect(refused.out.error.fingerprint).toBe(`${prefix}getAccount:auth::403`);
+      expect(refused.code, refused.stderr).toBe(5);
+      expect(refused.out.error).toMatchObject({ kind: "network", blocked: "cloudflare" });
+      expect(refused.out.error.fingerprint).toBeUndefined();
+      expect(refused.out.error.next).toContain(`${PLUGIN}-feedback`);
+      expect(refused.stderr).not.toContain("signing in again");
       expect(leaks(refused.stdout)).toEqual([]);
 
       const siteFile = join(cliDir, "src", "site.ts");
@@ -906,6 +910,9 @@ export default defineCommand({
 
       const plain = await cli(["subscription", "show"]);
       expect(plain.code, plain.stderr).toBe(0);
+      // auth none: no saved session, so bootstrap runs in the tab, whose page load already took the
+      // CSRF cookie: ctx.cookies() must still find it (#95, cold read).
+      if (auth === "none") rmSync(join(home, "session.json"), { force: true });
       const walled = await withDrift("bot-wall", () => cli(["subscription", "show"], { bin: browserBinary }));
       expect(walled.code, walled.stderr).toBe(0);
       expect(walled.out).toEqual(plain.out);

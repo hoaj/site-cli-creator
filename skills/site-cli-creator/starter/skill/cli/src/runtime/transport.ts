@@ -10,7 +10,8 @@ import { Failure } from "./envelope";
 import { closeContext, launchInMemory } from "./login";
 import { effectiveOrigin, isTest, type Env, type Fetch, type Site } from "./site";
 
-export type BrowserTransport = { fetch: Fetch; close(): Promise<void> };
+/** `cookies()`: what Chrome holds for the origin, by name, the tab opened first (SiteCtx.cookies). */
+export type BrowserTransport = { fetch: Fetch; cookies(): Promise<Record<string, string>>; close(): Promise<void> };
 
 const PAGE_TIMEOUT_MS = 30_000;
 /** How long the front page may keep loading after `load` (a challenge that reloads, late scripts). */
@@ -143,7 +144,20 @@ export function browserTransport(site: Site, options: { env: Env; note(message: 
     }
   };
 
-  return { fetch, close };
+  const cookies = async (): Promise<Record<string, string>> => {
+    try {
+      opening ??= open(undefined);
+      await opening;
+    } catch (e) {
+      await close();
+      if (e instanceof Failure) throw e;
+      return {};
+    }
+    const held = context ? await context.cookies(`${origin}/`).catch(() => []) : [];
+    return Object.fromEntries(held.map((c) => [c.name, c.value]));
+  };
+
+  return { fetch, cookies, close };
 }
 
 /** A body the page can send: text, or a form (URLSearchParams, typed as fetch would). */
