@@ -38,23 +38,35 @@ const SETTLE_MS = 5_000;
 /** The folder under captures/ an explore Capture goes to; never a Task's slug. */
 const EXPLORE = "explore";
 
-type IndexEntry = { operation: string; loginFlow?: true; navigation?: true; serverAction?: true; rsc?: true; pages?: string[] };
+type IndexEntry = { operation: string; loginFlow?: true; navigation?: true; serverAction?: true; rsc?: true; html?: true; pages?: string[] };
+
+type PageSummary = { path: string; document?: string; operations: string[] };
 
 /**
- * The pages of an explore Capture in the order their first call was made, each with the calls that
- * could be a Task's Operation (no page loads, sign-in steps, server actions or RSC streams).
+ * The pages of an explore Capture in the order they were first seen, each with the calls that could be
+ * a Task's Operation (no sign-in steps, server actions or RSC streams). A page's own load is its
+ * `document` when it answered HTML: an HTML Operation when the page itself carries the data (a site
+ * with no JSON calls), else page chrome.
  */
-function pageSummary(entries: IndexEntry[]): { path: string; operations: string[] }[] {
-  const pages = new Map<string, string[]>();
+function pageSummary(entries: IndexEntry[]): PageSummary[] {
+  const pages = new Map<string, PageSummary>();
+  const page = (path: string) => pages.get(path) ?? pages.set(path, { path, operations: [] }).get(path)!;
   for (const e of entries) {
-    if (e.navigation || e.loginFlow || e.serverAction || e.rsc) continue;
-    for (const page of e.pages ?? []) {
-      const ops = pages.get(page) ?? [];
+    if (e.loginFlow || e.serverAction || e.rsc) continue;
+    if (e.navigation) {
+      if (!e.html) continue;
+      for (const path of e.pages ?? []) {
+        const p = page(path);
+        p.document ??= e.operation;
+      }
+      continue;
+    }
+    for (const path of e.pages ?? []) {
+      const ops = page(path).operations;
       if (!ops.includes(e.operation)) ops.push(e.operation);
-      pages.set(page, ops);
     }
   }
-  return [...pages].map(([path, operations]) => ({ path, operations }));
+  return [...pages.values()].map(({ path, document, operations }) => ({ path, ...(document ? { document } : {}), operations }));
 }
 
 type SiteHints = { origin?: string; loginHosts: string[] };

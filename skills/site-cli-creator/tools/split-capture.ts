@@ -27,6 +27,7 @@ type Entry = {
   effectUnknown?: true;
   loginFlow?: true;
   navigation?: true;
+  html?: true;
   serverAction?: true;
   rsc?: true;
 };
@@ -65,7 +66,8 @@ function choose(entries: Entry[], op: string): Entry {
 function refusal(e: Entry, task: string): string | undefined {
   const op = e.operation;
   if (e.loginFlow) return `${op} is a sign-in step (loginFlow): it belongs in site.ts, never in a Task's Capture`;
-  if (e.navigation) return `${op} is a page load (navigation), not an Operation: the Task's start page is --start-path`;
+  // A page load that answered HTML is an HTML Operation when the page itself carries the data (#102).
+  if (e.navigation && !e.html) return `${op} is a page load (navigation) that answered no HTML, not an Operation: the Task's start page is --start-path`;
   if (e.serverAction || e.rsc) return `${op} is a Next.js ${e.serverAction ? "server action" : "RSC stream"}: never an Operation (reference/add-task.md, Next.js sites)`;
   if (e.aborted >= e.seen) {
     if (e.effect === "write" && !e.effectUnknown) return `${op} was aborted (a write): capture its Task with capture.ts --task ${task} --write`;

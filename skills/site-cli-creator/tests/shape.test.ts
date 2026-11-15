@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { describeQuery, graphqlFromBody, graphqlFromSearch, isGraphqlPath, NUMBERS_REDACTED, redactQuery } from "../tools/lib/graphql";
 import { bearerClaims, CaptureRecorder, isSignInStep, setCookieNames, shapeFileNames, type RequestInfo } from "../tools/lib/recorder";
+import { htmlInJson, htmlOutline } from "../tools/lib/html-outline";
 import { bodyShape, isIdLike, isValueLikeKey, mergeShapes, redactPath, shapeOf } from "../tools/lib/shape";
 
 // Values that must never show up in anything the Capture produces.
@@ -153,7 +154,7 @@ describe("bodyShape", () => {
       kind: "form",
       shape: { type: "object", fields: { email: { type: "string" }, password: { type: "string" } } },
     });
-    expect(bodyShape(`<p>${SECRETS.name}</p>`, "text/html")).toEqual({ kind: "html" });
+    expect(bodyShape(`<p>${SECRETS.name}</p>`, "text/html")).toEqual({ kind: "html", outline: [{ tag: "p", text: true }] });
     expect(bodyShape(SECRETS.email, "text/plain")).toEqual({ kind: "text" });
     expect(bodyShape(Buffer.from([0, 1, 2, 3]), "application/octet-stream")).toEqual({ kind: "binary" });
     expect(bodyShape("--x\r\n", "multipart/form-data; boundary=x")).toEqual({ kind: "multipart" });
@@ -616,5 +617,97 @@ describe("Capture safety", () => {
     const r = new CaptureRecorder({ origin, loginHosts: ["login.example.com"] });
     expect(r.plan(req({ url: "https://login.example.com/u/login", resourceType: "document" }))!.calls[0]!.shape.loginFlow).toBe(true);
     expect(r.plan(req({ url: `${origin}/account`, resourceType: "document" }))!.calls[0]!.shape.loginFlow).toBeUndefined();
+  });
+});
+
+describe("HTML outlines (#102)", () => {
+  // A server-rendered list as a CGI script writes it (no </li>), with the planted values in text,
+  // attribute values, a data-carrying id and class, and inline JSON.
+  const page = `<!doctype html><html><head><title>${SECRETS.name}</title><meta name="x" content="${SECRETS.email}">
+<script type="application/ld+json">{"name":"${SECRETS.name}","price":${SECRETS.amount}}</script><script>var t="${SECRETS.token}"</script>
+<style>.a{}</style></head><body class="page">
+<ul class="events" id="list">
+<li class="event c-99812345" id="ev-${SECRETS.customerId}" data-id="${SECRETS.uuid}"><h2 class="title">${SECRETS.name}</h2><a href="/e/${SECRETS.customerId}" title="${SECRETS.street}">x</a>
+<li class="event"><h2 class="title">${SECRETS.street}</h2><time datetime="2026-01-01">${SECRETS.phone}</time>
+</ul><form><input type="hidden" name="csrf" value="${SECRETS.cookie}"></form><!-- ${SECRETS.email} --></body></html>`;
+
+  test("tags, ids, classes and attribute names only; repeated siblings collapse; inline JSON is a Shape", () => {
+    const texts: string[] = [];
+    const { outline } = htmlOutline(page, (t) => texts.push(t));
+    assertNoSecrets(JSON.stringify(outline));
+    expect(outline).toEqual([
+      { tag: "script", attrs: ["type"], type: "application/ld+json", json: { type: "object", fields: { name: { type: "string" }, price: { type: "number" } } } },
+      {
+        tag: "body",
+        classes: ["page"],
+        children: [
+          {
+            tag: "ul",
+            id: "list",
+            classes: ["events"],
+            children: [
+              {
+                tag: "li",
+                id: ":id",
+                classes: ["event"],
+                attrs: ["data-id"],
+                many: true,
+                children: [
+                  { tag: "h2", classes: ["title"], text: true },
+                  { tag: "a", attrs: ["href", "title"], text: true },
+                  { tag: "time", attrs: ["datetime"], text: true },
+                ],
+              },
+            ],
+          },
+          { tag: "form", children: [{ tag: "input", attrs: ["name", "type", "value"], type: "hidden" }] },
+        ],
+      },
+    ]);
+    // The texts are handed to the Capture (to redact a path segment that is one), never recorded.
+    expect(texts).toContain(SECRETS.name);
+    expect(texts).toContain(SECRETS.street);
+  });
+
+  test("a huge page is cut short and says so", () => {
+    const big = "<div>" + Array.from({ length: 5000 }, (_, i) => `<p class="p${i % 7}"><b class="b${i}">x</b></p>`).join("") + "</div>";
+    const o = htmlOutline(big);
+    expect(o.truncated).toBe(true);
+    expect(JSON.stringify(o).length).toBeLessThan(400_000);
+  });
+
+  test("HTML strings inside JSON: their paths, as in a Fingerprint, and their outlines", () => {
+    const commands = [{ command: "settings", settings: { "100234": "<b>x</b>" } }, { command: "insert", data: `<div class="view"><h3>${SECRETS.name}</h3></div>` }];
+    const found = htmlInJson(commands);
+    assertNoSecrets(JSON.stringify(found));
+    expect(found).toEqual([
+      { path: "[].settings.{}", outline: [{ tag: "b", text: true }] },
+      { path: "[].data", outline: [{ tag: "div", classes: ["view"], children: [{ tag: "h3", text: true }] }] },
+    ]);
+    expect(htmlInJson({ note: "a < b and c > d", tag: "<b>" })).toEqual([]);
+  });
+
+  test("the recorder marks a page load and a JSON answer with HTML strings html, with no values", () => {
+    const origin = "https://www.shop.example";
+    const r = new CaptureRecorder({ origin });
+    const nav = r.plan(req({ url: `${origin}/events?q=${encodeURIComponent(SECRETS.name)}`, resourceType: "document" }))!;
+    r.record(nav, { response: { status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: Buffer.from(page) } });
+    const ajax = r.plan(req({ url: `${origin}/views/ajax`, resourceType: "xhr" }))!;
+    r.record(ajax, { response: { status: 200, headers: { "content-type": "application/json" }, body: json([{ command: "insert", data: `<ul><li>${SECRETS.name}</li></ul>` }]) } });
+    const plain = r.plan(req({ url: `${origin}/api/me`, resourceType: "fetch" }))!;
+    r.record(plain, { response: { status: 200, headers: { "content-type": "application/json" }, body: json({ name: SECRETS.name }) } });
+    const ops = r.operations();
+    assertNoSecrets(JSON.stringify(ops));
+    expect(ops.map((o) => [o.operation, o.navigation ?? false, o.html ?? false])).toEqual([
+      ["GET /events", true, true],
+      ["GET /views/ajax", false, true],
+      ["GET /api/me", false, false],
+    ]);
+    expect(ops[0]!.responses[0]!.body.kind).toBe("html");
+    expect(ops[1]!.responses[0]!.htmlInJson).toEqual([{ path: "[].data", outline: [{ tag: "ul", children: [{ tag: "li", text: true }] }] }]);
+    // A value seen only as a page text is redacted from a later path, as one seen in JSON is.
+    const detail = r.plan(req({ url: `${origin}/events/${encodeURIComponent(SECRETS.street)}`, resourceType: "document" }))!;
+    r.record(detail, { response: { status: 200, headers: { "content-type": "text/html" }, body: Buffer.from("<p>ok</p>") } });
+    expect(r.operations().map((o) => o.operation)).toContain("GET /events/:id");
   });
 });

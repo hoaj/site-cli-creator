@@ -7,6 +7,7 @@
 
 import { decodeJwt, onSiteDomain, siteDomain } from "../../starter/skill/cli/src/runtime/site";
 import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
+import { htmlInJson, mergeOutlines, type HtmlNode } from "./html-outline";
 import {
   bodyShape,
   claimsShape,
@@ -60,10 +61,12 @@ type ResponseShape = {
   /** Names of the cookies the response sets, never their values: where a bootstrap's cookie comes from. */
   setCookies?: string[];
   body: BodyShape;
+  /** HTML strings inside a JSON answer (Drupal's /views/ajax): where each sits, as a Fingerprint path, and its outline. */
+  htmlInJson?: { path: string; outline: HtmlNode[]; truncated?: true }[];
 };
 
 /** The true-or-absent flags an OperationShape may carry, in the order the Capture writes them. */
-const MARKERS = ["effectUnknown", "loginFlow", "navigation", "allowedRead", "serverAction", "rsc"] as const;
+const MARKERS = ["effectUnknown", "loginFlow", "navigation", "allowedRead", "serverAction", "rsc", "html"] as const;
 
 /** The markers set on `op`, as `{name: true}`. */
 export function markers(op: Partial<Record<(typeof MARKERS)[number], true>>): Partial<Record<(typeof MARKERS)[number], true>> {
@@ -86,6 +89,11 @@ export type OperationShape = {
   serverAction?: true;
   /** A React Server Component stream (`text/x-component`, `?_rsc=`, an `rsc: 1` header): no JSON, so no Zod Contract can parse it. */
   rsc?: true;
+  /**
+   * The answer is HTML (a page, a fragment) or a JSON answer that carries HTML strings: an HTML
+   * Operation can read it with `html.fields` (reference/contracts.md, HTML Operations).
+   */
+  html?: true;
   resourceType: string;
   host: string;
   method: string;
@@ -332,6 +340,7 @@ export class CaptureRecorder {
   /** Values seen in bodies, variables and query strings, as sent. Memory only. */
   private readonly values = new Set<string>();
   private readonly valueWords = new Set<string>();
+  private readonly valueSlugs = new Set<string>();
   /** The write that went through with --write. */
   wrote?: string;
   /** Writes aborted on hosts outside the recorded scope (`METHOD host/path`, path redacted). */
@@ -411,6 +420,17 @@ export class CaptureRecorder {
     if (s.length < 3 || s.length > 200) return;
     this.values.add(s);
     for (const w of s.split(/[\s,;|/()]+/)) if (w.length >= 3) this.valueWords.add(w);
+    this.rememberPageText(s);
+  }
+
+  /**
+   * A text of an HTML page or fragment: only its slug, when it has several words, since a title is often a
+   * path's slug too (`/events/koncert-i-parken` from "Koncert i parken"). A one-word text is often a link's
+   * label that is also a route's name ("bills" for `/bills`), so it is never taken as a value.
+   */
+  private rememberPageText(text: string): void {
+    const slug = slugOf(text.trim());
+    if (slug.length >= 5 && slug.includes("-")) this.valueSlugs.add(slug);
   }
 
   /** Splits a request into the Operations it carries, or null when it is out of scope. */
@@ -586,7 +606,7 @@ export class CaptureRecorder {
     }
     const claims = outcome.headers ? bearerClaims(header(outcome.headers, "authorization")) : undefined;
     // Shapes are never changed once built, so every call of the request shares this one.
-    const whole = response ? bodyShape(response.body, contentType, parsed) : undefined;
+    const whole = response ? bodyShape(response.body, contentType, parsed, (s) => this.rememberPageText(s)) : undefined;
     for (const call of planned.calls) {
       const shape: OperationShape = structuredClone(call.shape);
       if (outcome.headers) {
@@ -603,6 +623,9 @@ export class CaptureRecorder {
             : whole!;
         const cookies = setCookieNames(header(response.headers, "set-cookie"));
         const headers = headerShape(response.headers, (n) => n === "set-cookie");
+        const json = splitBodies && call.responseIndex !== undefined ? splitBodies[call.responseIndex] : parsed?.ok ? parsed.value : undefined;
+        const embedded = json === undefined ? [] : htmlInJson(json, (s) => this.rememberPageText(s));
+        if (body.kind === "html" || embedded.length) shape.html = true;
         shape.responses = [
           {
             status: response.status,
@@ -610,6 +633,7 @@ export class CaptureRecorder {
             ...(Object.keys(headers).length ? { headers } : {}),
             ...(cookies.length ? { setCookies: cookies } : {}),
             body,
+            ...(embedded.length ? { htmlInJson: embedded } : {}),
           },
         ];
       }
@@ -641,6 +665,8 @@ export class CaptureRecorder {
         // A whole value (`jens.hansen`), or a capitalised word inside one (`Vesterbrogade` from "Vesterbrogade 1").
         if (this.values.has(decoded)) return ":id";
         if (/[A-Z]/.test(decoded) && this.valueWords.has(decoded)) return ":id";
+        // The slug of a value of several words (`Vestergade-12` from "Vestergade 12").
+        if (this.valueSlugs.has(slugOf(decoded))) return ":id";
         return seg;
       })
       .join("/");
@@ -672,12 +698,19 @@ function mergeResponse(a: ResponseShape, b: ResponseShape): ResponseShape {
   const headers = a.headers && b.headers ? mergeHeaders(a.headers, b.headers) : (a.headers ?? b.headers);
   const cookies = [...new Set([...(a.setCookies ?? []), ...(b.setCookies ?? [])])].sort();
   const contentType = a.contentType ?? b.contentType;
+  const embedded = [...(a.htmlInJson ?? [])];
+  for (const e of b.htmlInJson ?? []) {
+    const i = embedded.findIndex((x) => x.path === e.path);
+    if (i === -1) embedded.push(e);
+    else embedded[i] = { path: e.path, outline: mergeOutlines(embedded[i]!.outline, e.outline), ...(embedded[i]!.truncated || e.truncated ? { truncated: true as const } : {}) };
+  }
   return {
     status: a.status,
     ...(contentType ? { contentType } : {}),
     ...(headers ? { headers } : {}),
     ...(cookies.length ? { setCookies: cookies } : {}),
     body: mergeBodies(a.body, b.body),
+    ...(embedded.length ? { htmlInJson: embedded } : {}),
   };
 }
 
@@ -712,6 +745,16 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
     seen: a.seen + b.seen,
     aborted: a.aborted + b.aborted,
   };
+}
+
+/** A text as a URL slug: lower case, letters and digits joined by single dashes. */
+function slugOf(text: string): string {
+  return text
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]+/gu, "-")
+    .replace(/^-|-$/g, "");
 }
 
 /** File names for the shape files: the Operation name made path-safe, unique within one Capture. */

@@ -132,6 +132,15 @@ document.getElementById("street").onclick = () => {
 };
 </script></body></html>`;
 
+// A site with no JSON calls (#102): a server-rendered events list (no </li>, as a CGI script writes it)
+// whose texts and links hold values, a Drupal-style /views/ajax call whose JSON carries an HTML fragment,
+// and a detail page whose path is a slug of a title on the list.
+const EVENTS_PAGE = `<!doctype html><html><head><script type="application/ld+json">{"name":"Jens Hansen","price":349.75}</script></head>
+<body><ul class="events"><li class="event" data-id="${CUSTOMER_ID}"><h2 class="title">Jens Hansen</h2><a id="detail" href="/events/Vestergade-12">mere</a>
+<li class="event"><h2 class="title">Vestergade 12</h2><time datetime="2026-12-01">349.75</time></ul>
+<script>fetch("/views/ajax?view_name=calendar_block").then((r) => r.json()).then(() => (window.loaded = true));</script></body></html>`;
+const EVENT_PAGE = `<!doctype html><html><body><article class="event"><h1>Jens Hansen</h1><p class="where">Vestergade 12</p></article></body></html>`;
+
 // A sign-in on a host not yet in site.ts (#85): the tab navigates there, the page exchanges its code for a
 // token with a form POST (grant_type) and then sends one more write that no rule recognises.
 const PF_START_PAGE = `<!doctype html><html><body><a id="signin" href="http://localhost:PORT/pf/as/authorization.oauth2">sign in</a></body></html>`;
@@ -192,6 +201,7 @@ beforeAll(() => {
   writeFileSync(join(work, "loaded.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n};\n");
   writeFileSync(join(work, "side-effect.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#save');\n  await page.waitForFunction(() => !!window.saved);\n};\n");
   writeFileSync(join(work, "explore.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#bills');\n  await page.waitForFunction(() => window.bills === true);\n  await page.click('#street');\n  await page.waitForFunction(() => window.street === true);\n};\n");
+  writeFileSync(join(work, "events.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.loaded === true);\n  await page.click('#detail');\n  await page.waitForLoadState();\n};\n");
   writeFileSync(join(work, "pf.ts"), "export default async (page) => {\n  await page.click('#signin');\n  await page.waitForURL(/localhost/);\n  await page.waitForFunction(() => window.done === true);\n  if (await page.evaluate(() => window.token) !== 'yes') throw new Error('token exchange blocked');\n};\n");
   writeFileSync(join(work, "pf-stall.ts"), "export default async (page) => {\n  await page.waitForFunction(() => window.done === true);\n  throw new Error('signing in never finished');\n};\n");
   server = Bun.serve({
@@ -206,6 +216,9 @@ beforeAll(() => {
       if (url.pathname === "/u/login" && req.method === "GET") return new Response(SSO_LOGIN_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/u/login" && req.method === "POST") return Response.redirect(`http://127.0.0.1:${server.port}/sso-home`, 302);
       if (url.pathname === "/sso-home") return new Response(SSO_HOME_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/events") return new Response(EVENTS_PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
+      if (url.pathname === "/events/Vestergade-12") return new Response(EVENT_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/views/ajax") return json([{ command: "settings", settings: {} }, { command: "insert", data: `<div class="view"><span class="who">${SECRETS[2]}</span></div>` }]);
       if (url.pathname === "/explore") return new Response(EXPLORE_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === `/explore/customers/${CUSTOMER_ID}/bills`) return new Response(EXPLORE_BILLS_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/api/bills") return json([{ id: "b-1", amount: 349.75, holder: "Jens Hansen" }]);
@@ -322,7 +335,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(writesReceived).toEqual([]);
     expect(r.out.stoppedBy).toBe("script finished");
     expect(r.out.operations).toEqual([
-      { operation: "GET /", effect: "read", navigation: true, file: "GET-root.shape.json", aborted: 0 },
+      { operation: "GET /", effect: "read", navigation: true, html: true, file: "GET-root.shape.json", aborted: 0 },
       { operation: "GET /api/customers/:id/profile", effect: "read", file: "GET-api-customers-id-profile.shape.json", aborted: 0 },
       { operation: "getCustomer", effect: "read", file: "getCustomer.shape.json", aborted: 0 },
       { operation: "POST /api/notes", effect: "write", file: "POST-api-notes.shape.json", aborted: 1 },
@@ -398,7 +411,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     assertNoValues(r.everything);
     expect(writesReceived).toEqual([]);
     expect(r.out.operations).toEqual([
-      { operation: "GET /signed-in", effect: "read", navigation: true, file: "GET-signed-in.shape.json", aborted: 0 },
+      { operation: "GET /signed-in", effect: "read", navigation: true, html: true, file: "GET-signed-in.shape.json", aborted: 0 },
       { operation: "POST /oauth/token", effect: "write", loginFlow: true, file: "POST-oauth-token.shape.json", aborted: 0 },
       { operation: "POST /api/session/post-login", effect: "write", loginFlow: true, file: "POST-api-session-post-login.shape.json", aborted: 0 },
       { operation: "signInUser", effect: "write", loginFlow: true, file: "signInUser.shape.json", aborted: 0 },
@@ -559,9 +572,10 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(writesReceived).toEqual([]);
     expect(existsSync(join(skill, "captures", "profile-show"))).toBe(false);
 
+    // A page load that answered HTML is the page's `document` (#102); a pushState route has none.
     const pages = [
-      { path: "/explore", operations: ["GET /api/customers/:id/profile", "POST /api/quotes"] },
-      { path: "/explore/customers/:id/bills", operations: ["GET /api/bills"] },
+      { path: "/explore", document: "GET /explore", operations: ["GET /api/customers/:id/profile", "POST /api/quotes"] },
+      { path: "/explore/customers/:id/bills", document: "GET /explore/customers/:id/bills", operations: ["GET /api/bills"] },
       { path: "/explore/streets/:id", operations: ["GET /api/settings"] },
     ];
     expect(r.out).toMatchObject({ task: "explore", explore: true, dir: r.dir, pages });
@@ -577,6 +591,37 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     // Page lists stay in index.json: shape files are what draft-contract reads.
     const bills = JSON.parse(readFileSync(join(r.dir, entry("GET /api/bills").file), "utf8"));
     expect(bills.pages).toBeUndefined();
+  }, 120_000);
+
+  test("a site with no JSON calls: page loads and HTML in JSON are recorded as outlines with no values, marked html, named as each page's document, and split like any read (#102)", async () => {
+    const skill = join(work, "html-skill");
+    const r = await explore(skill, ["--script", join(work, "events.ts")], "/events");
+    expect(r.code, JSON.stringify(r.out) + r.stderr).toBe(0);
+    assertNoValues(r.everything);
+    expect(r.everything).not.toContain("Vestergade");
+    expect(r.everything).not.toContain("mere");
+    expect(r.out.pages).toEqual([
+      { path: "/events", document: "GET /events", operations: ["GET /views/ajax"] },
+      { path: "/events/:id", document: "GET /events/:id", operations: [] },
+    ]);
+    const index = JSON.parse(readFileSync(join(r.dir, "index.json"), "utf8"));
+    const entry = (name: string) => index.operations.find((o: { operation: string }) => o.operation === name);
+    expect(entry("GET /events")).toMatchObject({ navigation: true, html: true });
+    expect(entry("GET /views/ajax")).toMatchObject({ html: true });
+    const list = JSON.parse(readFileSync(join(r.dir, entry("GET /events").file), "utf8"));
+    const body = list.responses[0].body;
+    expect(body.kind).toBe("html");
+    const ul = JSON.stringify(body.outline);
+    expect(ul).toContain('"classes":["event"]');
+    expect(ul).toContain('"many":true');
+    expect(ul).toContain('"json":{"type":"object"');
+    const ajax = JSON.parse(readFileSync(join(r.dir, entry("GET /views/ajax").file), "utf8"));
+    expect(ajax.responses[0].htmlInJson).toEqual([{ path: "[].data", outline: [{ tag: "div", classes: ["view"], children: [{ tag: "span", classes: ["who"], text: true }] }] }]);
+
+    // A page load that answered HTML can be a Task's Operation: split-capture takes it.
+    const split = Bun.spawnSync([process.execPath, join(SKILL_ROOT, "tools", "split-capture.ts"), "--skill-dir", skill, "--task", "event-list", "--op", "GET /events"], { stdout: "pipe", stderr: "pipe" });
+    expect(split.exitCode, split.stdout.toString() + split.stderr.toString()).toBe(0);
+    expect(JSON.parse(split.stdout.toString())).toMatchObject({ task: "event-list", startPath: "/events", operations: [{ operation: "GET /events" }] });
   }, 120_000);
 
   test("a token exchange on a host not in site.ts goes through, and a write aborted there names --login-host while recording (#85)", async () => {
