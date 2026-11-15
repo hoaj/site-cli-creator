@@ -2,6 +2,7 @@
 import type { z } from "zod";
 import type { Command } from "./command";
 import { EXIT, nextStep, type Kind } from "./envelope";
+import { neverList } from "./never";
 import { unwrap } from "./fingerprint";
 import type { Site } from "./site";
 
@@ -77,6 +78,7 @@ export function commandHelp(site: Site, commands: Command[], name: string) {
 }
 
 export function help(site: Site, commands: Command[]) {
+  const never = neverList(site);
   const builtins = [
     { name: "help", summary: "Commands, flags and exit codes as JSON" },
     ...(site.auth === "login" ? [{ name: "login", summary: "Open Chrome so the user signs in; run it when a command fails with kind session" }] : []),
@@ -94,6 +96,8 @@ export function help(site: Site, commands: Command[]) {
     commands: commands.map((c) => ({ name: c.name, summary: c.summary, write: isWriteCommand(c), flags: flagSpecs(c.args) })),
     builtins,
     globalFlags: GLOBAL_FLAGS,
+    // site.never: what the CLI never does, whatever the flags; the user does it on the site.
+    ...(never.length > 0 && { never }),
     exitCodes: (Object.entries(EXIT) as [keyof typeof EXIT, number][]).map(([kind, code]) => ({
       code,
       kind,

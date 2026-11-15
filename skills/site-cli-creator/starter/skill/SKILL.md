@@ -43,5 +43,7 @@ On Drift the site has changed away from what the CLI understands. Stop the task 
 ## When NOT to use
 
 - Anyone else's account on __ORIGIN__.
-- Anything the Commands table does not list: offer a feature request instead of improvising.
+- Anything the Commands table does not list: offer a feature request instead of improvising, except what the lines at the end of this list name, which the user always does on the site.
 - Bulk scraping or automated polling of the site.
+<!-- never:start -->
+<!-- never:end -->
