@@ -227,7 +227,8 @@ export class Client {
     // Every request this Client makes goes through one site.never guard: Operations (each redirect
     // hop of fetchFollowing), the hooks' ctx.fetch and login.refresh.renew's plain fetch.
     const note = (e: NeverSent) => this.noteRefusal(e);
-    this.deps = { ...deps, fetch: guardFetch(site, deps.fetch, note), plainFetch: guardFetch(site, deps.plainFetch ?? deps.fetch, note) };
+    const origin = effectiveOrigin(site, deps.env);
+    this.deps = { ...deps, fetch: guardFetch(site, deps.fetch, note, origin), plainFetch: guardFetch(site, deps.plainFetch ?? deps.fetch, note, origin) };
     this.confirm = options.confirm ?? false;
     this.session = options.session ?? null;
     this.persisted = !options.session;
@@ -264,8 +265,11 @@ export class Client {
     this.refusals.last = e;
   }
 
-  /** Runs a site hook; a request site.never refused while it ran fails it, even when the hook caught that. */
-  private async hook<T>(run: () => Promise<T>): Promise<T> {
+  /**
+   * Runs a site hook or a command's run: a request site.never refused while it ran fails it, even
+   * when the code caught that refusal (a fallback must never hide what the user has to do).
+   */
+  async withRefusals<T>(run: () => Promise<T>): Promise<T> {
     const before = this.refusals.count;
     let out: T;
     try {
@@ -303,7 +307,7 @@ export class Client {
     let raw: Record<string, unknown> | undefined;
     try {
       const postLogin = this.site.login?.postLogin;
-      raw = postLogin ? await this.hook(() => postLogin(this.siteCtx(draft, false))) : {};
+      raw = postLogin ? await this.withRefusals(() => postLogin(this.siteCtx(draft, false))) : {};
     } finally {
       await this.deps.release?.();
     }
@@ -490,7 +494,7 @@ export class Client {
 
   private async bootstrap(): Promise<Session> {
     const empty: Session = { headers: {}, ids: {}, savedAt: new Date().toISOString() };
-    const r = await this.hook(() => this.site.bootstrap!(this.siteCtx(empty, false)));
+    const r = await this.withRefusals(() => this.site.bootstrap!(this.siteCtx(empty, false)));
     this.session = saveSession(this.dir, { headers: r.headers ?? {}, ids: r.ids ?? {} });
     this.persisted = true;
     this.fresh = true;
@@ -585,11 +589,11 @@ export class Client {
 
   /** The site.never rule the request this Operation would send with these variables breaks, if any. */
   private forbiddenBuilt(op: Operation, vars: unknown) {
+    if (!Array.isArray(this.site.never) || this.site.never.length === 0) return undefined;
     try {
       return forbiddenRequest(this.site, buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: {} }));
-    } catch (e) {
-      if (e instanceof ContractError) return undefined; // send() reports it
-      throw e;
+    } catch {
+      return undefined; // a request that cannot be built: its dry run or send() reports it, as without a never list
     }
   }
 
@@ -604,7 +608,7 @@ export class Client {
     if (this.fetchedAccounts) return this.fetchedAccounts;
     if (!refresh && s.accounts) return s.accounts.map((a) => ({ id: String(a.id) }));
     const accounts = this.site.accounts;
-    const raw = await this.hook(() => accounts(this.siteCtx(s, true)));
+    const raw = await this.withRefusals(() => accounts(this.siteCtx(s, true)));
     const list: Account[] = raw.map((a) => (typeof a === "string" ? { id: a } : { id: String(a.id), ...(a.label ? { label: String(a.label) } : {}) }));
     this.fetchedAccounts = list;
     // The accounts go onto session.json as it is now when it is the same login: another run may have

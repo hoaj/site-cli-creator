@@ -243,12 +243,13 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
   if (app.site.auth === "login") await client.ensureSession();
   const chosen = await client.resolveAccount(account);
   deps.note(`${command.name}: ${command.uses.map((o) => o.name).join(" → ") || "no Operations"}`);
-  const result = await command.run(args as never, {
+  // A refusal the command caught (a fallback) still ends it: the user does that step on the site.
+  const result = await client.withRefusals(() => command.run(args as never, {
     call: client.call,
     session: { get ids() { return client.peek()?.ids ?? {}; } },
     account: chosen,
     note: deps.note,
-  });
+  }));
   return result ?? null;
 }
 

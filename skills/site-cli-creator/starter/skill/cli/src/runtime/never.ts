@@ -5,7 +5,8 @@
 import { ContractError, type Surface } from "./envelope";
 import { stripNoise, topLevelDefinitions } from "./graphql";
 import type { Method, Operation } from "./operation";
-import type { Fetch, NeverRule, Site } from "./site";
+// A cycle with site.ts (it imports neverListProblems): these are used only at call time, never at load.
+import { onSiteDomain, siteDomain, type Fetch, type NeverRule, type Site } from "./site";
 
 const METHODS: string[] = ["GET", "POST", "PUT", "PATCH", "DELETE"] satisfies Method[];
 const GRAPHQL_NAME = /^[_A-Za-z][_0-9A-Za-z]*$/;
@@ -23,7 +24,8 @@ export function neverListProblems(list: unknown): string[] {
     const hasPath = r.path !== undefined;
     const hasGraphql = r.graphql !== undefined;
     if (!hasPath && !hasGraphql) return out.push(`${at} needs a path or a graphql name`);
-    if (hasPath === hasGraphql || (hasGraphql && r.method !== undefined)) return out.push(`${at} takes a path or a graphql name, not both`);
+    if (hasPath && hasGraphql) return out.push(`${at} takes a path or a graphql name, not both`);
+    if (hasGraphql && r.method !== undefined) return out.push(`${at}.method goes only with a path: a graphql entry matches every request that carries the name`);
     if (hasPath && !(typeof r.path === "string" && r.path.startsWith("/"))) out.push(`${at}.path must start with /`);
     else if (hasPath && /[?#]/.test(r.path as string)) out.push(`${at}.path is a URL path only: no ? or # (the query string and fragment are never matched)`);
     if (r.method !== undefined && !(typeof r.method === "string" && METHODS.includes(r.method))) out.push(`${at}.method must be GET, POST, PUT, PATCH or DELETE`);
@@ -52,13 +54,22 @@ function globRe(path: string): RegExp {
   return re;
 }
 
-/** A request path as the site would read it: percent-escapes decoded, repeated slashes collapsed. */
+/**
+ * A request path as a server may read it: percent-escapes decoded (an encoded `/` included), repeated
+ * slashes collapsed and `.`/`..` segments resolved, so a variable holding `x/../../order/place` does
+ * not walk past a rule.
+ */
 function normalPath(pathname: string): string {
   let p = pathname;
   try {
     p = decodeURIComponent(pathname);
   } catch {}
-  return p.replace(/\/{2,}/g, "/");
+  const segments: string[] = [];
+  for (const segment of p.split("/")) {
+    if (segment === "..") segments.pop();
+    else if (segment !== "." && segment !== "") segments.push(segment);
+  }
+  return `/${segments.join("/")}${segments.length > 0 && p.endsWith("/") ? "/" : ""}`;
 }
 
 const methodMatches = (rule: NeverRule, method: string) => !rule.method || rule.method === method.toUpperCase();
@@ -76,15 +87,30 @@ function graphqlNames(doc: unknown): string[] {
 
 const rules = (site: Site): NeverRule[] => (Array.isArray(site.never) ? site.never : []);
 
-/** The operation names a request body carries: JSON (a document or a batch), else a form's fields or a raw GraphQL document. */
-function bodyNames(body: string): string[] {
+/** The operation names a JSON text carries (a document or a batch); [] when it is no JSON. */
+function jsonNames(text: string): string[] {
   try {
-    const parsed = JSON.parse(body);
+    const parsed = JSON.parse(text);
     return (Array.isArray(parsed) ? parsed : [parsed]).flatMap(graphqlNames);
   } catch {
-    const form = new URLSearchParams(body);
-    return [...graphqlNames({ operationName: form.get("operationName") ?? undefined, query: form.get("query") ?? undefined }), ...graphqlNames({ query: body })];
+    return [];
   }
+}
+
+/**
+ * The operation names a request body carries: JSON (a document or a batch), else a form's fields
+ * (`operationName`, `query`, and a multipart request's `operations` JSON) or a raw GraphQL document.
+ */
+function bodyNames(body: string): string[] {
+  const json = jsonNames(body);
+  if (json.length > 0) return json;
+  const form = new URLSearchParams(body);
+  const operations = form.get("operations");
+  return [
+    ...graphqlNames({ operationName: form.get("operationName") ?? undefined, query: form.get("query") ?? undefined }),
+    ...(operations ? jsonNames(operations) : []),
+    ...graphqlNames({ query: body }),
+  ];
 }
 
 /**
@@ -102,12 +128,15 @@ export function forbiddenRequest(site: Site, req: { method: string; url: string;
     return undefined;
   }
   const path = normalPath(url.pathname);
+  // Names are read only when a GraphQL rule needs them: most requests are no GraphQL.
   const names: string[] = [];
-  const op = url.searchParams.get("operationName");
-  if (op) names.push(op);
-  const query = url.searchParams.get("query");
-  if (query) names.push(...graphqlNames({ query }));
-  if (req.body) names.push(...bodyNames(req.body));
+  if (list.some((r) => r.graphql !== undefined)) {
+    const op = url.searchParams.get("operationName");
+    if (op) names.push(op);
+    const query = url.searchParams.get("query");
+    if (query) names.push(...graphqlNames({ query }));
+    if (req.body) names.push(...bodyNames(req.body));
+  }
   return list.find((r) => (r.path !== undefined ? methodMatches(r, req.method) && globRe(r.path).test(path) : nameMatches(r, names)));
 }
 
@@ -243,17 +272,6 @@ const SESSION_HEADERS = ["authorization", "cookie", "proxy-authorization"];
 /** Headers that describe a body: dropped when a redirect turns the request into a GET, as fetch does. */
 const BODY_HEADERS = ["content-type", "content-length", "content-encoding", "content-language", "content-location"];
 
-/** Whether a host is on the site's domain (the origin's host without www., or a subdomain of it). */
-function onDomain(site: Site, host: string): boolean {
-  let domain: string;
-  try {
-    domain = new URL(site.origin).hostname.toLowerCase().replace(/^www\./, "");
-  } catch {
-    return false;
-  }
-  const h = host.toLowerCase();
-  return h === domain || h.endsWith(`.${domain}`);
-}
 
 /**
  * A fetch that refuses what site.never forbids: the Client wraps every fetch it makes with it (the
@@ -262,10 +280,12 @@ function onDomain(site: Site, host: string): boolean {
  * - 303, and 301/302 after a non-GET, go on as a GET without the body or its headers;
  * - a hop off the site's domain (and off the current origin) goes without the session's headers;
  * - a caller's own `redirect: "manual"` or "error" is kept (the Client's fetchFollowing).
- * `onRefuse` hears of each refusal, even one the caller then catches. A fetch already guarded is
- * returned as it is.
+ * The answer is fetch's: `redirected` and `url` set after a redirect, a TypeError after 20 hops or
+ * on a 307/308 that would resend a stream body, every hop's body cancelled, the request's signal kept.
+ * `onRefuse` hears of each refusal, even one the caller then catches. `origin` is the effective one
+ * (its domain keeps the session's headers). A fetch already guarded is returned as it is.
  */
-export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverSent) => void): Fetch {
+export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverSent) => void, origin: string = site.origin): Fetch {
   if (rules(site).length === 0 || (fetch as { [GUARDED]?: true })[GUARDED]) return fetch;
   const refuse = (req: { method: string; url: string; body?: string }) => {
     const rule = forbiddenRequest(site, req);
@@ -283,10 +303,19 @@ export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverS
     if (init.redirect === "manual" || init.redirect === "error") return fetch(input, init);
     let body: RequestInit["body"] = init.body ?? text;
     const headers = new Headers(init.headers ?? request?.headers);
+    const signal = init.signal ?? request?.signal;
+    const domain = siteDomain(origin);
     let res = await fetch(input, { ...init, redirect: "manual" });
-    for (let hop = 0; hop < MAX_HOPS; hop++) {
+    for (let hop = 0; ; hop++) {
       const location = res.headers.get("location");
-      if (res.status < 300 || res.status >= 400 || res.status === 304 || !location) return res;
+      if (res.status < 300 || res.status >= 400 || res.status === 304 || !location) {
+        if (hop > 0) {
+          Object.defineProperty(res, "redirected", { value: true });
+          Object.defineProperty(res, "url", { value: url });
+        }
+        return res;
+      }
+      if (hop >= MAX_HOPS) throw new TypeError(`fetch followed more than ${MAX_HOPS} redirects`);
       const next = new URL(location, url);
       if (res.status === 303 || ((res.status === 301 || res.status === 302) && method !== "GET" && method !== "HEAD")) {
         if (method !== "HEAD") method = "GET";
@@ -294,12 +323,15 @@ export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverS
         text = undefined;
         for (const h of BODY_HEADERS) headers.delete(h);
       }
-      if (next.origin !== new URL(url).origin && !onDomain(site, next.hostname)) for (const h of SESSION_HEADERS) headers.delete(h);
+      if ((res.status === 307 || res.status === 308) && body instanceof ReadableStream) {
+        throw new TypeError("fetch cannot follow a 307/308 redirect that resends a stream body");
+      }
+      if (next.origin !== new URL(url).origin && !onSiteDomain(domain, next.hostname)) for (const h of SESSION_HEADERS) headers.delete(h);
       refuse({ method, url: next.href, body: text });
+      await res.body?.cancel().catch(() => {});
       url = next.href;
-      res = await fetch(url, { ...init, method, headers, body, redirect: "manual" });
+      res = await fetch(url, { ...init, method, headers, body, signal, redirect: "manual" });
     }
-    return res;
   };
   Object.defineProperty(guarded, GUARDED, { value: true });
   return guarded;
