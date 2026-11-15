@@ -8,7 +8,7 @@
 import type { BrowserContext, Page, Response as PlaywrightResponse } from "playwright-core";
 import { Failure } from "./envelope";
 import { closeContext, launchInMemory } from "./login";
-import { effectiveOrigin, isTest, type Env, type Fetch, type Site } from "./site";
+import { effectiveOrigin, isTest, onSiteDomain, siteDomain, type Env, type Fetch, type Site } from "./site";
 
 /** `cookies()`: what Chrome holds for the origin, by name, the tab opened first (SiteCtx.cookies). */
 export type BrowserTransport = { fetch: Fetch; cookies(cookieHeader?: string): Promise<Record<string, string>>; close(): Promise<void> };
@@ -154,8 +154,13 @@ export function browserTransport(site: Site, options: { env: Env; note(message: 
       // The site did not load in Chrome: the hook cannot read its cookies, so it stops as a fetch would.
       throw new Failure("network", `${origin} isn't responding (${transportError("page").message}).`);
     }
-    const held = context ? await context.cookies(`${origin}/`).catch(() => []) : [];
-    return Object.fromEntries(held.map((c) => [c.name, c.value]));
+    if (!context) return {};
+    // Every cookie on the site's domain, whatever its Path (an XSRF cookie on /api) or host; on a
+    // name two share, the one the origin's root is sent wins.
+    const domain = siteDomain(origin);
+    const all = (await context.cookies().catch(() => [])).filter((c) => onSiteDomain(domain, c.domain.replace(/^\./, "")));
+    const root = await context.cookies(`${origin}/`).catch(() => []);
+    return Object.fromEntries([...all, ...root].map((c) => [c.name, c.value]));
   };
 
   return { fetch, cookies, close };

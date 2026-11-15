@@ -1066,6 +1066,43 @@ describe("bot block: network with `blocked`, never Drift, no sign-in spent on it
     expect([mislabelled.kind, mislabelled.details.blocked]).toEqual(["network", "cloudflare"]);
   });
 
+  test("an ordinary page that mentions a reference number is no Akamai block (review 3)", () => {
+    const h = () => new Headers();
+    expect(blockSignal(200, h(), "<p>See Reference #2.1 in the terms</p>")).toBeUndefined();
+    expect(blockSignal(200, h(), "Order Reference #12345.0")).toBeUndefined();
+    expect(blockSignal(403, h(), "<H1>Access Denied</H1> Reference #18.5b3c1002.1700000000.1a2b3c")).toBe("akamai");
+  });
+
+  test("a hook's manual redirect to a captcha host is a block, not the hook's bug (review 3)", async () => {
+    const site = makeSite({ bootstrap: async (ctx) => {
+      const res = await ctx.fetch(`${ctx.origin}/`, { redirect: "manual" });
+      if (!res.ok) throw new Error(`front page answered HTTP ${res.status}`);
+      return { headers: {} };
+    } });
+    const { fetch } = fakeFetch(() => new Response(null, { status: 302, headers: { location: "https://geo.captcha-delivery.com/captcha/?initialCid=x" } }));
+    const e = await failure(client(site, makeDeps(fetch, home.dir).deps).call(getCustomer, { customerId: "C" }));
+    expect([e.kind, e.details.blocked]).toEqual(["network", "datadome"]);
+  });
+
+  test("a renew refused by the wall with no Chrome sign-in after it (the Setup page's check, MCP) reports the wall, not an expired sign-in (review 3)", async () => {
+    const wall = () => html(challenge, 403);
+    const site = loginSite({ login: { ...loginSite().login!, refresh: { renew: async (ctx) => {
+      const res = await ctx.fetch("https://auth.example.test/token");
+      return res.ok ? { headers: { authorization: "Bearer new" } } : null;
+    } } } });
+    const answer = (r: { url: string }) => (r.url.includes("auth.example.test") ? wall() : json({}, 401));
+    const session = { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" }, savedAt: new Date().toISOString() };
+    // The Setup page's check: renew only.
+    const setup = await failure(new Client(site, makeDeps(fakeFetch(answer).fetch, home.dir).deps, { session, reauth: "renew" }).call(getCustomer, { customerId: "C-1" }));
+    expect([setup.kind, setup.details.blocked]).toEqual(["network", "cloudflare"]);
+    // MCP: the headless sign-in does not complete either.
+    saveSession(home.dir, session);
+    const mcp = makeDeps(fakeFetch(answer).fetch, home.dir);
+    mcp.deps.login = async () => null;
+    const viaMcp = await failure(new Client(site, mcp.deps, { surface: "mcp" }).call(getCustomer, { customerId: "C-1" }));
+    expect([viaMcp.kind, viaMcp.details.blocked]).toEqual(["network", "cloudflare"]);
+  });
+
   test("a block that comes as a redirect to a captcha host is a block, not offsite Drift (review 2)", async () => {
     saved();
     const { fetch } = fakeFetch(() => new Response(null, { status: 302, headers: { location: "https://geo.captcha-delivery.com/captcha/?initialCid=x" } }));

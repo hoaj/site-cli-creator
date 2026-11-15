@@ -72,6 +72,9 @@ export function withChain(ops: Operation[], name: string): Operation[] {
   return ops.filter((o) => keep.has(o.name));
 }
 
+/** A failure after which check sends nothing more: signed out for good, or a bot wall (never sent more, SPEC §10). */
+const halts = (f: Failure | undefined) => f?.kind === "session" || f?.details.blocked !== undefined;
+
 export async function check(client: Client, operations: Operation[], options: CheckOptions, checkWrites?: WriteChecker): Promise<CheckResult> {
   const target = options.op ? findOperation(operations, options.op) : undefined;
   const selected = chainOrder(target ? withChain(operations, target.name) : operations);
@@ -86,9 +89,10 @@ export async function check(client: Client, operations: Operation[], options: Ch
   let stopped: Failure | undefined;
 
   for (const op of selected) {
-    if (stopped?.kind === "session") {
-      // Signed out and the sign-in did not complete: no other Operation can be reached.
-      rows.push({ operation: op.name, effect: op.effect, status: "skipped", reason: "session" });
+    if (halts(stopped)) {
+      // Signed out and the sign-in did not complete, or a bot wall: no other Operation can be reached,
+      // and a wall is never sent more requests (SPEC §10).
+      rows.push({ operation: op.name, effect: op.effect, status: "skipped", reason: stopped!.details.blocked ? "blocked" : "session" });
       continue;
     }
     if (op.effect === "write") {
@@ -150,7 +154,7 @@ export async function check(client: Client, operations: Operation[], options: Ch
 
   const withTrigger = writes.filter((op) => op.trigger);
   for (const op of writes) if (!op.trigger) rows.push({ operation: op.name, effect: "write", status: "skipped", reason: "no trigger" });
-  if (withTrigger.length > 0 && stopped?.kind !== "session") {
+  if (withTrigger.length > 0 && !halts(stopped)) {
     const reads = operations.filter((op) => op.effect === "read");
     const declaredWrites = operations.filter((op) => op.effect === "write");
     try {

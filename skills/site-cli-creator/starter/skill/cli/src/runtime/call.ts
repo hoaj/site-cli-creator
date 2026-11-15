@@ -163,10 +163,10 @@ function headerValue(headers: Record<string, string>, name: string): string | un
   return Object.entries(headers).find(([k]) => k.toLowerCase() === name)?.[1];
 }
 
-/** The host a fetch input goes to, a relative one resolved against the site's origin. */
-function requestHost(input: Parameters<Fetch>[0], origin: string): string {
+/** The URL a fetch input goes to, a relative one resolved against the site's origin. */
+function requestUrl(input: Parameters<Fetch>[0], origin: string): string {
   const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as globalThis.Request).url;
-  return new URL(url, origin).hostname;
+  return new URL(url, origin).href;
 }
 
 type GqlError = { message?: unknown; extensions?: { code?: unknown } };
@@ -218,6 +218,8 @@ export class Client {
   private probed = false;
   /** True once this run tried login.refresh.renew: a further refusal goes to Chrome. */
   private renewTried = false;
+  /** The bot protection that refused renew's request: reported if no Chrome sign-in gets past it. */
+  private renewBlocked: string | undefined;
   /** True once this run renewed the session (login.refresh, or another run's renewal taken over). */
   renewed = false;
   /** True once this Client signed in with Chrome. */
@@ -278,11 +280,14 @@ export class Client {
       const res = await send(input, init);
       // A hook's request (bootstrap's first one, renew's) meets a bot wall as often as an Operation:
       // the same block, never a bug in the hook. Read as the Operations read an answer.
-      const text = await res.clone().text().catch(() => undefined);
-      const blocked = blockSignal(res.status, res.headers, text === undefined ? undefined : parsedBody(text));
+      const location = res.status >= 300 && res.status < 400 ? res.headers.get("location") : null;
+      const text = location ? undefined : await res.clone().text().catch(() => undefined);
+      const blocked = location
+        ? blockHost(new URL(location, requestUrl(input, this.origin)))
+        : blockSignal(res.status, res.headers, text === undefined ? undefined : parsedBody(text));
       if (blocked) throw this.blockedFailure("site.ts", blocked);
       // Only the site's own cookies: a hook may call another host (an identity provider).
-      if (onSiteDomain(domain, requestHost(input, this.origin))) for (const [name, value] of setCookiePairs(res.headers)) set.set(name, value);
+      if (onSiteDomain(domain, new URL(requestUrl(input, this.origin)).hostname)) for (const [name, value] of setCookiePairs(res.headers)) set.set(name, value);
       return res;
     };
     return {
@@ -386,6 +391,7 @@ export class Client {
         // A bot wall refused the token request: the site never took the token, which stays, and
         // Chrome signs in instead (a real browser may pass where a plain request was refused).
         if (e instanceof Failure && e.details.blocked) {
+          this.renewBlocked = e.details.blocked;
           this.deps.note(`renewing the sign-in was refused as automated traffic (bot protection: ${e.details.blocked}); signing in with Chrome instead`);
           return false;
         }
@@ -523,8 +529,23 @@ export class Client {
     this.deps.note(`the saved sign-in to ${this.site.origin} has expired (${probe} says signed out)`);
     if ((await this.renew()) && (await this.askProbe(url)) !== "signed-out") return;
     // No sign-in here (the Setup page's check): an upload that is still signed out is refused.
-    if (this.renewOnly) throw new Failure("session", `The session for ${this.site.origin} is signed out (${probe}).`);
-    await this.signInOrFail();
+    if (this.renewOnly) throw this.renewWall() ?? new Failure("session", `The session for ${this.site.origin} is signed out (${probe}).`);
+    await this.signInAfterRenew();
+  }
+
+  /** A renew refused by a bot wall, as the failure to report when nothing got past it. */
+  private renewWall(): Failure | undefined {
+    return this.renewBlocked ? this.blockedFailure("login.refresh.renew", this.renewBlocked) : undefined;
+  }
+
+  /** Chrome's sign-in after renew failed; when that does not complete either, a wall renew met is the cause. */
+  private async signInAfterRenew(): Promise<Session> {
+    try {
+      return await this.signInOrFail();
+    } catch (e) {
+      if (e instanceof Failure && e.kind === "session") throw this.renewWall() ?? e;
+      throw e;
+    }
   }
 
   /** login.sessionProbe with the current session: "signed-out", or undefined (signed in, or the site is struggling). */
@@ -563,7 +584,7 @@ export class Client {
     if (!this.reauthAllowed) return false;
     if (this.site.auth === "login") {
       if (await this.renew()) return true;
-      await this.signInOrFail();
+      await this.signInAfterRenew();
       return true;
     }
     if (!this.site.bootstrap) return false;
@@ -587,6 +608,11 @@ export class Client {
     while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data);
     if (res.blocked) throw this.blockedFailure(op, res.blocked);
     if (this.isAuthFailure(op, res)) {
+      // Renew met a bot wall and no Chrome sign-in followed (the Setup page's check): the wall, not Drift.
+      if (!this.signedInHere) {
+        const wall = this.renewWall();
+        if (wall) throw wall;
+      }
       const after =
         this.site.auth === "login"
           ? this.signedInHere ? "a fresh sign-in" : this.renewed ? "renewing the sign-in" : "a check of the saved sign-in"
@@ -753,7 +779,8 @@ const BLOCK_PAGES: [RegExp, string][] = [
   [/px-captcha|_pxCaptcha/i, "perimeterx"],
   [/Incapsula incident/i, "imperva"],
   // Akamai's Access Denied page writes them as HTML entities.
-  [/errors(?:\.|&#46;)edgesuite(?:\.|&#46;)net|Reference(?: |&#32;)(?:#|&#35;)\d+(?:\.|&#46;)[0-9a-f]+/i, "akamai"],
+  // Its reference has four parts (#18.5b3c1002.1700000000.1a2b3c): an ordinary "Reference #2.1" is no block.
+  [/errors(?:\.|&#46;)edgesuite(?:\.|&#46;)net|Reference(?: |&#32;)(?:#|&#35;)\d+(?:(?:\.|&#46;)[0-9a-f]+){3}\b/i, "akamai"],
 ];
 /** A refusal of an API call as JSON (DataDome's captcha url, PerimeterX's block script), never data. */
 const BLOCK_JSON: [RegExp, string][] = [
@@ -767,6 +794,8 @@ const BLOCK_JSON: [RegExp, string][] = [
 const CAPTCHA_WALL = /g-recaptcha|h-captcha|hcaptcha\.com|recaptcha\/api|checking your browser/i;
 const SIGN_IN_FORM = /type\s*=\s*["']?password/i;
 const REFUSALS = new Set([403, 429, 503]);
+/** How much of an answer is searched for a block: a block page is small, a site's data may not be. */
+const BLOCK_SCAN_CHARS = 100_000;
 /** Hosts a bot protection redirects a refused request to. */
 const BLOCK_HOSTS: [RegExp, string][] = [
   [/(?:^|\.)captcha-delivery\.com$/i, "datadome"],
@@ -783,13 +812,14 @@ export function blockSignal(status: number, headers: Headers, body: unknown): st
   if (headers.has("cf-mitigated")) return "cloudflare";
   if (body !== null && typeof body === "object") {
     if (status < 400) return undefined;
-    const text = JSON.stringify(body).slice(0, 100_000);
+    const text = JSON.stringify(body).slice(0, BLOCK_SCAN_CHARS);
     return BLOCK_JSON.find(([marker]) => marker.test(text))?.[1];
   }
   if (typeof body !== "string") return undefined;
-  const vendor = BLOCK_PAGES.find(([marker]) => marker.test(body))?.[1];
+  const page = body.slice(0, BLOCK_SCAN_CHARS);
+  const vendor = BLOCK_PAGES.find(([marker]) => marker.test(page))?.[1];
   if (vendor) return vendor;
-  return REFUSALS.has(status) && CAPTCHA_WALL.test(body) && !SIGN_IN_FORM.test(body) ? "captcha" : undefined;
+  return REFUSALS.has(status) && CAPTCHA_WALL.test(page) && !SIGN_IN_FORM.test(page) ? "captcha" : undefined;
 }
 
 /** The bot protection a redirect leads to, by its host, or undefined. */
