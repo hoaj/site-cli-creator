@@ -137,7 +137,7 @@ describe("matching", () => {
     expect(p([{ method: "SEND", path: "/x", why: "w" }])).toEqual(["never[0].method must be GET, POST, PUT, PATCH or DELETE"]);
     expect(p([{ graphql: "Place Order", why: "w" }])).toEqual(["never[0].graphql must be a GraphQL operation name"]);
     expect(p([{ graphql: "P", path: "/x", why: "w" }])).toEqual(["never[0] takes a path or a graphql name, not both"]);
-    expect(p([{ graphql: "P", method: "POST", why: "w" }])).toEqual(["never[0] takes a path or a graphql name, not both"]);
+    expect(p([{ graphql: "P", method: "POST", why: "w" }])).toEqual(["never[0].method goes only with a path: a graphql entry matches every request that carries the name"]);
     expect(p([{ why: "w" }])).toEqual(["never[0] needs a path or a graphql name"]);
   });
 });
@@ -516,10 +516,94 @@ describe("review round 1", () => {
       return new Map([[write.name, "never" as const]]);
     };
     const c = new Client(site, makeDeps(fakeFetch(() => json({})).fetch, home()).deps);
-    const r = await check(c, [write], { writes: true }, checker as never);
-    expect(r.ok).toBe(false);
-    expect(r.operations).toEqual([{ operation: write.name, effect: "write", status: "failed", reason: "never" }]);
-    expect(r.warnings).toHaveLength(1);
+    // A bug in the plugin's trigger, like a read whose request is refused (review 3): exit 1, the warning in the message.
+    const e = await check(c, [write], { writes: true }, checker as never).catch((x) => x);
+    expect(e).toBeInstanceOf(ContractError);
+    expect(e.message).toBe(
+      "check: a trigger reached only requests site.never forbids: PATCH /api/orders/:orderId's trigger sent a request site.never forbids (POST /api/order/place*: Placing an order: the user always pays); it was aborted.",
+    );
+  });
+
+  test("review 3: a write whose body cannot be built still gives its dry run, with or without a never list", async () => {
+    const throwing = defineOperation({
+      name: "POST /api/notes",
+      effect: "write",
+      rest: { method: "POST", path: "/api/notes", body: (v: { text?: string }) => ({ text: v.text!.trim() }) },
+      variables: z.object({ text: z.string().optional() }),
+      response: z.unknown(),
+    });
+    for (const never of [[], NEVER]) {
+      const c = new Client(makeSite({ never }), makeDeps(fakeFetch(() => json({})).fetch, home()).deps);
+      expect(await c.call(throwing, {}).catch((x) => x)).toBeInstanceOf(DryRun);
+    }
+  });
+
+  test("review 3: guardFetch's redirects behave as fetch's: redirected and url set, too many hops throw, a Request's signal kept", async () => {
+    const signals: unknown[] = [];
+    const loop = fakeFetch((req) => {
+      const n = Number(new URL(req.url).searchParams.get("n") ?? "0");
+      return new Response(null, { status: 302, headers: { location: `/api/loop?n=${n + 1}` } });
+    });
+    const ok = async (input: string | URL | Request, init?: RequestInit) => {
+      signals.push(init?.signal);
+      const url = input instanceof Request ? input.url : String(input);
+      return new URL(url).pathname === "/api/go" ? new Response(null, { status: 302, headers: { location: "/api/ok" } }) : json({ ok: true });
+    };
+    let res: Response | undefined;
+    let tooMany: unknown;
+    const s = makeSite({
+      never: NEVER,
+      bootstrap: async (ctx) => {
+        const abort = new AbortController();
+        res = await ctx.fetch(new Request(`${ctx.origin}/api/go`, { signal: abort.signal }));
+        return { headers: {} };
+      },
+    });
+    await new Client(s, makeDeps(ok, home()).deps).call(getOrder, { orderId: "1" }).catch(() => {});
+    expect(res!.redirected).toBe(true);
+    expect(res!.url).toBe(`${ORIGIN}/api/ok`);
+    // [0] the Request itself (its signal rides on it), [1] the redirect hop, then getOrder's own call.
+    expect(signals[1]).toBeInstanceOf(AbortSignal);
+
+    const looping = makeSite({ never: NEVER, bootstrap: async (ctx) => ((tooMany = await ctx.fetch(`${ctx.origin}/api/loop`).catch((x) => x)), { headers: {} }) });
+    await new Client(looping, makeDeps(loop.fetch, home()).deps).call(getOrder, { orderId: "1" }).catch(() => {});
+    expect(tooMany).toBeInstanceOf(TypeError);
+  });
+
+  test("review 3: a command that catches a refused ctx.call still exits 1 with NeverSent", async () => {
+    const f = fakeFetch(() => json({}));
+    const sneaky = defineCommand({
+      name: "order try",
+      summary: "Try to place the order",
+      args: z.object({}),
+      uses: [placeOrder],
+      run: async (_a, ctx) => ctx.call(placeOrder, {}).then(() => "placed", () => "fell back"),
+    });
+    const app: App = { site, operations: [placeOrder], commands: [sneaky], deps: makeDeps(f.fetch, home()).deps };
+    const r = await run(["order", "try", "--confirm"], app);
+    expect(r.code).toBe(1);
+    expect((r.output as any).error.fingerprint).toStartWith("acme:shop:bug:order-try:NeverSent:");
+    expect(f.calls).toEqual([]);
+  });
+
+  test("review 3: an encoded ../ in a variable does not walk past a rule; a multipart GraphQL request's operations field is read", async () => {
+    expect(forbiddenRequest(site, { method: "POST", url: `${ORIGIN}/api/items/x%2F..%2F..%2Forder%2Fplace` })?.why).toBe("Placing an order: the user always pays");
+    expect(forbiddenRequest(site, { method: "POST", url: `${ORIGIN}/api/items/./x/../../order/placeNow` })?.why).toBe("Placing an order: the user always pays");
+    expect(forbiddenRequest(site, { method: "POST", url: `${ORIGIN}/api/items/x%2F..%2Fcart` })).toBeUndefined();
+
+    const f = fakeFetch(() => json({}));
+    const form = new FormData();
+    form.set("operations", JSON.stringify({ operationName: "PlaceOrder", query: "mutation PlaceOrder($f: Upload) { x }", variables: {} }));
+    form.set("map", "{}");
+    const b = makeSite({ never: NEVER, bootstrap: async (ctx) => (await ctx.fetch(`${ctx.origin}/graphql`, { method: "POST", body: form }), { headers: {} }) });
+    expect(await new Client(b, makeDeps(f.fetch, home()).deps).call(getOrder, { orderId: "1" }).catch((x) => x)).toBeInstanceOf(NeverSent);
+    expect(f.calls).toEqual([]);
+  });
+
+  test("review 3: a graphql entry with a method is told to drop the method", () => {
+    expect(siteProblems(makeSite({ never: [{ graphql: "PlaceOrder", method: "POST", why: "w" } as unknown as NeverRule] }))).toEqual([
+      "never[0].method goes only with a path: a graphql entry matches every request that carries the name",
+    ]);
   });
 
   test("stripNeverList removes the never list from site.ts text, so the CI scan reads the hooks and not the list", () => {

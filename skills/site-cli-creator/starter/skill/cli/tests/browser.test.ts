@@ -321,6 +321,19 @@ describe.skipIf(skip)("Chrome", () => {
     expect(received.filter((r) => r === "POST /api/order/place" || r.startsWith("PATCH"))).toEqual([]);
   }, 90_000);
 
+  test("check --writes: a forbidden request on load does not hide trigger Drift (review 3)", async () => {
+    const s = makeSite({ origin: server.url.origin, never: [{ method: "POST", path: "/api/order/place*", why: "Placing an order" }] });
+    const op = rename(async (p) => {
+      await p.goto("/never-gate");
+      await p.evaluate(() => fetch("/api/order/place", { method: "POST", body: "{}" }).catch(() => {}));
+      await p.click("#gone", { timeout: 500 });
+    });
+    const warnings: string[] = [];
+    const out = await chromeWriteChecker(s, { SITE_CLI_HOME: home.dir })([op], [], [op], (m) => warnings.push(m));
+    expect((out.get(op.name) as DriftEntry).fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#gone'):TimeoutError");
+    expect(warnings).toHaveLength(1);
+  }, 90_000);
+
   test("check --writes reads a form post by its content-type: a form Contract passes, a JSON one drifts", async () => {
     received.length = 0;
     const s = makeSite({ origin: server.url.origin });

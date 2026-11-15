@@ -14,7 +14,7 @@ import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverChecked
 import { forbiddenRequest, neverProblems, neverRuleLabel, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { ensureProfileDir } from "./session";
-import { effectiveOrigin, isLoginHost, tokenMatches, type Site } from "./site";
+import { effectiveOrigin, isLoginHost, tokenMatches, type NeverRule, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
 /**
@@ -100,6 +100,9 @@ export async function check(client: Client, operations: Operation[], options: Ch
   let stopped: Failure | undefined;
   /** The first request site.never refused (a variable built a forbidden path): a bug, reported unless something drifted. */
   let refused: NeverSent | undefined;
+  /** Write triggers that reached only requests site.never forbids, and the warnings that say so: a bug too. */
+  const neverTriggers: string[] = [];
+  const neverWarnings: string[] = [];
 
   for (const op of selected) {
     if (stopped?.kind === "session") {
@@ -176,12 +179,18 @@ export async function check(client: Client, operations: Operation[], options: Ch
     const reads = operations.filter((op) => op.effect === "read");
     const declaredWrites = operations.filter((op) => op.effect === "write");
     try {
-      const warn = (m: string) => void warnings.push(m);
+      const warn = (m: string) => {
+        warnings.push(m);
+        neverWarnings.push(m);
+      };
       const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env, client.fromProfile()))(withTrigger, reads, declaredWrites, warn);
       for (const op of withTrigger) {
         const d = outcome.get(op.name);
         // The trigger stopped at a request site.never forbids: the plugin's trigger is wrong, no Drift.
-        if (d === "never") rows.push({ operation: op.name, effect: "write", status: "failed", reason: "never" });
+        if (d === "never") {
+          rows.push({ operation: op.name, effect: "write", status: "failed", reason: "never" });
+          neverTriggers.push(op.name);
+        }
         else if (d) drifts.push(d);
         else rows.push({ operation: op.name, effect: "write", status: "ok" });
       }
@@ -198,6 +207,10 @@ export async function check(client: Client, operations: Operation[], options: Ch
     throw new Failure("drift", `check: ${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation).join(", ")}.${also}`, { drifts });
   }
   if (refused) throw refused;
+  if (neverTriggers.length > 0) {
+    const why = neverWarnings.filter((w) => neverTriggers.some((name) => w.startsWith(`${name}'s trigger`)));
+    throw new ContractError(`check: a trigger reached only requests site.never forbids: ${why.join(" ")}`);
+  }
   if (stopped) throw stopped;
   return { ok: warnings.length === 0, operations: rows, ...(warnings.length ? { warnings } : {}) };
 }
@@ -304,7 +317,23 @@ export type TriggerVerdict = "target" | "pass" | "abort" | "never";
  * - every other request, and every other declared write Operation, is aborted.
  */
 export function triggerVerdict(site: Site, target: Operation, writes: Operation[], reads: Operation[], origin: string, req: Captured): TriggerVerdict {
-  if (forbiddenRequest(site, capturedRequest(req))) return "never";
+  return triggerDecision(site, target, writes, reads, origin, req).verdict;
+}
+
+/** triggerVerdict with the site.never rule that made it "never". */
+export function triggerDecision(
+  site: Site,
+  target: Operation,
+  writes: Operation[],
+  reads: Operation[],
+  origin: string,
+  req: Captured,
+): { verdict: TriggerVerdict; rule?: NeverRule } {
+  const rule = forbiddenRequest(site, capturedRequest(req));
+  return rule ? { verdict: "never", rule } : { verdict: otherVerdict(site, target, writes, reads, origin, req) };
+}
+
+function otherVerdict(site: Site, target: Operation, writes: Operation[], reads: Operation[], origin: string, req: Captured): TriggerVerdict {
   if (matchesOperation(site, target, origin, req)) return "target";
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return "pass";
   if (writes.some((w) => w !== target && matchesOperation(site, w, origin, req))) return "abort";
@@ -482,12 +511,9 @@ async function checkOne(
     const contentType = (await req.allHeaders())["content-type"];
     const raw = req.postData() ?? undefined;
     const c: Captured = { method: req.method(), url: new URL(req.url()), body: parseCaptured(raw ?? null, contentType), contentType, raw };
-    const verdict = triggerVerdict(site, op, writes, reads, origin, c);
+    const { verdict, rule } = triggerDecision(site, op, writes, reads, origin, c);
     if (verdict === "target") captured ??= c;
-    if (verdict === "never") {
-      const rule = forbiddenRequest(site, capturedRequest(c))!;
-      forbidden.set(neverRuleLabel(rule), rule.why);
-    }
+    if (rule) forbidden.set(neverRuleLabel(rule), rule.why);
     return verdict === "pass" ? route.continue() : route.abort();
   };
   await context.route("**/*", handler);
@@ -507,10 +533,11 @@ async function checkOne(
   for (const [label, why] of forbidden) {
     warn(`${op.name}'s trigger sent a request site.never forbids (${label}: ${why}); it was aborted. Change the trigger so it stops before that request.`);
   }
-  // It reached only what the plugin must never send: a trigger to fix, not Drift (the warning says which).
-  if (!captured && forbidden.size > 0) return "never";
   if (!captured && signedOut) {
     throw new Failure("session", `${signIn[0]!.toUpperCase()}${signIn.slice(1)} is signed out of ${site.origin}, so ${op.name} could not be checked.`);
   }
+  // It reached only what the plugin must never send, and nothing failed: a trigger to fix, not Drift
+  // (the warning says which). A trigger that failed, or a sign-out, is reported as before.
+  if (!captured && forbidden.size > 0 && triggerError === undefined) return "never";
   return compareWrite(site, op, captured, triggerError);
 }
