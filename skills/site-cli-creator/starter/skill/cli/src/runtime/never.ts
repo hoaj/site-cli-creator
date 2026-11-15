@@ -75,13 +75,60 @@ function normalPath(pathname: string): string {
 const methodMatches = (rule: NeverRule, method: string) => !rule.method || rule.method === method.toUpperCase();
 const nameMatches = (rule: NeverRule, names: string[]) => rule.graphql !== undefined && names.some((n) => n.toLowerCase() === rule.graphql!.toLowerCase());
 
-/** The operation names a GraphQL document carries: its operationName and every definition in its query. */
+/**
+ * The root fields of every mutation in a GraphQL document, aliases resolved: `placeOrder` in
+ * `mutation X { done: placeOrder(cartId: $c) { id } }`. A client names its operation as it likes, so
+ * a rule must also see what the mutation does. Fragment spreads at the root are not followed.
+ */
+function mutationRootFields(query: string): string[] {
+  const code = stripNoise(query);
+  const out: string[] = [];
+  const token = /(\.\.\.\s*(?:on\s+)?|@)?([_A-Za-z][_0-9A-Za-z]*)(\s*:)?/y;
+  let depth = 0;
+  let parens = 0;
+  let top = "";
+  let inMutation = false;
+  for (let i = 0; i < code.length; ) {
+    const ch = code[i]!;
+    if (ch === "(") parens++;
+    else if (ch === ")") parens = Math.max(0, parens - 1);
+    else if (parens > 0) {
+      // arguments and variable definitions: no fields
+    } else if (ch === "{") {
+      if (depth === 0) {
+        inMutation = /\bmutation\b/.test(top);
+        top = "";
+      }
+      depth++;
+    } else if (ch === "}") depth = Math.max(0, depth - 1);
+    else if (depth === 0) top += ch;
+    else if (depth === 1 && inMutation && /[_A-Za-z.@]/.test(ch)) {
+      token.lastIndex = i;
+      const m = token.exec(code);
+      if (m) {
+        if (!m[1] && !m[3]) out.push(m[2]!); // a field; `alias:` is skipped, its field comes next
+        i += m[0].length;
+        continue;
+      }
+    }
+    i++;
+  }
+  return out;
+}
+
+/**
+ * The names a GraphQL document carries: its operationName, every definition's name in its query, and
+ * every mutation's root fields.
+ */
 function graphqlNames(doc: unknown): string[] {
   if (!doc || typeof doc !== "object") return [];
   const d = doc as { operationName?: unknown; query?: unknown };
   const names: string[] = [];
   if (typeof d.operationName === "string") names.push(d.operationName);
-  if (typeof d.query === "string") for (const def of topLevelDefinitions(stripNoise(d.query))) if (def.name) names.push(def.name);
+  if (typeof d.query === "string") {
+    for (const def of topLevelDefinitions(stripNoise(d.query))) if (def.name) names.push(def.name);
+    names.push(...mutationRootFields(d.query));
+  }
   return names;
 }
 
@@ -222,7 +269,7 @@ export function neverInSource(site: Site, files: { path: string; text: string }[
       .filter((rule) => {
         if (rule.path === undefined) {
           const name = escape(rule.graphql!);
-          return new RegExp(`\\b(?:query|mutation|subscription)\\s+${name}(?![\\w$])|["'\`]${name}["'\`]`, "i").test(f.text);
+          return new RegExp(`\\b(?:query|mutation|subscription)\\s+${name}(?![\\w$])|\\boperationName["']?\\s*:\\s*["'\`]${name}["'\`]`, "i").test(f.text);
         }
         const glob = globRe(rule.path);
         return paths.some((p) => glob.test(p.path) && (!rule.method || methodNear(f.text, p.at) === rule.method));
@@ -237,10 +284,13 @@ export function neverInSource(site: Site, files: { path: string; text: string }[
  */
 export class NeverSent extends ContractError {
   readonly rule: NeverRule;
-  constructor(rule: NeverRule, what = "A request") {
-    super(`${what} is a request site.never forbids (${neverRuleLabel(rule)}: ${rule.why}), so nothing was sent.`);
+  /** The Operation whose own request it was; undefined for a hook's request or a redirect hop. */
+  readonly operation?: string;
+  constructor(rule: NeverRule, operation?: string) {
+    super(`${operation ?? "A request"} is a request site.never forbids (${neverRuleLabel(rule)}: ${rule.why}), so nothing was sent.`);
     this.name = "NeverSent";
     this.rule = rule;
+    this.operation = operation;
   }
 }
 
@@ -267,8 +317,7 @@ async function bodyText(body: RequestInit["body"], request: Request | undefined)
 
 const MAX_HOPS = 20;
 const GUARDED = Symbol("site.never guard");
-/** Headers that carry the session: never sent on a redirect off the site's domain. */
-const SESSION_HEADERS = ["authorization", "cookie", "proxy-authorization"];
+
 /** Headers that describe a body: dropped when a redirect turns the request into a GET, as fetch does. */
 const BODY_HEADERS = ["content-type", "content-length", "content-encoding", "content-language", "content-location"];
 
@@ -277,8 +326,9 @@ const BODY_HEADERS = ["content-type", "content-length", "content-encoding", "con
  * A fetch that refuses what site.never forbids: the Client wraps every fetch it makes with it (the
  * Operations', the hooks' ctx.fetch, login.refresh.renew's). Redirects are followed by hand, as fetch
  * would follow them, so every hop is checked before it is sent:
- * - 303, and 301/302 after a non-GET, go on as a GET without the body or its headers;
- * - a hop off the site's domain (and off the current origin) goes without the session's headers;
+ * - 303 (but after HEAD), and 301/302 after a POST, go on as a GET without the body or its headers;
+ * - a hop to another origin goes without `authorization`, as fetch's; one off the site's domain, or
+ *   from https to http, also without the cookie;
  * - a caller's own `redirect: "manual"` or "error" is kept (the Client's fetchFollowing).
  * The answer is fetch's: `redirected` and `url` set after a redirect, a TypeError after 20 hops or
  * on a 307/308 that would resend a stream body, every hop's body cancelled, the request's signal kept.
@@ -317,8 +367,8 @@ export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverS
       }
       if (hop >= MAX_HOPS) throw new TypeError(`fetch followed more than ${MAX_HOPS} redirects`);
       const next = new URL(location, url);
-      if (res.status === 303 || ((res.status === 301 || res.status === 302) && method !== "GET" && method !== "HEAD")) {
-        if (method !== "HEAD") method = "GET";
+      if ((res.status === 303 && method !== "GET" && method !== "HEAD") || ((res.status === 301 || res.status === 302) && method === "POST")) {
+        method = "GET";
         body = undefined;
         text = undefined;
         for (const h of BODY_HEADERS) headers.delete(h);
@@ -326,7 +376,12 @@ export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverS
       if ((res.status === 307 || res.status === 308) && body instanceof ReadableStream) {
         throw new TypeError("fetch cannot follow a 307/308 redirect that resends a stream body");
       }
-      if (next.origin !== new URL(url).origin && !onSiteDomain(domain, next.hostname)) for (const h of SESSION_HEADERS) headers.delete(h);
+      const from = new URL(url);
+      if (next.origin !== from.origin) {
+        headers.delete("authorization");
+        headers.delete("proxy-authorization");
+        if (!onSiteDomain(domain, next.hostname) || (from.protocol === "https:" && next.protocol !== "https:")) headers.delete("cookie");
+      }
       refuse({ method, url: next.href, body: text });
       await res.body?.cancel().catch(() => {});
       url = next.href;

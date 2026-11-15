@@ -25,7 +25,7 @@ import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from 
 import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
-import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type RefreshConfig, type Site, type SiteCtx } from "./site";
+import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type NeverRule, type RefreshConfig, type Site, type SiteCtx } from "./site";
 
 /** `fromProfile`: seed the sign-in from another Chrome profile's cookies (`login --from-profile`). */
 export type SignInOptions = {
@@ -129,6 +129,14 @@ export function buildRequest(op: Operation, vars: unknown, base: { origin: strin
     }
   }
   return { method: op.rest.method, url: url.toString(), headers, body };
+}
+
+/** A request built without headers, with the session's added as buildRequest adds them (its content-type wins). */
+function withSessionHeaders(req: Request, session: Record<string, string>): Request {
+  const headers: Record<string, string> = { accept: "application/json" };
+  for (const [k, v] of Object.entries(session)) headers[k.toLowerCase()] = v;
+  if (req.headers["content-type"] !== undefined) headers["content-type"] = req.headers["content-type"];
+  return { ...req, headers };
 }
 
 /** A form-urlencoded body from a flat object: arrays repeat their key, undefined and null are left out. */
@@ -384,7 +392,13 @@ export class Client {
         renewed = await withTimeout(refresh.renew({ ...this.siteCtx(current, false), fetch }), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
-        if (refused() || e instanceof NeverSent) throw refused() ?? e; // site.never refused it: nothing left, the record stays
+        if (e instanceof NeverSent) throw e; // refused, uncaught: nothing left, the record stays
+        const caught = refused();
+        if (caught) {
+          // renew caught a refusal, then failed otherwise: what else it sent may have rotated the token.
+          if (!neverSent(e)) this.dropRefresh(current);
+          throw caught;
+        }
         // The error's name only: its message may carry what the site sent.
         const name = errorName(e);
         if (neverSent(e) && attempt < this.deps.retryDelays.length) {
@@ -404,7 +418,11 @@ export class Client {
       }
     }
     const refusal = refused();
-    if (refusal) throw refusal;
+    if (refusal) {
+      // renew caught a refusal: a renewal it still made is kept (the old token may be spent), then the bug is reported.
+      if (renewed?.headers) await this.adopt({ ...current, headers: renewed.headers, ...(renewed.refresh && { refresh: renewed.refresh }), savedAt: new Date().toISOString() });
+      throw refusal;
+    }
     if (!renewed?.headers) {
       // Refused: perhaps because another run spent the token meanwhile. Its session wins, and a
       // session.json another run already changed is left as it is.
@@ -565,7 +583,8 @@ export class Client {
       throw new Failure("input", `${op.name}: ${issues}`);
     }
     // Before the dry run too: a request the CLI never sends is no dry run to confirm.
-    const never = forbiddenOperation(this.site, op) ?? this.forbiddenBuilt(op, v.data);
+    const built = this.prebuild(op, v.data);
+    const never = forbiddenOperation(this.site, op) ?? built?.rule;
     if (never) {
       const refused = new NeverSent(never, op.name);
       this.noteRefusal(refused);
@@ -574,9 +593,9 @@ export class Client {
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
     await this.ensureSession();
     await this.probeSession();
-    let res = await this.send(op, v.data);
+    let res = await this.send(op, v.data, built?.req);
     // Renew, then sign in (or rerun bootstrap): each at most once a run, so this ends.
-    while (this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data);
+    while (this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data, built?.req);
     if (this.isAuthFailure(op, res)) {
       const after =
         this.site.auth === "login"
@@ -587,13 +606,18 @@ export class Client {
     return this.classify(op, res);
   }) as Call;
 
-  /** The site.never rule the request this Operation would send with these variables breaks, if any. */
-  private forbiddenBuilt(op: Operation, vars: unknown) {
+  /**
+   * With a never list: the request this Operation sends with these variables (built once, the
+   * session's headers added by send) and the rule it breaks, if any. Undefined without a list, or
+   * when it cannot be built: its dry run or send() reports that, as without a list.
+   */
+  private prebuild(op: Operation, vars: unknown): { req: Request; rule?: NeverRule } | undefined {
     if (!Array.isArray(this.site.never) || this.site.never.length === 0) return undefined;
     try {
-      return forbiddenRequest(this.site, buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: {} }));
+      const req = buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: {} });
+      return { req, rule: forbiddenRequest(this.site, req) };
     } catch {
-      return undefined; // a request that cannot be built: its dry run or send() reports it, as without a never list
+      return undefined;
     }
   }
 
@@ -649,9 +673,9 @@ export class Client {
     return op.graphql !== undefined && gqlErrors(res.body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
   }
 
-  private async send(op: Operation, vars: unknown): Promise<Response_> {
+  private async send(op: Operation, vars: unknown, prebuilt?: Request): Promise<Response_> {
     const session = this.session ?? (await this.ensureSession());
-    const req = buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: session.headers });
+    const req = prebuilt ? withSessionHeaders(prebuilt, session.headers) : buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: session.headers });
     const delays = this.deps.retryDelays;
     for (let attempt = 0; ; attempt++) {
       let res: Response_ | undefined;

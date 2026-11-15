@@ -305,7 +305,7 @@ describe.skipIf(skip)("Chrome", () => {
     expect(received.filter((r) => r.startsWith("PATCH"))).toEqual([]);
   }, 90_000);
 
-  test("check --writes: a trigger that reaches only a site.never request is 'never', with its warning, not no_request Drift (review 2)", async () => {
+  test("check --writes: a trigger that reaches only a site.never request is trigger Drift naming the rule, with its warning (review 2, review 4)", async () => {
     received.length = 0;
     const s = makeSite({ origin: server.url.origin, never: [{ method: "POST", path: "/api/order/place*", why: "Placing an order" }] });
     const op = rename(async (p) => {
@@ -314,7 +314,12 @@ describe.skipIf(skip)("Chrome", () => {
     });
     const warnings: string[] = [];
     const out = await chromeWriteChecker(s, { SITE_CLI_HOME: home.dir })([op], [], [op], (m) => warnings.push(m));
-    expect(out.get(op.name)).toBe("never");
+    const drift = out.get(op.name) as DriftEntry;
+    expect(drift.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger::no_request");
+    expect(drift.diff).toEqual([
+      { path: "", code: "no_request" },
+      { path: "POST /api/order/place*", code: "site_never" },
+    ]);
     expect(warnings).toEqual([
       "PATCH /api/orders/:orderId's trigger sent a request site.never forbids (POST /api/order/place*: Placing an order); it was aborted. Change the trigger so it stops before that request.",
     ]);
@@ -330,7 +335,12 @@ describe.skipIf(skip)("Chrome", () => {
     });
     const warnings: string[] = [];
     const out = await chromeWriteChecker(s, { SITE_CLI_HOME: home.dir })([op], [], [op], (m) => warnings.push(m));
-    expect((out.get(op.name) as DriftEntry).fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#gone'):TimeoutError");
+    const drift = out.get(op.name) as DriftEntry;
+    expect(drift.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#gone'):TimeoutError");
+    expect(drift.diff).toEqual([
+      { path: "locator('#gone')", code: "TimeoutError" },
+      { path: "POST /api/order/place*", code: "site_never" },
+    ]);
     expect(warnings).toHaveLength(1);
   }, 90_000);
 

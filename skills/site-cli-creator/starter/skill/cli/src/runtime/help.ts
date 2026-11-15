@@ -78,6 +78,7 @@ export function commandHelp(site: Site, commands: Command[], name: string) {
 }
 
 export function help(site: Site, commands: Command[]) {
+  const never = neverList(site);
   const builtins = [
     { name: "help", summary: "Commands, flags and exit codes as JSON" },
     ...(site.auth === "login" ? [{ name: "login", summary: "Open Chrome so the user signs in; run it when a command fails with kind session" }] : []),
@@ -96,7 +97,7 @@ export function help(site: Site, commands: Command[]) {
     builtins,
     globalFlags: GLOBAL_FLAGS,
     // site.never: what the CLI never does, whatever the flags; the user does it on the site.
-    ...(neverList(site).length > 0 && { never: neverList(site) }),
+    ...(never.length > 0 && { never }),
     exitCodes: (Object.entries(EXIT) as [keyof typeof EXIT, number][]).map(([kind, code]) => ({
       code,
       kind,

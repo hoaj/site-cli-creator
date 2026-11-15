@@ -77,7 +77,8 @@ export type RefreshConfig = {
 /**
  * A request the CLI must never send (SPEC §6). `path` is a glob over the URL path (`*` is any run of
  * characters, `/` included; case-insensitive) with an optional `method` (else every method);
- * `graphql` is a GraphQL operation name, matched wherever a request carries it. `why` says what the
+ * `graphql` is a GraphQL operation name, matched wherever a request carries it, and against every
+ * mutation's root fields (case-insensitive: `PlaceOrder` also covers `mutation X { placeOrder }`). `why` says what the
  * request does and why the CLI never sends it ("Placing an order: the user always pays").
  */
 export type NeverRule =
