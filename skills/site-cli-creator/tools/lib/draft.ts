@@ -150,6 +150,8 @@ export function draftOperation(
     const fieldKeys = bodyFields ? Object.keys(bodyFields.fields) : [];
     const optional = new Set(bodyFields?.optional ?? []);
     const urlKeys = [...params, ...queryKeys.filter((k) => !params.includes(k))];
+    // A query key some calls did not send: check can call the Operation without it.
+    const queryOptional = new Set(op.request.query?.type === "object" ? (op.request.query.optional ?? []) : []);
     const rest: string[] = [`method: ${JSON.stringify(op.method)}`, `path: ${JSON.stringify(path)}`];
     if (queryKeys.length) {
       const pairs = queryKeys.map((k) => `${propertyKey(k)}: v[${JSON.stringify(k)}]`).join(", ");
@@ -170,7 +172,7 @@ export function draftOperation(
     }
     lines.push(`  rest: { ${rest.join(", ")} },`);
     const varLines = [
-      ...urlKeys.filter((k) => !fieldKeys.includes(k)).map((k) => `    ${propertyKey(k)}: z.string(),`),
+      ...urlKeys.filter((k) => !fieldKeys.includes(k)).map((k) => `    ${propertyKey(k)}: z.string()${queryOptional.has(k) && !params.includes(k) ? ".optional()" : ""},`),
       ...fieldKeys.map((k) => `    ${propertyKey(k)}: ${indent(zodSource(bodyFields!.fields[k], 0), 2)}${optional.has(k) ? ".optional()" : ""},`),
       ...(bodyShape && !bodyFields && bodyShape.type !== "record" ? [`    body: ${indent(zodSource(bodyShape, 0), 2)},`] : []),
     ];

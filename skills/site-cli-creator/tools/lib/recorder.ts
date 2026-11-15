@@ -14,6 +14,7 @@ import {
   mediaType,
   mergeBodies,
   mergeOptional,
+  mergeShapes,
   parseJson,
   queryShape,
   redactPath,
@@ -723,7 +724,8 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
     else responses[i] = mergeResponse(responses[i]!, r);
   }
   responses.sort((x, y) => x.status - y.status);
-  const query = mergeOptional(a.request.query, b.request.query);
+  // A query string on only some of the calls: each of its keys is optional, as a key seen only sometimes is.
+  const query = a.request.query && b.request.query ? mergeShapes(a.request.query, b.request.query) : allOptional(a.request.query ?? b.request.query);
   const variables = mergeOptional(a.request.variables, b.request.variables);
   const bearer = mergeOptional(a.request.bearerClaims, b.request.bearerClaims);
   const body = a.request.body && b.request.body ? mergeBodies(a.request.body, b.request.body) : (a.request.body ?? b.request.body);
@@ -745,6 +747,12 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
     seen: a.seen + b.seen,
     aborted: a.aborted + b.aborted,
   };
+}
+
+/** An object shape with every key optional (a query string some calls did not have at all). */
+function allOptional(shape: Shape | undefined): Shape | undefined {
+  if (shape?.type !== "object") return shape;
+  return { ...shape, optional: Object.keys(shape.fields).sort() };
 }
 
 /** A text as a URL slug: lower case, letters and digits joined by single dashes. */

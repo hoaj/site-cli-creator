@@ -376,7 +376,8 @@ describe("CaptureRecorder", () => {
     expect(g!.request.variables).toEqual({ type: "object", fields: { id: { type: "string" }, email: { type: "string" } } });
     expect(inv!.seen).toBe(2);
     expect(inv!.responses.map((x) => x.status)).toEqual([200, 404]);
-    expect(inv!.request.query).toEqual({ type: "object", fields: { email: { type: "string" }, page: { type: "string" } } });
+    // The second call sent no query string: each key is optional (cold read, #102).
+    expect(inv!.request.query).toEqual({ type: "object", fields: { email: { type: "string" }, page: { type: "string" } }, optional: ["email", "page"] });
     expect(note!.aborted).toBe(1);
     expect(note!.responses).toEqual([]);
     expect(note!.request.body).toEqual({ kind: "json", shape: { type: "object", fields: { text: { type: "string" } } } });
