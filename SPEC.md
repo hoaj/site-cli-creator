@@ -305,8 +305,13 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 - **session:** a 401, a 403, a redirect to login, or a session probe that does not answer 2xx (handled as in §7). Only for `auth: "login"`.
 - **network:** 5xx responses, 429 and transport errors, retried 1–2 times.
 - **network, `blocked`:** a bot protection refused the request as automated traffic. Decided in [report a bot block as its own failure, not as Drift](https://github.com/hoaj/site-cli-creator/issues/95).
-  - **Signals:** a `cf-mitigated` header (Cloudflare), an `x-datadome` header on a refusal (DataDome), or, in an answer that is not JSON, a known challenge or block page (Cloudflare's "Just a moment…", DataDome's captcha host, PerimeterX, Imperva, Akamai, a reCAPTCHA or hCaptcha). Any status counts, since a challenge can come as 200. Only the vendor's name is kept: the envelope's `blocked` field says which, and nothing the site sent leaves the check.
-  - **Behaviour:** it is checked before anything else, so it is never Drift, never retried, and no sign-in, `bootstrap` rerun or renewal is spent on it. A `sessionProbe` answered by a block is not a sign-out.
+  - **Signals:** only what a block itself carries, never what a vendor puts on every page of a site it protects (Cloudflare's challenge-platform script, DataDome's `x-datadome` header, Imperva's resource script). A real sign-out or a real Drift on a protected site must stay what it is.
+    - **Cloudflare's `cf-mitigated` header**, which it sets on a challenge only.
+    - **A challenge or block page** in an answer that is not JSON, at any status (a challenge can come as 200): Cloudflare's "Just a moment…" page, DataDome's captcha host, PerimeterX's captcha, an Imperva incident page, an Akamai reference page.
+    - **A captcha wall** (reCAPTCHA, hCaptcha, "checking your browser"), but only on a refusal (403, 429, 503): a sign-in page carries a captcha too.
+
+    Only the vendor's name is kept: the envelope's `blocked` field says which, and nothing the site sent leaves the check.
+  - **Behaviour:** it is checked before anything else, so it is never Drift, never retried, and no sign-in, `bootstrap` rerun or renewal is spent on it. A `sessionProbe` answered by a block is not a sign-out. A site hook's own request (`bootstrap`, `postLogin`, `renew`) that meets the wall is the same block, not a bug, and `renew` keeps its refresh token, which the site never took.
   - **What the agent does:** exit 5 like other network failures, but its `next` says the site refused the request as automated traffic: tell the user, stop, and work around nothing. If it keeps happening, the plugin cannot reach the site this way, and the agent offers a feature request ("the site blocks the CLI") through the Feedback skill; the maintainer then looks at `transport: "browser"` (§7).
   - **Unrecognised walls:** a wall with none of these signals is still an `auth` or `zod` Drift, which `fix` traces to `transport: "browser"` (§7).
 - **input:** fails the variables or flag schema, so no call is made.

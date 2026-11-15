@@ -13,6 +13,7 @@ import { copyExpected, fillTokens, OPERATION_NAMES } from "../fixtures/expected/
 import { ACCOUNT, INVOICES, USER } from "../fixtures/site/data";
 import { loginOriginFor } from "../fixtures/site/hosts";
 import { DRIFTS, startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
+import { setCookiePairs } from "../starter/skill/cli/src/runtime/call";
 
 const PLUGIN_ROOT = resolve(import.meta.dir, "../../..");
 const STARTER_CLI = resolve(import.meta.dir, "../starter/skill/cli");
@@ -660,11 +661,7 @@ function hookCtx(origin: string, headers: Headers) {
   const set = new Map<string, string>();
   const ctxFetch = async (url: string | URL | Request, init?: RequestInit) => {
     const res = await fetch(url, init);
-    for (const c of res.headers.getSetCookie()) {
-      const pair = c.split(";")[0]!;
-      const eq = pair.indexOf("=");
-      if (eq > 0) set.set(pair.slice(0, eq), pair.slice(eq + 1));
-    }
+    for (const [name, value] of setCookiePairs(res.headers)) set.set(name, value);
     return res;
   };
   return { fetch: ctxFetch, cookies: async () => Object.fromEntries(set), origin, headers, ids: {}, refresh: {}, decodeJwt };

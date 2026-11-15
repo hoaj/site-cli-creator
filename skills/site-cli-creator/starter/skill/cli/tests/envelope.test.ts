@@ -30,6 +30,9 @@ describe("envelope helpers", () => {
     expect(cli.next).toMatch(/automated traffic.*stop.*not retry.*raw calls.*every time.*acme-feedback.*feature request.*only if the user says yes/s);
     const mcp = errorEnvelope(f, { ...site, repo: "acme/acme-plugin" }, "mcp").error;
     expect(mcp.next).toMatch(/automated traffic.*feature request/s);
+    // One sentence per step, the consent last: never "... says yes as a feature request" (review).
+    expect(mcp.next).toEndWith("Do either only if the user says yes.");
+    expect(mcp.next).not.toContain("says yes as");
     expect(mcp.next).not.toContain("--");
     expect(errorEnvelope(new Failure("network", "down"), site).error).not.toHaveProperty("blocked");
   });

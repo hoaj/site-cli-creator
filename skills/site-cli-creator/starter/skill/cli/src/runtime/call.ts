@@ -52,7 +52,7 @@ export type Deps = {
    */
   plainFetch?: Fetch;
   /** transport "browser": the cookies Chrome holds for the origin, by name (SiteCtx.cookies). */
-  cookies?(): Promise<Record<string, string>>;
+  cookies?(cookieHeader?: string): Promise<Record<string, string>>;
   /** Opens Chrome on the login profile; null when sign-in didn't complete (headless: the profile is logged out). */
   login(headless: boolean, options?: SignInOptions): Promise<SignedIn | null>;
   /**
@@ -260,16 +260,18 @@ export class Client {
     const chrome = base ? undefined : this.deps.cookies;
     const fetch: Fetch = async (input, init) => {
       const res = await send(input, init);
-      for (const c of res.headers.getSetCookie?.() ?? []) {
-        const pair = c.split(";")[0]!;
-        const eq = pair.indexOf("=");
-        if (eq > 0) set.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
-      }
+      // A hook's request (bootstrap's first one, renew's) meets a bot wall as often as an Operation:
+      // the same block, never a bug in the hook.
+      const json = /json/i.test(res.headers.get("content-type") ?? "");
+      const blocked = blockSignal(res.status, res.headers, json ? undefined : await res.clone().text().catch(() => undefined));
+      if (blocked) throw this.blockedFailure("site.ts", blocked);
+      for (const [name, value] of setCookiePairs(res.headers)) set.set(name, value);
       return res;
     };
     return {
       fetch,
-      cookies: async () => ({ ...(chrome ? await chrome().catch(() => ({})) : {}), ...Object.fromEntries(set) }),
+      // Chrome opens with the session's cookies, as for the Operations; a Failure (no Chrome) passes on.
+      cookies: async () => ({ ...(chrome ? await chrome(session.headers.cookie) : {}), ...Object.fromEntries(set) }),
       origin: this.origin,
       headers: { ...session.headers },
       ids: { ...session.ids },
@@ -364,6 +366,8 @@ export class Client {
         renewed = await withTimeout(refresh.renew(this.siteCtx(current, false, fetch)), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
+        // A bot wall refused the token request: the site never took the token, which stays; the block is reported.
+        if (e instanceof Failure && e.details.blocked) throw e;
         // The error's name only: its message may carry what the site sent.
         const name = errorName(e);
         if (neverSent(e) && attempt < this.deps.retryDelays.length) {
@@ -470,6 +474,8 @@ export class Client {
   }
 
   private async bootstrap(): Promise<Session> {
+    // transport "browser": a fresh tab, so ctx.cookies() is what the site sets now, not the old jar.
+    await this.deps.release?.();
     const empty: Session = { headers: {}, ids: {}, savedAt: new Date().toISOString() };
     const r = await this.site.bootstrap!(this.siteCtx(empty, false));
     this.session = saveSession(this.dir, { headers: r.headers ?? {}, ids: r.ids ?? {} });
@@ -520,9 +526,10 @@ export class Client {
    * The site refused the request as automated traffic (SPEC §10): network, never Drift, since
    * nothing in the site changed that a Contract describes. `blocked` names the bot protection.
    */
-  private blockedFailure(op: Operation, blocked: string): Failure {
+  private blockedFailure(what: Operation | string, blocked: string): Failure {
     const how = this.site.transport === "browser" ? ", even from Chrome" : "";
-    return new Failure("network", `${op.name}: the site refused the request as automated traffic${how} (bot protection: ${blocked}).`, { blocked });
+    const name = typeof what === "string" ? what : what.name;
+    return new Failure("network", `${name}: the site refused the request as automated traffic${how} (bot protection: ${blocked}).`, { blocked });
   }
 
   /**
@@ -711,28 +718,44 @@ export class Client {
 }
 
 /**
- * Markers in an answer that is not JSON (readBody gave text): a bot protection's challenge or block
- * page. Matched, never kept: only the vendor name leaves this function. First match wins.
+ * Markers in an answer that is not JSON (readBody gave text) that only a bot protection's challenge
+ * or block page carries, at any status (a challenge can come as 200). Not what vendors put on every
+ * page of a site they protect (Cloudflare's challenge-platform script, Imperva's _Incapsula_Resource,
+ * PerimeterX's client script, DataDome's x-datadome header). Matched, never kept: only the vendor
+ * name leaves blockSignal. First match wins.
  */
 const BLOCK_PAGES: [RegExp, string][] = [
-  [/cf-chl|challenge-platform|cf_chl_opt|<title>Just a moment\.\.\.<\/title>|Attention Required! \| Cloudflare/i, "cloudflare"],
+  [/_cf_chl_opt|<title>Just a moment\.\.\.<\/title>|Attention Required! \| Cloudflare/i, "cloudflare"],
   [/captcha-delivery\.com/i, "datadome"],
-  [/px-captcha|_pxCaptcha|perimeterx/i, "perimeterx"],
-  [/Incapsula incident|_Incapsula_Resource/i, "imperva"],
+  [/px-captcha|_pxCaptcha/i, "perimeterx"],
+  [/Incapsula incident/i, "imperva"],
   [/errors\.edgesuite\.net|Reference #\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+/i, "akamai"],
-  [/g-recaptcha|h-captcha|hcaptcha\.com|recaptcha\/api|checking your browser/i, "captcha"],
 ];
+/** A captcha or "checking your browser" wall: only as a refusal, since a sign-in page carries a captcha too. */
+const CAPTCHA_WALL = /g-recaptcha|h-captcha|hcaptcha\.com|recaptcha\/api|checking your browser/i;
+const REFUSALS = new Set([403, 429, 503]);
 
 /**
- * The bot protection that refused a request, or undefined (SPEC §10). Headers first: Cloudflare marks
- * a challenge with `cf-mitigated`, DataDome its refusals with `x-datadome`. Then, for an answer that
- * is not JSON, the challenge pages' markers, whatever the status (a challenge can come as 200).
+ * The bot protection that refused a request, or undefined (SPEC §10): Cloudflare's `cf-mitigated`
+ * header (set on a challenge only), else the block pages' markers, else a captcha wall as a refusal.
  */
 export function blockSignal(status: number, headers: Headers, body: unknown): string | undefined {
   if (headers.has("cf-mitigated")) return "cloudflare";
-  if (status >= 400 && (headers.has("x-datadome") || headers.has("x-dd-b"))) return "datadome";
   if (typeof body !== "string") return undefined;
-  return BLOCK_PAGES.find(([marker]) => marker.test(body))?.[1];
+  const vendor = BLOCK_PAGES.find(([marker]) => marker.test(body))?.[1];
+  if (vendor) return vendor;
+  return REFUSALS.has(status) && CAPTCHA_WALL.test(body) ? "captcha" : undefined;
+}
+
+/** The name=value pairs of a response's Set-Cookie headers (SiteCtx.cookies). */
+export function setCookiePairs(headers: Headers): [string, string][] {
+  const out: [string, string][] = [];
+  for (const c of headers.getSetCookie?.() ?? []) {
+    const pair = c.split(";")[0]!;
+    const eq = pair.indexOf("=");
+    if (eq > 0) out.push([pair.slice(0, eq).trim(), pair.slice(eq + 1).trim()]);
+  }
+  return out;
 }
 
 /** Error codes of a request that never reached the site (Bun's fetch, Node's): safe to send again. */
