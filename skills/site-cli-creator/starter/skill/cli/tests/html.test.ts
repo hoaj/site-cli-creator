@@ -83,6 +83,15 @@ describe("extractHtml", () => {
     });
   });
 
+  test("text leaves out <noscript> markup, and <template> content is never matched, as in a browser (review)", () => {
+    const page = `<!doctype html><html><body><template><ul class="events"><li class="event"><h3 class="title"></h3></ul></template>
+<ul class="events"><li class="event"><div class="media"><noscript><img src="/a.jpg" alt="x"></noscript><h3 class="title">Real</h3></div></ul></body></html>`;
+    expect(extractHtml(page, { events: { each: "li.event", in: "ul.events", fields: { title: "h3.title", media: "div.media" } } })).toEqual({
+      ok: true,
+      value: { events: [{ title: "Real", media: "Real" }] },
+    });
+  });
+
   test("an empty list in a container that is there is an empty list, not Drift", () => {
     expect(extractHtml(PAGE, { items: { each: "li", in: "ul.empty-list", fields: { t: "a" } } })).toEqual({ ok: true, value: { items: [] } });
   });
@@ -131,6 +140,21 @@ describe("an HTML Operation through the Client", () => {
     for (const e of [f, g]) {
       const text = JSON.stringify({ message: e.message, diff: e.diff, fingerprint: e.fingerprint });
       for (const planted of ["Koncert", "Foredrag", "Biblioteket", "Planted", "2026-12-01"]) expect(text).not.toContain(planted);
+    }
+  });
+
+  test("an empty answer from a fragment endpoint is an empty fragment: no results, not Drift (review)", async () => {
+    const fragment = defineOperation({
+      name: "GET /search",
+      effect: "read",
+      rest: { method: "GET", path: "/search" },
+      html: { fields: { hits: { each: "li.hit", fields: { t: "a" } } } },
+      variables: z.object({}),
+      response: z.object({ hits: z.array(z.object({ t: z.string().nullable() })) }),
+    });
+    for (const res of [() => htmlResponse(""), () => new Response(null, { status: 204 })]) {
+      const { fetch } = fakeFetch(res);
+      expect(await client(makeSite(), makeDeps(fetch, home.dir).deps).call(fragment, {})).toEqual({ hits: [] });
     }
   });
 

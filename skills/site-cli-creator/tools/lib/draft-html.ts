@@ -42,7 +42,8 @@ function leaves(root: HtmlNode): { node: HtmlNode; path: HtmlNode[] }[] {
   const out: { node: HtmlNode; path: HtmlNode[] }[] = [];
   const walk = (n: HtmlNode, path: HtmlNode[]) => {
     for (const c of n.children ?? []) {
-      if (c.many && c !== root) continue; // a nested list is a list of its own
+      // A repeated element with values inside it is a nested list of its own; a repeated leaf (tags) is one field of all its matches.
+      if (c.many && c !== root && leaves(c).length > 0) continue;
       if (c.text || (c.attrs ?? []).some((a) => VALUE_ATTRS.includes(a) || a.startsWith("data-")) || c.json) out.push({ node: c, path: [...path, c] });
       walk(c, [...path, c]);
     }
@@ -100,11 +101,14 @@ function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean): Field[]
       fields.push({ name: uniqueName(base === "script" ? "data" : base, used), source: `{ css: ${JSON.stringify(`script${type}`)}, json: true }`, zod: zodSource(node.json, 2) });
       continue;
     }
-    if (node.text) fields.push({ name: uniqueName(base, used), source: JSON.stringify(css), zod: "z.string().nullable()" });
+    // A repeated element (tags, several dates) reads every match, so no value is lost.
+    const all = node.many ? ", all: true" : "";
+    const valueZod = node.many ? "z.array(z.string())" : "z.string().nullable()";
+    if (node.text) fields.push({ name: uniqueName(base, used), source: node.many ? `{ css: ${JSON.stringify(css)}${all} }` : JSON.stringify(css), zod: valueZod });
     for (const a of node.attrs ?? []) {
       if (!VALUE_ATTRS.includes(a) && !a.startsWith("data-")) continue;
       const name = node.text || base === (TAG_NAMES[node.tag] ?? node.tag) ? `${base}${attrName(a)[0]!.toUpperCase()}${attrName(a).slice(1)}` : base;
-      fields.push({ name: uniqueName(name, used), source: `{ css: ${JSON.stringify(css)}, attr: ${JSON.stringify(a)} }`, zod: "z.string().nullable()" });
+      fields.push({ name: uniqueName(name, used), source: `{ css: ${JSON.stringify(css)}, attr: ${JSON.stringify(a)}${all} }`, zod: node.many ? "z.array(z.string().nullable())" : valueZod });
     }
   }
   return fields.slice(0, MAX_FIELDS);
@@ -167,12 +171,15 @@ export function draftHtml(outline: HtmlNode[], from?: string): string[] {
  * is left for the agent.
  */
 export function fromSource(path: string): string {
-  const plain = /^[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)*$/;
-  if (plain.test(path)) return `(body: any) => body?.${path.split(".").join("?.")}`;
-  const firstOf = /^\[\]\.([A-Za-z_$][\w$]*)$/.exec(path);
+  // The answer is itself one HTML string (a JSON-encoded fragment).
+  if (path === "") return "(body: any) => body";
+  const access = (key: string) => (/^[A-Za-z_$][\w$]*$/.test(key) ? `?.${key}` : `?.[${JSON.stringify(key)}]`);
+  const keys = path.split(".");
+  if (keys.every((k) => k && k !== "{}" && !k.includes("[]"))) return `(body: any) => body${keys.map(access).join("")}`;
+  const firstOf = /^\[\]\.([^.[\]{}]+)$/.exec(path);
   if (firstOf) {
-    const key = firstOf[1]!;
-    return `(body: any) => (Array.isArray(body) ? body : []).find((item: any) => typeof item?.${key} === "string")?.${key}`;
+    const key = access(firstOf[1]!);
+    return `(body: any) => (Array.isArray(body) ? body : []).find((item: any) => typeof item${key} === "string")${key}`;
   }
   return `(body: any) => undefined /* TODO: return the HTML string at ${path} */`;
 }

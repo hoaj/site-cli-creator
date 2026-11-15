@@ -683,10 +683,12 @@ export class Client {
         page = undefined;
       }
       if (typeof page !== "string") return this.fail(op, "html", "from", "not_html", "the answer no longer carries HTML where html.from looks");
+    } else if (page === undefined) {
+      page = ""; // an empty answer (a fragment endpoint with no results): an empty fragment
     } else if (typeof page !== "string") {
-      return this.fail(op, "html", "", "not_html", `the site no longer answers this request with HTML (${page === undefined ? "an empty answer" : "JSON"})`);
+      return this.fail(op, "html", "", "not_html", "the site no longer answers this request with HTML (JSON)");
     }
-    const out = extractHtml(page, html.fields);
+    const out = extractHtml(typeof page === "string" ? page : "", html.fields);
     if (out.ok) return out.value;
     const why = out.code === "no_match" ? `the page no longer has the element html.fields looks for at ${out.path}` : `the inline JSON at ${out.path} no longer parses`;
     return this.fail(op, "html", out.path, out.code, why, [{ path: out.path, code: out.code }]);

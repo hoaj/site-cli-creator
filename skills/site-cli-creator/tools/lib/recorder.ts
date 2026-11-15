@@ -7,7 +7,7 @@
 
 import { decodeJwt, onSiteDomain, siteDomain } from "../../starter/skill/cli/src/runtime/site";
 import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
-import { htmlInJson, mergeOutlines, type HtmlNode } from "./html-outline";
+import { htmlCharsInJson, htmlInJson, htmlIsTheData, mergeOutlined, outlineHasData, type HtmlNode } from "./html-outline";
 import {
   bodyShape,
   claimsShape,
@@ -425,13 +425,14 @@ export class CaptureRecorder {
   }
 
   /**
-   * A text of an HTML page or fragment: only its slug, when it has several words, since a title is often a
-   * path's slug too (`/events/koncert-i-parken` from "Koncert i parken"). A one-word text is often a link's
+   * A text of an HTML page or fragment: only its slug, when it has three words or more, since a title is often
+   * a path's slug too (`/events/koncert-i-parken` from "Koncert i parken"). A shorter text is often a link's
    * label that is also a route's name ("bills" for `/bills`), so it is never taken as a value.
    */
   private rememberPageText(text: string): void {
+    // Three words at least: a link's label of two ("Mine regninger" for /mine-regninger) is often a route's name.
     const slug = slugOf(text.trim());
-    if (slug.length >= 5 && slug.includes("-")) this.valueSlugs.add(slug);
+    if (slug.split("-").length >= 3) this.valueSlugs.add(slug);
   }
 
   /** Splits a request into the Operations it carries, or null when it is out of scope. */
@@ -626,7 +627,9 @@ export class CaptureRecorder {
         const headers = headerShape(response.headers, (n) => n === "set-cookie");
         const json = splitBodies && call.responseIndex !== undefined ? splitBodies[call.responseIndex] : parsed?.ok ? parsed.value : undefined;
         const embedded = json === undefined ? [] : htmlInJson(json, (s) => this.rememberPageText(s));
-        if (body.kind === "html" || embedded.length) shape.html = true;
+        // Marked only when the HTML is the data: not a SPA's empty shell, not one rich-text field of a JSON API.
+        const jsonChars = json === undefined ? 0 : JSON.stringify(json).length;
+        if ((body.kind === "html" && outlineHasData(body.outline)) || (embedded.length && htmlIsTheData(embedded, htmlCharsInJson(json), jsonChars))) shape.html = true;
         shape.responses = [
           {
             status: response.status,
@@ -659,7 +662,7 @@ export class CaptureRecorder {
   redactValues(path: string): string {
     return path
       .split("/")
-      .map((seg) => {
+      .map((seg, i) => {
         if (!seg || seg.startsWith(":")) return seg;
         const decoded = safeDecode(seg);
         if (decoded.length < 3) return seg;
@@ -667,7 +670,8 @@ export class CaptureRecorder {
         if (this.values.has(decoded)) return ":id";
         if (/[A-Z]/.test(decoded) && this.valueWords.has(decoded)) return ":id";
         // The slug of a value of several words (`Vestergade-12` from "Vestergade 12").
-        if (this.valueSlugs.has(slugOf(decoded))) return ":id";
+        // Never a path's first segment, which names a section of the site (`/kontakt-og-hjaelp`), not an item.
+        if (i > 1 && this.valueSlugs.has(slugOf(decoded))) return ":id";
         return seg;
       })
       .join("/");
@@ -703,7 +707,7 @@ function mergeResponse(a: ResponseShape, b: ResponseShape): ResponseShape {
   for (const e of b.htmlInJson ?? []) {
     const i = embedded.findIndex((x) => x.path === e.path);
     if (i === -1) embedded.push(e);
-    else embedded[i] = { path: e.path, outline: mergeOutlines(embedded[i]!.outline, e.outline), ...(embedded[i]!.truncated || e.truncated ? { truncated: true as const } : {}) };
+    else embedded[i] = { path: e.path, outline: [], ...mergeOutlined(embedded[i]!, e) };
   }
   return {
     status: a.status,

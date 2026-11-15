@@ -100,7 +100,7 @@ Every required variable of a read Operation needs an entry that fits it, or `che
 
 ### HTML Operations
 
-Some sites send their data in no JSON call: a server-rendered page (the Capture's page load, `navigation: true`), an HTML fragment a call fetches (htmx, jQuery's `.load()`), or HTML inside a JSON answer (Drupal's `/views/ajax`). The Capture marks each such Operation `html: true` in `index.json`. Make it an HTML Operation only when no JSON call carries the same data: a JSON call is typed and changes less often.
+Some sites send their data in no JSON call: a server-rendered page (the Capture's page load, `navigation: true`), an HTML fragment a call fetches (htmx, jQuery's `.load()`), or HTML inside a JSON answer (Drupal's `/views/ajax`). The Capture marks each such Operation `html: true` in `index.json`: a page with text in its HTML (not an app's empty shell), a fragment, or a JSON answer whose HTML is most of it (a JSON API with one rich-text field drafts as JSON, its HTML paths named in a comment). Make it an HTML Operation only when no JSON call carries the same data: a JSON call is typed and changes less often.
 
 ```ts
 // From captures/notice-list/GET-notices.shape.json: the page itself carries the notices.
