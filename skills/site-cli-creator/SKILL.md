@@ -79,6 +79,7 @@ bun <gen>/tools/regen.ts --skill-dir <skill>
 - `new.ts --skip-checks` skips the maintainer requirement checks; only tests and CI use it.
 - `capture.ts` records calls to the origin in `site.ts`; `--origin <url>` names another API origin and `--login-host <host>` (repeatable; a host name, no port) a login host not yet in `site.ts`. When nothing was recorded it fails and leaves an earlier Capture of that Task untouched. Its flags for writes, reads sent as POST and unattended Captures (`--script`: a module whose default export gets the Playwright page) are in [reference/add-task.md](reference/add-task.md) step 2.
 - `capture.ts --explore` records a read-only walk through the site into `captures/explore/`, grouped by page; `split-capture.ts` copies one chosen Task's Operations from it into `captures/<slug>/` ([reference/explore.md](reference/explore.md)).
+- Operations the Capture marks `html: true` answered HTML (a page load, a fragment, HTML inside JSON). When no JSON call carries a Task's data, they are HTML Operations: [reference/contracts.md](reference/contracts.md#html-operations).
 - Operations the Capture marks `loginFlow: true` are sign-in steps (token request, post-login). They go into `site.ts` (`login.tokenRequest`, `postLogin`, `readOnlyRequests`), never into `operations/`.
 - `draft-contract.ts --out <file.ts>` writes the draft and refuses to overwrite an existing file; use `--out`, not shell redirection. `--name` is for GraphQL only.
 

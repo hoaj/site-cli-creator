@@ -39,8 +39,8 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cl
 
 1. **State the Tasks.** The user lists, in plain words, what agents should be able to do. For example: "see my subscription and price", "see my latest bill".
 2. **Capture each Task.** The user performs the Task in Chrome while the Capture tool records the calls as shapes only: no values, ids redacted. The Capture tool is a Bun TypeScript script in the generator's skill folder, run with `bun` on the maintainer's machine and never compiled. It drives headed Chrome with a tool-owned profile in `~/.site-cli-creator/profile/`, writes shape files straight into the plugin's `captures/<task>/`, and never writes raw traffic to disk ([Gaps found in the final spec read](https://github.com/hoaj/site-cli-creator/issues/31)). Header values are kept only for an allowlist of names (a spec choice, taken from the capture script). For a **read** Task, the tool aborts every write. For a **write** Task, the user's own write goes through for real, once, so the request and response shapes are both recorded.
-   **Explore first** (decided in [one exploratory Capture, then pick Tasks from what it recorded](https://github.com/hoaj/site-cli-creator/issues/84)). When the user cannot name the Tasks yet, or wants several read Tasks without one Chrome round and sign-in per Task, steps 1 and 2 become one **explore Capture** (`capture.ts --explore`): the user opens every page worth a command, reads only (every write is aborted), and the tool groups the recorded calls by the page that made them, in `captures/explore/`. The agent proposes a candidate Task per page or group of calls, filters each (step 3) and shows all their cards (step 4) at once; the user picks which become commands and may rename them or change outputs. For each chosen Task, `split-capture.ts` copies its Operations into its own `captures/<task>/`, starting from the page that called most of them, so `fix` re-captures one Task as before. The explore Capture stays archived but is never merged into a draft, since its shapes go stale once a Task is re-captured. A write Task and a known Task (a `feature` issue) still get their own Capture.
-3. **Filter Operations.** The agent keeps only the Operations whose fields end up in the Task's output, plus the Operations that supply their variables (the chain). It shows the kept and dropped lists with a one-line reason for each. Writes that fire as a side effect during a read Task, such as YouSee's `createQuote`, are dropped. The Capture is archived complete in `captures/`.
+   **Explore first** (decided in [one exploratory Capture, then pick Tasks from what it recorded](https://github.com/hoaj/site-cli-creator/issues/84)). When the user cannot name the Tasks yet, or wants several read Tasks without one Chrome round and sign-in per Task, steps 1 and 2 become one **explore Capture** (`capture.ts --explore`): the user opens every page worth a command, reads only (every write is aborted), and the tool groups the recorded calls by the page that made them, naming each page's own load when it answered HTML, in `captures/explore/`. The agent proposes a candidate Task per page or group of calls, filters each (step 3) and shows all their cards (step 4) at once; the user picks which become commands and may rename them or change outputs. For each chosen Task, `split-capture.ts` copies its Operations into its own `captures/<task>/`, starting from the page that called most of them, so `fix` re-captures one Task as before. The explore Capture stays archived but is never merged into a draft, since its shapes go stale once a Task is re-captured. A write Task and a known Task (a `feature` issue) still get their own Capture.
+3. **Filter Operations.** The agent keeps only the Operations whose fields end up in the Task's output, plus the Operations that supply their variables (the chain). It shows the kept and dropped lists with a one-line reason for each. Writes that fire as a side effect during a read Task, such as YouSee's `createQuote`, are dropped. Page loads are dropped too, unless the Task's data arrives in no JSON call: then the page load (or the HTML fragment a call fetches) is an HTML Operation (§6). The Capture is archived complete in `captures/`.
 4. **Show a card for the user to confirm.** Nothing is written before the user accepts or edits it:
    ```
    Task 1: "see my subscription and price"
@@ -122,12 +122,19 @@ Each `src/operations/<name>.ts` exports:
 | `name` | the GraphQL `operationName`, or `METHOD /path` for REST |
 | `effect` | `read` or `write`, declared and never inferred from the method |
 | `graphql` / `rest` | the trimmed query: only the fields the CLI reads, not the frontend's text |
+| `html` | when the answer is HTML (below): CSS selectors that pick the values the CLI reads, and `from` when the HTML sits inside a JSON answer |
 | `variables` | a Zod schema, validated before any call (input kind) |
 | `response` | a Zod schema covering only the fields the CLI reads. The script drafts it from the Capture, and the agent cuts it down and decides which fields may be null, because one Capture is too narrow to decide nullability |
 | `needs` | for each variable, where it comes from: another Operation's result plus a pick, `session`, or a constant (`{ value }`: a fixed parameter the command passes). `check` uses this chain, and no personal data is stored |
 | `trigger(page)` | writes only: drives the UI in Playwright up to the request, so `check` can intercept and abort it |
 
 The Zod schema is both the runtime parser and the TypeScript type, so Drift shows up as a parse failure.
+
+**HTML Operations**, decided in [Operations from server-rendered HTML pages](https://github.com/hoaj/site-cli-creator/issues/102). Some sites send their data in no JSON call: a server-rendered page, an HTML fragment a call fetches, or HTML inside a JSON answer (Drupal's `/views/ajax`). Such an Operation is a REST read whose Contract also has `html`:
+- **Picking:** `html.fields` picks the values with CSS selectors (text, an attribute, every match, inline JSON parsed, or a list of items with fields of their own), and `response` parses the picked object as it parses a JSON body. The page is parsed as a browser builds it.
+- **Drift:** a changed layout is Drift like a changed JSON field. Each list names its container (`in`), an element the page has even when the list is empty, so a new layout is Drift and never an empty list; `regen` warns about a list without one.
+- **The Capture** records an HTML answer as an outline: tag names, ids and classes that are site code, attribute names, which elements have text, repeated siblings collapsed into one list item, and an inline JSON script's Shape. It never records a text or an attribute value. `index.json` marks such an Operation `html: true`, and `draft-contract` drafts `html` from the outline.
+- **Kept only when needed:** a JSON call that carries the same data is always kept instead (§3).
 
 ## 7. Login, bootstrap and session
 
@@ -300,6 +307,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
   - a GraphQL validation error;
   - a 404 or 405 on a known REST path;
   - a write request whose shape changed, or a `trigger(page)` that can't find its element;
+  - an HTML Operation's answer that is no longer HTML, a list container that is gone, or inline JSON that no longer parses (§6);
   - a 401 or 403 right after a fresh login, or, for `auth: "none"`, after a rerun of `bootstrap`;
   - the server rejecting input that passed the variables schema.
 - **session:** a 401, a 403, a redirect to login, or a session probe that does not answer 2xx (handled as in §7). Only for `auth: "login"`.
@@ -338,6 +346,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 - Real writes during `check`.
 - Running `check` automatically on users' machines. A repo of plugins may schedule it itself, outside the generator: hoaj/plugins runs every CLI skill's read-only `check` daily and files Drift with the Feedback skill's titles.
 - Rub-style inspection of the site's JS bundle.
+- Values a page's scripts compute with no call and no inline JSON in the page, and XML feeds: HTML Operations read only what the HTML answer itself holds (§6).
 - Private plugins installed without `gh`: a private repo's releases need `gh`, logged in, with read access. Public is the default (§9), accepting that a public plugin publishes a site's internal API shapes, never its values ([Generated plugins: install binaries over HTTPS without gh](https://github.com/hoaj/site-cli-creator/issues/78)).
 - Captchas and other bot walls a real Chrome does not pass on its own, and requests the page's scripts sign one by one. `transport: "browser"` (§7) covers walls that Chrome passes by itself.
 - Jira as a test case: it was replaced by Mit YouSee.
