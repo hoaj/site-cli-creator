@@ -494,6 +494,14 @@ await runTool(async () => {
       "Next.js: serverAction (a POST with a next-action header) and rsc (a text/x-component stream) are never Operations. If an aborted server action broke the page, capture again with --allow-read <its path>. Look for the JSON /api route the page also calls (reference/add-task.md, Next.js sites).",
     );
   }
+  // A site whose data arrives in no JSON call (#102): say where it is instead of leaving only page loads to drop.
+  const data = operations.filter((op) => !op.loginFlow && !op.serverAction && !op.rsc);
+  const plainJson = data.some((op) => !op.html && op.responses.some((r) => r.status >= 200 && r.status < 300 && r.body.kind === "json"));
+  if (!plainJson && data.some((op) => op.html)) {
+    hints.push(
+      "No call answered plain JSON, and some answered HTML (html: true): the data is in the HTML. Keep the page load or fragment that holds it as an HTML Operation, whose Contract picks values with CSS selectors from the shape file's outline (reference/contracts.md, HTML Operations).",
+    );
+  }
   const declared = new Set(loginHosts);
   const undeclared = signInHosts.filter((h) => !declared.has(h));
   if (undeclared.length > 0) {

@@ -8,6 +8,7 @@ How to write the three kinds of AGENT file in a CLI skill. Each section below ha
 | GraphQL read, variable from another Operation | `login/operations/listSubscriptions.ts` |
 | REST read with a query string | `login/operations/listInvoices.ts` |
 | REST read with a path param | `login/operations/getInvoice.ts` |
+| A server-rendered page (HTML Operation), a list read with CSS selectors | `login/operations/listNotices.ts`, `login/commands/notice-list.ts` |
 | GraphQL write with `trigger` | `login/operations/addNote.ts` |
 | Read command with a boolean flag | `login/commands/subscription-show.ts` |
 | Command with a required flag the user supplies (an id checked against a list) | `login/commands/invoice-show.ts` |
@@ -38,7 +39,8 @@ One file per Operation: `cli/src/operations/<file>.ts`, `export default defineOp
 | `name` | GraphQL: the frontend's `operationName`, unchanged. REST: `"GET /api/invoices/:id"`, with `:name` params filled from `variables`. In a Fingerprint the params are written `{name}`: `shop:shop:GET /api/invoices/{id}:http::404` |
 | `effect` | `write` when the call changes the user's data on the site, whatever its method; else `read` |
 | `graphql` | the frontend's operation with every selection the command does not read removed; keep its name, arguments and variable definitions |
-| `rest` | `{ method, path, query?: (vars) => ({...}), body?: (vars) => ({...}), bodyType?: "json" \| "form" }`; build the body the Capture shows from `variables` (below) |
+| `rest` | `{ method, path, query?: (vars) => ({...}), body?: (vars) => ({...}), bodyType?: "json" \| "form" }`; build the body the Capture shows from `variables` (below). A query value that is an array repeats its key (`categories[]=a&categories[]=b`); undefined is left out |
+| `html` | the answer is HTML: `{ fields, from? }` picks the values with CSS selectors ([HTML Operations](#html-operations)) |
 | `variables` | every input the call takes, as Zod; a failure is exit 2 (input) and nothing is sent |
 | `response` | only the fields the command reads (below) |
 | `needs` | where each variable comes from (below) |
@@ -95,6 +97,63 @@ needs: { limit: { value: "1" }, sortBy: { value: "BestMatch" } }                
 `from` is the other Operation's `name`; `pick` gets its parsed `response`. `key: "account"` means the selected `--account`. `value` is a constant (any JSON value) for a fixed parameter the command always passes (a page size, a sort order), or a harmless sample for one only the user can supply (a search word, a choice): keep the Contract's `variables` as the site wants them and put check's input here, not in Zod defaults. A constant must fit its variable's schema: `draft-contract` drafts REST query variables as `z.string()` (a query value is text), so a page size is `{ value: "1" }`, not `{ value: 1 }`. To keep a number variable instead, make it `z.coerce.number()` (or `z.number()`) with `{ value: 1 }`, and turn it into a string in `rest.query` (`limit: String(v.limit)`).
 
 Every required variable of a read Operation needs an entry that fits it, or `check` can never call it: it skips the Operation as `never checkable`, lists it in its output's `warnings` and prints `"ok": false` (still exit 0) (`no needs entry for <variable>`, or `the needs entry for <variable> does not fit variables` for a constant the schema rejects), and `regen.ts` prints the same warnings (`warnings` in its JSON). Fix each one before `check`.
+
+### HTML Operations
+
+Some sites send their data in no JSON call: a server-rendered page (the Capture's page load, `navigation: true`), an HTML fragment a call fetches (htmx, jQuery's `.load()`), or HTML inside a JSON answer (Drupal's `/views/ajax`). The Capture marks each such Operation `html: true` in `index.json`. Make it an HTML Operation only when no JSON call carries the same data: a JSON call is typed and changes less often.
+
+```ts
+// From captures/notice-list/GET-notices.shape.json: the page itself carries the notices.
+export default defineOperation({
+  name: "GET /notices",
+  effect: "read",
+  rest: { method: "GET", path: "/notices", query: (v) => ({ area: v.area }) },
+  html: {
+    fields: {
+      notices: {
+        each: "li.notice",
+        in: "ul.notices", // on the page even when there are no notices
+        fields: {
+          id: { css: ":scope", attr: "data-id" },
+          title: "h3.title",
+          startsAt: { css: "p.when time", attr: "datetime" },
+        },
+      },
+    },
+  },
+  variables: z.object({ area: z.string().min(1).optional() }),
+  response: z.object({
+    notices: z.array(z.object({ id: z.string().min(1), title: z.string().min(1), startsAt: z.string().nullable() })),
+  }),
+});
+```
+
+`html.fields` picks the values; `response` then parses the picked object exactly as it parses a JSON body, and `call` returns it. Each field is one of:
+
+| Field | Picks |
+|---|---|
+| `"h3.title"` | the first match's text (whitespace collapsed, `<br>` a space), or null when nothing matches |
+| `{ css, attr: "href" }` | the first match's attribute, or null |
+| `{ css, all: true }` | every match's text (or `attr`), as a list |
+| `{ css: 'script[type="application/ld+json"]', json: true }` | the first match's text parsed as JSON: inline state (`__NEXT_DATA__`, schema.org data) |
+| `{ each, in, fields }` | a list: one object per element matching `each` inside the first element matching `in`, with `fields` picked inside each item |
+| `{ css: ":scope", attr }` | inside a list, the item element itself |
+
+- **Selectors** come from the outline in the shape file: `responses[].body.outline` for a page or fragment, `responses[].htmlInJson[].outline` for HTML inside JSON. It lists tags, ids (`:id` when the id is data), classes and attribute names; `text: true` marks an element with text of its own, `many: true` a repeated element (a list item), and `json` the Shape of inline JSON. It never holds text, so check which element holds which value by running the command (`bun src/main.ts <noun> <verb>`) and comparing with what the user saw. Prefer classes and ids to positions (`:nth-child`), which move with every new item.
+- **Every list names its container** in `in`: an element the page has even when the list is empty. Without it, a new layout reads as an empty list instead of Drift; `regen.ts` warns about each list without one.
+- **Values are strings or null.** A field the command cannot do without is `z.string().min(1)`, so an element that moved or emptied is Drift; one another page may lack is `.nullable()`. Convert numbers and dates in the command (`Number(x)`, `new Date(x)`), and strip a label the page puts in the text (`"Område: Aarhus C"`) there too.
+- **HTML inside JSON:** `from(body)` gets the parsed JSON and returns the HTML string; parse with Zod. A `from` that throws or returns no string is Drift. `draft-contract` drafts it from the path in `htmlInJson`:
+
+  ```ts
+  html: {
+    from: (body) => z.array(z.object({ command: z.string(), data: z.unknown().optional() })).parse(body).find((c) => c.command === "insert")?.data,
+    fields: { titles: { css: "h2.title", all: true } },
+  },
+  ```
+- **Query keys** that are no identifiers are quoted: `query: (v) => ({ "dates[min]": v.from, "categories[]": v.categories })`.
+- **The request** asks for HTML (`accept: text/html`) and carries the session's headers like any call (with `from`, it asks for JSON). A redirect to a login host is signed out, as for an API.
+- **Drift** has its own Fingerprints: `html:<list>:no_match` (a container gone), `html::not_html` (the answer is no longer HTML), `html:from:not_html`, `html:<field>:invalid_json`; a missing or emptied field is ordinary `zod` Drift on the picked object (`zod:notices[].title:invalid_type`).
+- **Out of reach:** values a page's scripts compute with no call and no inline JSON, XML feeds, and anything behind a captcha.
 
 ### Writes and `trigger`
 

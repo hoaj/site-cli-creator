@@ -334,6 +334,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     assertNoValues(r.everything);
     expect(writesReceived).toEqual([]);
     expect(r.out.stoppedBy).toBe("script finished");
+    expect(JSON.stringify(r.out.hints ?? [])).not.toContain("the data is in the HTML"); // its calls answer JSON
     expect(r.out.operations).toEqual([
       { operation: "GET /", effect: "read", navigation: true, html: true, file: "GET-root.shape.json", aborted: 0 },
       { operation: "GET /api/customers/:id/profile", effect: "read", file: "GET-api-customers-id-profile.shape.json", aborted: 0 },
@@ -608,6 +609,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     const entry = (name: string) => index.operations.find((o: { operation: string }) => o.operation === name);
     expect(entry("GET /events")).toMatchObject({ navigation: true, html: true });
     expect(entry("GET /views/ajax")).toMatchObject({ html: true });
+    expect(r.out.hints.join("\n")).toContain("the data is in the HTML");
     const list = JSON.parse(readFileSync(join(r.dir, entry("GET /events").file), "utf8"));
     const body = list.responses[0].body;
     expect(body.kind).toBe("html");
