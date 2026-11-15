@@ -633,8 +633,7 @@ describe("HTML outlines (#102)", () => {
 </ul><form><input type="hidden" name="csrf" value="${SECRETS.cookie}"></form><!-- ${SECRETS.email} --></body></html>`;
 
   test("tags, ids, classes and attribute names only; repeated siblings collapse; inline JSON is a Shape", () => {
-    const texts: string[] = [];
-    const { outline } = htmlOutline(page, (t) => texts.push(t));
+    const { outline } = htmlOutline(page);
     assertNoSecrets(JSON.stringify(outline));
     expect(outline).toEqual([
       { tag: "script", attrs: ["type"], type: "application/ld+json", json: { type: "object", fields: { name: { type: "string" }, price: { type: "number" } } } },
@@ -665,9 +664,6 @@ describe("HTML outlines (#102)", () => {
         ],
       },
     ]);
-    // The texts are handed to the Capture (to redact a path segment that is one), never recorded.
-    expect(texts).toContain(SECRETS.name);
-    expect(texts).toContain(SECRETS.street);
   });
 
   test("ids and classes with a record number keep their pattern, not the number, and still collapse into a list (review)", () => {
@@ -715,10 +711,34 @@ describe("HTML outlines (#102)", () => {
     ]);
     expect(ops[0]!.responses[0]!.body.kind).toBe("html");
     expect(ops[1]!.responses[0]!.htmlInJson).toEqual([{ path: "[].data", outline: [{ tag: "ul", children: [{ tag: "li", text: true, many: true }] }] }]);
-    // A value seen only as a page text is redacted from a later path, as one seen in JSON is.
-    const detail = r.plan(req({ url: `${origin}/events/${encodeURIComponent(SECRETS.street)}`, resourceType: "document" }))!;
+    // A page's texts are never values the Capture redacts by: a link's label is often a route's name.
+    const detail = r.plan(req({ url: `${origin}/events/4711`, resourceType: "document" }))!;
     r.record(detail, { response: { status: 200, headers: { "content-type": "text/html" }, body: Buffer.from("<p>ok</p>") } });
     expect(r.operations().map((o) => o.operation)).toContain("GET /events/:id");
+  });
+
+  test("only a 2xx answer marks html: a JSON API's HTML error or bot-wall page does not (review 2)", () => {
+    const origin = "https://www.shop.example";
+    const r = new CaptureRecorder({ origin });
+    for (const [status, type, body] of [[200, "application/json", json({ invoices: [] })], [403, "text/html", Buffer.from("<h1>Checking your browser</h1>")]] as const) {
+      const p = r.plan(req({ url: `${origin}/api/invoices` }))!;
+      r.record(p, { response: { status, headers: { "content-type": type }, body } });
+    }
+    expect(r.operations()[0]!.html).toBeUndefined();
+  });
+
+  test("labels of three words or more, from a page or from JSON, never redact a route (review 2)", () => {
+    const origin = "https://www.shop.example";
+    const r = new CaptureRecorder({ origin });
+    const menu = r.plan(req({ url: `${origin}/api/menu` }))!;
+    r.record(menu, { response: { status: 200, headers: { "content-type": "application/json" }, body: json({ items: ["Mobil og bredbånd", "TV og streaming"] }) } });
+    const page = r.plan(req({ url: `${origin}/`, resourceType: "document" }))!;
+    r.record(page, { response: { status: 200, headers: { "content-type": "text/html" }, body: Buffer.from('<nav><a href="/produkter/kontakt-og-hjaelp-her">Kontakt og hjaelp her</a></nav>') } });
+    for (const path of ["/produkter/mobil-og-bredband", "/produkter/tv-og-streaming", "/produkter/kontakt-og-hjaelp-her"]) {
+      const p = r.plan(req({ url: `${origin}${path}` }))!;
+      r.record(p, { response: { status: 200, headers: { "content-type": "application/json" }, body: json({ ok: true }) } });
+    }
+    expect(r.operations().map((o) => o.operation)).toEqual(["GET /api/menu", "GET /", "GET /produkter/mobil-og-bredband", "GET /produkter/tv-og-streaming", "GET /produkter/kontakt-og-hjaelp-her"]);
   });
 
   test("page texts never redact a route: a short label, or any label for a path's first segment (review)", () => {
@@ -731,7 +751,8 @@ describe("HTML outlines (#102)", () => {
       const p = r.plan(req({ url: `${origin}${path}`, resourceType: "fetch" }))!;
       r.record(p, { response: { status: 200, headers: { "content-type": "application/json" }, body: json({ ok: true }) } });
     }
-    expect(r.operations().map((o) => o.operation)).toEqual(["GET /", "GET /om-os", "GET /mine-regninger", "GET /api/mine-regninger", "GET /kontakt-og-hjaelp-her", "GET /events/:id"]);
+    // A title's slug stays too: the agent renames such a segment to :id (add-task step 2), as for any value the Capture missed.
+    expect(r.operations().map((o) => o.operation)).toEqual(["GET /", "GET /om-os", "GET /mine-regninger", "GET /api/mine-regninger", "GET /kontakt-og-hjaelp-her", "GET /events/koncert-i-parken"]);
   });
 
   test("html marks only an answer whose HTML carries data: not a SPA's empty shell, not a JSON API with a rich-text field (review)", () => {

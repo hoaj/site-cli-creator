@@ -48,7 +48,7 @@ export default async (page) => {
 };
 ```
 
-The Capture lands in `<skill>/captures/<slug>/`: one `<operation>.shape.json` per Operation and `index.json` listing Operations in call order with an effect guess. Shapes hold no values: ids, dotted names and any path segment that matches a value the page sent or received become `:id`, and record keys collapse. Before committing, read the REST paths in `index.json` once: a segment that is still a name, a place or a word the user typed is a value; rename it to `:id` in the shape file and its `operation`. Then commit all of it.
+The Capture lands in `<skill>/captures/<slug>/`: one `<operation>.shape.json` per Operation and `index.json` listing Operations in call order with an effect guess. Shapes hold no values: ids, dotted names and any path segment that matches a value the page sent or received become `:id`, and record keys collapse. Before committing, read the REST paths in `index.json` once: a segment that is still a name, a place, a word the user typed or a title's slug (`/events/koncert-i-parken`) is a value; rename it to `:id` in the shape file and its `operation`. Then commit all of it.
 
 If nothing reached the origin, `capture.ts` exits with an error and leaves any earlier Capture of the Task as it was: check `--url`, `--origin` and that the Task was performed, then run it again.
 

@@ -44,8 +44,8 @@ export function looksLikeHtml(text: string): boolean {
   return /^\s*<(?:[a-z][\w-]*|!doctype)[\s>/]/i.test(text) && /<\/[a-z][\w-]*\s*>\s*$/i.test(text);
 }
 
-/** The outline of `html`; `remember` gets each text and inline JSON string, for redacting paths that carry one. */
-export function htmlOutline(html: string, remember: (text: string) => void = () => {}): HtmlOutline {
+/** The outline of `html`. */
+export function htmlOutline(html: string): HtmlOutline {
   const doc = parseHtml(html);
   let count = 0;
   let truncated = false;
@@ -58,7 +58,7 @@ export function htmlOutline(html: string, remember: (text: string) => void = () 
       const name = el.name.toLowerCase();
       if (DROPPED.has(name)) continue;
       if (name === "script") {
-        const json = inlineJson(el, remember);
+        const json = inlineJson(el);
         if (json) out.push(json);
         continue;
       }
@@ -77,7 +77,7 @@ export function htmlOutline(html: string, remember: (text: string) => void = () 
         const text = (child as { data: string }).data.trim();
         if (!text) continue;
         own.text = true;
-        remember(text);
+        break;
       }
       if (!LEAVES.has(name)) {
         const children = walk(el.children as Node[], depth + 1);
@@ -117,25 +117,17 @@ function describe(el: Element): Omit<HtmlNode, "tag"> {
   return out;
 }
 
-function inlineJson(el: Element, remember: (text: string) => void): HtmlNode | null {
+function inlineJson(el: Element): HtmlNode | null {
   const type = (el.attribs?.type ?? "").toLowerCase();
   if (!type.includes("json")) return null;
   const node: HtmlNode = { tag: "script", ...describe(el) };
   try {
     const value: unknown = JSON.parse(DomUtils.textContent(el));
-    collectStrings(value, remember);
     node.json = shapeOf(value);
   } catch {
     node.text = true;
   }
   return node;
-}
-
-function collectStrings(value: unknown, into: (s: string) => void, depth = 0): void {
-  if (depth > 64) return;
-  if (typeof value === "string") into(value);
-  else if (Array.isArray(value)) for (const v of value) collectStrings(v, into, depth + 1);
-  else if (value && typeof value === "object") for (const v of Object.values(value)) collectStrings(v, into, depth + 1);
 }
 
 /** What makes two siblings one list: tag, classes and type. Ids differ per item (`ev-101`, `ev-102`). */
@@ -221,13 +213,13 @@ export function mergeOutlines(a: HtmlNode[], b: HtmlNode[]): HtmlNode[] {
  * field), with the outline of what each held. Paths are written as in a Fingerprint: `[].data`, with
  * keys that carry data as `{}`.
  */
-export function htmlInJson(value: unknown, remember: (text: string) => void = () => {}): { path: string; outline: HtmlNode[]; truncated?: true }[] {
+export function htmlInJson(value: unknown): { path: string; outline: HtmlNode[]; truncated?: true }[] {
   const found = new Map<string, HtmlOutline>();
   const walk = (v: unknown, path: string, depth: number) => {
     if (depth > 64 || found.size > 20) return;
     if (typeof v === "string") {
       if (!looksLikeHtml(v)) return;
-      const o = htmlOutline(v, remember);
+      const o = htmlOutline(v);
       const seen = found.get(path);
       found.set(path, seen ? { outline: [], ...mergeOutlined(seen, o) } : o);
     } else if (Array.isArray(v)) {

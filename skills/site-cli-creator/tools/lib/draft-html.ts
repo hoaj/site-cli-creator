@@ -2,6 +2,9 @@
 // outline the Capture recorded: the element repeated most is the list, its parent the list's container
 // (`in`), and each element inside an item that has text, or an attribute worth reading, is a field. The
 // agent then keeps the fields the command reads, names them, and decides which may be null.
+import { selectOne } from "css-select";
+import type { AnyNode, Element } from "domhandler";
+import { parseHtml } from "../../starter/skill/cli/src/runtime/html";
 import type { HtmlNode } from "./html-outline";
 import { zodSource } from "./zod-source";
 
@@ -67,13 +70,77 @@ function findList(nodes: HtmlNode[], above: HtmlNode[] = []): { item: HtmlNode; 
   return best;
 }
 
-/** A selector for `path`'s last node relative to the scope: its own, or with the nearest named ancestor in front. */
-function relativeSelector(path: HtmlNode[], siblings: { node: HtmlNode; path: HtmlNode[] }[]): string {
-  const own = selectorOf(path.at(-1)!);
-  const clash = siblings.filter((s) => selectorOf(s.node) === own).length > 1;
-  if (!clash) return own;
+const VOID = new Set(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"]);
+
+/**
+ * The outline as a page skeleton, each node an element marked `data-o`: a drafted selector is tried on it the way
+ * the runtime runs it (css-select's selectOne from the scope), so it picks the element it was drafted from and
+ * not an earlier one that also matches (a nav's `ul`, a `span.icon` before the title's `span`, a header's `h2`).
+ */
+class Skeleton {
+  private readonly marks = new Map<HtmlNode, string>();
+  private readonly els = new Map<string, Element>();
+  private readonly doc: ReturnType<typeof parseHtml>;
+
+  constructor(outline: HtmlNode[]) {
+    let next = 0;
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
+    const render = (node: HtmlNode): string => {
+      const mark = String(next++);
+      this.marks.set(node, mark);
+      const attrs = [`data-o="${mark}"`];
+      if (node.id) attrs.push(`id="${esc(node.id)}"`);
+      if (node.classes?.length) attrs.push(`class="${esc(node.classes.join(" "))}"`);
+      if (node.type) attrs.push(`type="${esc(node.type)}"`);
+      for (const a of node.attrs ?? []) if (a !== "type" && /^[a-z][\w.:-]*$/i.test(a)) attrs.push(`${a}=""`);
+      const open = `<${node.tag} ${attrs.join(" ")}>`;
+      return VOID.has(node.tag) ? open : `${open}${(node.children ?? []).map(render).join("")}</${node.tag}>`;
+    };
+    this.doc = parseHtml(`<!doctype html><html><body>${outline.map(render).join("")}</body></html>`);
+    const walk = (nodes: AnyNode[]) => {
+      for (const n of nodes) {
+        const el = n as Element;
+        if (!el.attribs) continue;
+        if (el.attribs["data-o"] !== undefined) this.els.set(el.attribs["data-o"], el);
+        walk(el.children as AnyNode[]);
+      }
+    };
+    walk(this.doc.children as AnyNode[]);
+  }
+
+  /** Whether `css`, run from `scope` (null: the page) as the runtime runs it, first matches `target`. */
+  picks(css: string, scope: HtmlNode | null, target: HtmlNode): boolean {
+    const within = scope ? this.els.get(this.marks.get(scope) ?? "") : undefined;
+    if (scope && !within) return false;
+    try {
+      const hit = selectOne<AnyNode, Element>(css, within ?? (this.doc.children as AnyNode[]));
+      return hit !== null && hit.attribs["data-o"] === this.marks.get(target);
+    } catch {
+      return false;
+    }
+  }
+}
+
+/** `:nth-of-type(k)` for `node` among `siblings` with its tag, when it is not the only one. */
+function nthOfType(node: HtmlNode, siblings: HtmlNode[]): string {
+  const same = siblings.filter((s) => s.tag === node.tag);
+  return same.length > 1 ? `:nth-of-type(${same.indexOf(node) + 1})` : "";
+}
+
+/**
+ * A selector for `path`'s last node, run from `scope` (whose children are `top`): the first of its own selector,
+ * the nearest named ancestor's with it, the child path, and the child path with positions, that picks it on the
+ * skeleton. With none, the last (it may still pick the right element on the real page).
+ */
+function verifiedSelector(path: HtmlNode[], top: HtmlNode[], sk: Skeleton, scope: HtmlNode | null, anchored = false): string {
+  const target = path.at(-1)!;
+  const own = selectorOf(target);
   const named = [...path.slice(0, -1)].reverse().find((n) => !isPlain(n));
-  return named ? `${selectorOf(named)} ${own}` : path.map(selectorOf).join(" > ");
+  const positioned = path.map((n, i) => `${selectorOf(n)}${nthOfType(n, i === 0 ? top : (path[i - 1]!.children ?? []))}`).join(" > ");
+  const withNamed = named ? [`${selectorOf(named)} ${own}`] : [];
+  // A container that is a bare tag (`ul`) breaks as soon as the page gains an earlier one: anchor it to a named ancestor first.
+  const candidates = anchored && isPlain(target) ? [...withNamed, own, path.map(selectorOf).join(" > "), positioned] : [own, ...withNamed, path.map(selectorOf).join(" > "), positioned];
+  return candidates.find((css) => sk.picks(css, scope, target)) ?? positioned;
 }
 
 function uniqueName(name: string, used: Set<string>): string {
@@ -83,7 +150,8 @@ function uniqueName(name: string, used: Set<string>): string {
   return n;
 }
 
-function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean): Field[] {
+/** The fields inside `root`, each selector verified on `sk` from `scope` (null: the page, `root` a stand-in for it). */
+function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean, sk: Skeleton, scope: HtmlNode | null): Field[] {
   const fields: Field[] = [];
   if (ownAttrs) {
     for (const a of root.attrs ?? []) {
@@ -94,7 +162,7 @@ function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean): Field[]
   const found = leaves(root);
   for (const { node, path } of found) {
     if (fields.length >= MAX_FIELDS) break;
-    const css = relativeSelector(path, found);
+    const css = verifiedSelector(path, root.children ?? [], sk, scope);
     const base = camel([node.classes?.[0] ?? (node.id !== ":id" ? node.id : undefined) ?? TAG_NAMES[node.tag] ?? node.tag].filter((x): x is string => !!x));
     if (node.json) {
       const type = node.type ? `[type=${JSON.stringify(node.type)}]` : "";
@@ -127,19 +195,21 @@ export function draftHtml(outline: HtmlNode[], from?: string): string[] {
   const lines: string[] = [];
   const list = findList(outline);
   const used = new Set<string>();
+  const sk = new Skeleton(outline);
   let fieldsSource: string;
   let responseSource: string;
   if (list) {
     const parent = list.above.at(-1);
-    const named = [...list.above].reverse().find((n) => !isPlain(n));
-    const container = parent ? (isPlain(parent) && named && named !== parent ? `${selectorOf(named)} ${parent.tag}` : selectorOf(parent)) : undefined;
+    // The container is the first element its selector matches on the page (a nav's ul comes first): verified.
+    const container = parent ? verifiedSelector(list.above, outline, sk, null, true) : undefined;
+    const each = parent ? verifiedSelector([list.item], parent.children ?? [], sk, parent) : selectorOf(list.item);
     const listName = camel([parent?.classes?.[0] ?? (parent?.id !== ":id" ? parent?.id : undefined) ?? "items"].filter((x): x is string => !!x));
-    const itemFields = fieldsOf(list.item, new Set(), true);
+    const itemFields = fieldsOf(list.item, new Set(), true, sk, list.item);
     const name = uniqueName(listName === parent?.tag ? "items" : listName, used);
     const inPart = container ? `, in: ${JSON.stringify(container)}` : "";
     fieldsSource = [
       `      ${name}: {`,
-      `        each: ${JSON.stringify(selectorOf(list.item))}${inPart},`,
+      `        each: ${JSON.stringify(each)}${inPart},`,
       "        fields: {",
       objectLines(itemFields, 5, "source"),
       "        },",
@@ -150,7 +220,7 @@ export function draftHtml(outline: HtmlNode[], from?: string): string[] {
     lines.push(`  // file). Drafted: the repeated ${selectorOf(list.item)} as the list${container ? `, in its container ${container}, which must be on` : "; give it a container (`in`) that is on"}`);
     lines.push(`  // the page even when the list is empty, so a changed layout is Drift instead of an empty list.`);
   } else {
-    const fields = outline.flatMap((n) => fieldsOf({ tag: "#root", children: [n] }, used, false)).slice(0, MAX_FIELDS);
+    const fields = fieldsOf({ tag: "#root", children: outline }, used, false, sk, null);
     fieldsSource = objectLines(fields, 3, "source");
     responseSource = [`  response: z.object({`, objectLines(fields, 2, "zod"), "  }),"].join("\n");
     lines.push(`  // The page answers HTML: html.fields picks the values with CSS selectors (the outline is in the shape`);

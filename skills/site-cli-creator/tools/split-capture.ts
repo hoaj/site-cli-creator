@@ -145,5 +145,15 @@ await runTool(async () => {
     operations: chosen,
   };
   writeJson(join(dir, "index.json"), index);
-  return { task, dir, startPath, operations: chosen.map((e) => ({ operation: e.operation, file: e.file })) };
+  // A page load is an Operation only when no JSON call carries the data (add-task step 3): name the JSON reads its page made.
+  const warnings: string[] = [];
+  for (const e of chosen.filter((c) => c.navigation)) {
+    const reads = explore.index.operations.filter(
+      (o) => o !== e && !o.navigation && !o.loginFlow && !o.serverAction && !o.rsc && !o.html && o.effect === "read" && o.aborted < o.seen && (o.pages ?? []).some((p) => (e.pages ?? []).includes(p)),
+    );
+    if (reads.length) {
+      warnings.push(`${e.operation} is a page load, and its page also called JSON reads (${reads.map((o) => o.operation).join(", ")}): keep those instead when they carry the Task's data, and drop the page load (reference/add-task.md step 3).`);
+    }
+  }
+  return { task, dir, startPath, operations: chosen.map((e) => ({ operation: e.operation, file: e.file })), ...(warnings.length ? { warnings } : {}) };
 });

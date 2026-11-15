@@ -186,7 +186,9 @@ export function draftOperation(
     if (body.truncated) lines.push("  // The page was too big to outline whole: the shape file's outline is cut short.");
     lines.push(...draftHtml(body.outline));
   } else if (embedded.length && op.html) {
-    const [first] = embedded;
+    // The richest HTML string holds the data (the listing, not a status message beside it).
+    const size = (nodes: { children?: unknown[] }[]): number => nodes.reduce((n, c) => n + 1 + size((c.children ?? []) as { children?: unknown[] }[]), 0);
+    const [first] = [...embedded].sort((a, b) => size(b.outline) - size(a.outline));
     lines.push(`  // The JSON answer carries HTML at ${embedded.map((e) => e.path).join(", ")}: drafted as an HTML Operation`);
     lines.push(`  // whose html.from returns the HTML at ${first!.path}. If the JSON's own fields hold the data, draw`);
     lines.push("  // response from the shape file's JSON body instead and drop html.");
