@@ -11,21 +11,31 @@ import { driftFingerprint, errorName, operationSegment, zodDiff } from "./finger
 import { stripNoise, topLevelDefinitions, type GraphqlType } from "./graphql";
 import { closeContext, launch, launchInMemory, profileState } from "./login";
 import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverCheckedWarning } from "./needs";
+import { forbiddenRequest, neverProblems, neverRuleLabel } from "./never";
 import type { Operation } from "./operation";
 import { ensureProfileDir } from "./session";
 import { effectiveOrigin, isLoginHost, tokenMatches, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
-/** `warnings`: read Operations that can never be checked (a required variable nothing in `needs` supplies). */
-/** `ok` is false when `warnings` lists an Operation check could not cover; the exit stays 0 (no Drift). */
+/**
+ * `warnings`: read Operations that can never be checked (a required variable nothing in `needs`
+ * supplies), and triggers that sent a request site.never forbids (aborted). `ok` is false when
+ * `warnings` lists any; the exit stays 0 (no Drift).
+ */
 export type CheckResult = { ok: boolean; operations: CheckRow[]; warnings?: string[] };
 export type CheckOptions = { op?: string; writes?: boolean; account?: string };
 /**
  * Checks write Operations; returns one entry per Operation, null when its request still matches.
  * `reads` are the registry's read Operations: requests matching them may pass while a trigger runs.
  * `declaredWrites` are all the registry's write Operations: they are always aborted (triggerVerdict).
+ * `warn` gets one line per trigger that sent a request site.never forbids (aborted, not Drift).
  */
-export type WriteChecker = (writes: Operation[], reads: Operation[], declaredWrites?: Operation[]) => Promise<Map<string, DriftEntry | null>>;
+export type WriteChecker = (
+  writes: Operation[],
+  reads: Operation[],
+  declaredWrites?: Operation[],
+  warn?: (message: string) => void,
+) => Promise<Map<string, DriftEntry | null>>;
 
 /** Operations ordered so every Operation comes after the ones it `needs`; ties keep registry order. */
 export function chainOrder(ops: Operation[]): Operation[] {
@@ -73,6 +83,9 @@ export function withChain(ops: Operation[], name: string): Operation[] {
 }
 
 export async function check(client: Client, operations: Operation[], options: CheckOptions, checkWrites?: WriteChecker): Promise<CheckResult> {
+  // A Contract for a request the CLI never sends is a bug in the plugin, whatever --op selects.
+  const forbidden = neverProblems(client.site, operations);
+  if (forbidden.length) throw new ContractError(`check: site.never forbids Operations in the registry: ${forbidden.join("; ")}`);
   const target = options.op ? findOperation(operations, options.op) : undefined;
   const selected = chainOrder(target ? withChain(operations, target.name) : operations);
   const rows: CheckRow[] = [];
@@ -154,7 +167,8 @@ export async function check(client: Client, operations: Operation[], options: Ch
     const reads = operations.filter((op) => op.effect === "read");
     const declaredWrites = operations.filter((op) => op.effect === "write");
     try {
-      const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env, client.fromProfile()))(withTrigger, reads, declaredWrites);
+      const warn = (m: string) => void warnings.push(m);
+      const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env, client.fromProfile()))(withTrigger, reads, declaredWrites, warn);
       for (const op of withTrigger) {
         const d = outcome.get(op.name);
         if (d) drifts.push(d);
@@ -259,10 +273,12 @@ function graphqlReadOnly(site: Site, reads: Operation[], origin: string, req: Ca
   );
 }
 
-export type TriggerVerdict = "target" | "pass" | "abort";
+export type TriggerVerdict = "target" | "pass" | "abort" | "never";
 
 /**
  * What happens to one request while a write's trigger(page) runs:
+ * - a request site.never forbids is aborted and reported ("never"), whatever else would let it
+ *   through (a GET, a login host, a declared read, tokenRequest, readOnlyRequests);
  * - the write under check is captured and aborted ("target");
  * - GET/HEAD/OPTIONS pass, and so do non-GET requests to a login host;
  * - a GraphQL request (a POST to site.graphqlPath, or a GraphQL document sent anywhere) is decided
@@ -275,6 +291,7 @@ export type TriggerVerdict = "target" | "pass" | "abort";
  * - every other request, and every other declared write Operation, is aborted.
  */
 export function triggerVerdict(site: Site, target: Operation, writes: Operation[], reads: Operation[], origin: string, req: Captured): TriggerVerdict {
+  if (forbiddenRequest(site, capturedRequest(req))) return "never";
   if (matchesOperation(site, target, origin, req)) return "target";
   if (["GET", "HEAD", "OPTIONS"].includes(req.method)) return "pass";
   if (writes.some((w) => w !== target && matchesOperation(site, w, origin, req))) return "abort";
@@ -285,6 +302,12 @@ export function triggerVerdict(site: Site, target: Operation, writes: Operation[
   if (site.auth === "login" && site.login?.tokenRequest !== undefined && tokenMatches(site.login.tokenRequest, url)) return "pass";
   if (isReadOnlyRequest(site, url)) return "pass";
   return "abort";
+}
+
+/** A captured request in the form site.never matches: its body as text again. */
+function capturedRequest(req: Captured): { method: string; url: string; body?: string } {
+  const body = req.body === undefined ? undefined : typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+  return { method: req.method, url: req.url.href, body };
 }
 
 /** site.readOnlyRequests: a string matches as a substring of the URL path, a RegExp is tested against the whole URL. */
@@ -407,7 +430,7 @@ const ACTION_TIMEOUT_MS = 15_000;
  * Capture needs no second sign-in and nothing is written.
  */
 export function chromeWriteChecker(site: Site, env = process.env, fromProfile?: string): WriteChecker {
-  return async (writes, reads, declaredWrites = writes) => {
+  return async (writes, reads, declaredWrites = writes, warn = () => {}) => {
     const out = new Map<string, DriftEntry | null>();
     const seeded = site.auth === "login" && fromProfile !== undefined;
     const temp = site.auth === "none" ? mkdtempSync(join(tmpdir(), `${site.skill}-check-`)) : undefined;
@@ -418,7 +441,7 @@ export function chromeWriteChecker(site: Site, env = process.env, fromProfile?: 
       context.setDefaultTimeout(ACTION_TIMEOUT_MS);
       const origin = effectiveOrigin(site, env);
       const signIn = seeded ? `the sign-in carried over from ${fromProfile}` : "the CLI's Chrome profile";
-      for (const op of writes) out.set(op.name, await checkOne(site, context, op, declaredWrites, reads, origin, signIn));
+      for (const op of writes) out.set(op.name, await checkOne(site, context, op, declaredWrites, reads, origin, signIn, warn));
     } finally {
       if (context) await closeContext(context);
       if (temp) rmSync(temp, { recursive: true, force: true });
@@ -435,15 +458,22 @@ async function checkOne(
   reads: Operation[],
   origin: string,
   signIn: string,
+  warn: (message: string) => void,
 ): Promise<DriftEntry | null> {
   let captured: Captured | undefined;
   let signedOut = false;
+  /** Labels of the site.never rules this trigger's requests broke, each reported once. */
+  const forbidden = new Map<string, string>();
   const handler = async (route: Route) => {
     const req = route.request();
     const contentType = (await req.allHeaders())["content-type"];
     const c: Captured = { method: req.method(), url: new URL(req.url()), body: parseCaptured(req.postData(), contentType), contentType };
     const verdict = triggerVerdict(site, op, writes, reads, origin, c);
     if (verdict === "target") captured ??= c;
+    if (verdict === "never") {
+      const rule = forbiddenRequest(site, capturedRequest(c))!;
+      forbidden.set(neverRuleLabel(rule), rule.why);
+    }
     return verdict === "pass" ? route.continue() : route.abort();
   };
   await context.route("**/*", handler);
@@ -460,6 +490,9 @@ async function checkOne(
   for (let waited = 0; !captured && triggerError === undefined && waited < REQUEST_WAIT_MS; waited += 100) await Bun.sleep(100);
   await page.close().catch(() => {});
   await context.unroute("**/*", handler);
+  for (const [label, why] of forbidden) {
+    warn(`${op.name}'s trigger sent a request site.never forbids (${label}: ${why}); it was aborted. Change the trigger so it stops before that request.`);
+  }
   if (!captured && signedOut) {
     throw new Failure("session", `${signIn[0]!.toUpperCase()}${signIn.slice(1)} is signed out of ${site.origin}, so ${op.name} could not be checked.`);
   }

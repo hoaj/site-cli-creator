@@ -1,6 +1,8 @@
 // The site config every CLI skill declares in src/site.ts.
 import type { Call } from "./command";
 import type { Account } from "./envelope";
+import { neverListProblems } from "./never";
+import type { Method } from "./operation";
 
 export type Auth = "login" | "none";
 /**
@@ -72,6 +74,16 @@ export type RefreshConfig = {
   renew: (ctx: SiteCtx) => Promise<{ headers: Record<string, string>; refresh?: Record<string, string> } | null>;
 };
 
+/**
+ * A request the CLI must never send (SPEC §6). `path` is a glob over the URL path (`*` is any run of
+ * characters, `/` included; case-insensitive) with an optional `method` (else every method);
+ * `graphql` is a GraphQL operation name, matched wherever a request carries it. `why` says what the
+ * request does and why the CLI never sends it ("Placing an order: the user always pays").
+ */
+export type NeverRule =
+  | { method?: Method; path: string; graphql?: undefined; why: string }
+  | { graphql: string; method?: undefined; path?: undefined; why: string };
+
 export type SiteConfig = {
   plugin: string;
   skill: string;
@@ -104,6 +116,13 @@ export type SiteConfig = {
    * other non-GET request is aborted during triggers. Never list a request that writes.
    */
   readOnlyRequests?: Array<string | RegExp>;
+  /**
+   * Requests the CLI never sends, whatever a command, a Contract or --confirm says: the runtime
+   * refuses a match before it leaves (exit 1), check and regen refuse a Contract that matches, and
+   * tests/never-sent.test.ts fails CI. The maintainer decides it (placing an order, paying, deleting
+   * the account); regen lists it under SKILL.md's "When NOT to use".
+   */
+  never?: NeverRule[];
   /** Accounts under one login. [] or one account means no --account is needed. */
   accounts?: (ctx: SiteCtx) => Promise<Array<Account | string>>;
 };
@@ -164,6 +183,7 @@ export function siteProblems(site: Site): string[] {
   if (ro !== undefined && (!Array.isArray(ro) || ro.some((p) => !(typeof p === "string" && p !== "") && !(p instanceof RegExp)))) {
     out.push("readOnlyRequests must be a list of non-empty URL path substrings or RegExps");
   }
+  out.push(...neverListProblems(site.never));
   return out;
 }
 

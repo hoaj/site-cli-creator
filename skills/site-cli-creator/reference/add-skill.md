@@ -12,8 +12,11 @@ Done when the skill's Tasks pass `check --writes`, and (outside `new`) the PR is
 | origin | scheme + host the frontend calls, no path | `https://www.yousee.dk` |
 | auth | `login` when the Tasks need the user signed in, else `none` | `login` |
 | Tasks | plain words, one per line; or "explore first" when the user can't name them yet ([explore.md](explore.md)) | "see my subscription and price" |
+| never | what the skill must never do on this site, whatever a later Task needs; or "nothing" | "place an order or pay; delete the account" |
 
 For `login`, confirm the maintainer's own account can perform every Task.
+
+Ask for **never** every time, and propose the usual ones for the site: placing an order, paying, deleting the account, changing the address or the delivery. Writes go through `--confirm`, but an agent can pass it, and a later `add-task` or `fix` can add a Contract nobody meant to allow. Step 4 turns the answer into `site.ts`'s `never` list.
 
 ## 2. Scaffold
 
@@ -45,7 +48,7 @@ mv /tmp/<skill>-captures <plugin>/skills/<skill>/captures && cd <plugin>/skills/
 
 ## 4. Fill in `site.ts`
 
-Write `login` (with `postLogin`) or `bootstrap`, and `accounts` if one login holds several accounts, as [contracts.md](contracts.md) describes. The Capture holds what you need: its output's `loginHosts` (also in `captures/<task>/index.json`) names the hosts the sign-in went through, which go in `login.hosts`; `request.bearerClaims` in the shape files lists the claim names `postLogin` can decode from the bearer, `responses[].setCookies` names the cookies a response set (what `bootstrap` must fetch), and the API shapes' request headers show what every call sends back. For `tokenRequest`, pick a request every load of the start page sends: compare the first Task's Capture with another Task's Capture of the same start page (capturing the same `--task` again replaces the first one) and use a request that is in both. In an explore Capture, a request whose `pages` in `index.json` lists every page the user opened is a candidate; a frontend that keeps its token sends it only once, so still compare with a second Capture of the start page (the first Task's, or a write Task's) before choosing.
+Write `login` (with `postLogin`) or `bootstrap`, `accounts` if one login holds several accounts, and `never` from step 1's answer, as [contracts.md](contracts.md) describes. For `never`, find the requests in the Captures: a read Capture lists the writes it aborted, and the explore Capture records every page's calls. A request the user has not met yet (the order button is behind a full cart) gets an entry from the path the user or the site's own pages give (`/checkout*`). Ask when you are unsure. An entry that is too broad costs nothing but a Task you cannot add. The Capture holds what you need: its output's `loginHosts` (also in `captures/<task>/index.json`) names the hosts the sign-in went through, which go in `login.hosts`; `request.bearerClaims` in the shape files lists the claim names `postLogin` can decode from the bearer, `responses[].setCookies` names the cookies a response set (what `bootstrap` must fetch), and the API shapes' request headers show what every call sends back. For `tokenRequest`, pick a request every load of the start page sends: compare the first Task's Capture with another Task's Capture of the same start page (capturing the same `--task` again replaces the first one) and use a request that is in both. In an explore Capture, a request whose `pages` in `index.json` lists every page the user opened is a candidate; a frontend that keeps its token sends it only once, so still compare with a second Capture of the start page (the first Task's, or a write Task's) before choosing.
 
 Then check that it works:
 
@@ -68,7 +71,7 @@ Run [add-task.md](add-task.md) from step 3 for the first Task (its Capture exist
 
 ## 6. Description
 
-Rewrite the `description` in `<skill>/SKILL.md` to name the site and the Tasks, starting with "Use when", and the `## When NOT to use` list to name what the skill leaves out (writes it lacks, other people's accounts).
+Rewrite the `description` in `<skill>/SKILL.md` to name the site and the Tasks, starting with "Use when", and the `## When NOT to use` list to name what the skill leaves out (writes it lacks, other people's accounts). Leave the lines between `<!-- never:start -->` and `<!-- never:end -->` alone: `regen` writes the `never` list there.
 
 ## 7. Bump and PR
 

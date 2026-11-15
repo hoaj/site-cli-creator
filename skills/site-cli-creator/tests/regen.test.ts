@@ -263,6 +263,69 @@ describe("regen.ts", () => {
     expect(r.out.warnings).toEqual(['commands/bills.ts holds the command "bill list": name the file bill-list.ts (it is registered as it is).']);
   });
 
+  const NEVER_SITE = (extra = "") => `export default {
+  skill: "shop",
+  auth: "none",
+  needsChrome: true,
+  never: [
+    { method: "POST", path: "/api/order/place*", why: "Placing an order: the user always pays" },
+    { graphql: "DeleteAccount", why: "Deleting the account" },
+  ],${extra}
+};
+`;
+
+  test("a Contract whose request site.never forbids is refused, and nothing is written (#101)", () => {
+    const skill = fakeSkill("never-refused", "none", { getAccount: "read" });
+    writeFileSync(join(skill, "cli/src/site.ts"), NEVER_SITE());
+    write(
+      join(skill, "cli/src/operations/placeOrder.ts"),
+      `import { z } from "zod";\nexport default { name: "POST /api/order/:step", effect: "write", rest: { method: "POST", path: "/api/order/:step" }, variables: z.object({ step: z.string() }), response: z.unknown() };\n`,
+    );
+    write(
+      join(skill, "cli/src/operations/removeMe.ts"),
+      `import { z } from "zod";\nexport default { name: "removeMe", effect: "write", graphql: "mutation DeleteAccount { deleteAccount }", variables: z.object({}), response: z.unknown() };\n`,
+    );
+    const md = readFileSync(join(skill, "SKILL.md"), "utf8");
+    const r = regen(skill);
+    expect(r.code).toBe(1);
+    expect(r.out.error.message).toBe(
+      "site.ts's never list forbids these Operations: operations/placeOrder.ts: POST /api/order/:step matches site.never POST /api/order/place* (Placing an order: the user always pays); operations/removeMe.ts: removeMe matches site.never GraphQL DeleteAccount (Deleting the account). Delete each such Operation and the commands that use it (the CLI never sends these requests), then run regen again. Nothing was written.",
+    );
+    expect(existsSync(join(skill, "cli/src/registry.ts"))).toBe(false);
+    expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe(md);
+  });
+
+  test("the never list is written into SKILL.md's When NOT to use, between its markers; without them it is a warning (#101)", () => {
+    const skill = fakeSkill("never-listed", "none", { getAccount: "read" });
+    writeFileSync(join(skill, "cli/src/site.ts"), NEVER_SITE());
+    const mdPath = join(skill, "SKILL.md");
+    writeFileSync(mdPath, `${SKILL_MD}\n## When NOT to use\n\n- Anyone else's account.\n<!-- never:start -->\n- stale\n<!-- never:end -->\n`);
+    const r = regen(skill);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.out.never).toEqual(["POST /api/order/place*", "GraphQL DeleteAccount"]);
+    const md = readFileSync(mdPath, "utf8");
+    expect(md).toContain(
+      "<!-- never:start -->\n- Placing an order: the user always pays. The CLI never sends `POST /api/order/place*`; the user does it on the site.\n- Deleting the account. The CLI never sends `GraphQL DeleteAccount`; the user does it on the site.\n<!-- never:end -->",
+    );
+    expect(md).not.toContain("stale");
+
+    writeFileSync(mdPath, SKILL_MD);
+    const old = regen(skill);
+    expect(old.code, old.stderr).toBe(0);
+    expect(old.out.warnings).toEqual([
+      "SKILL.md has no <!-- never:start --> and <!-- never:end --> markers, so site.never is not listed under ## When NOT to use: add the two lines at the end of that section and run regen again.",
+    ]);
+    expect(readFileSync(mdPath, "utf8")).toContain("| `shop subscription show`");
+  });
+
+  test("a malformed never list is refused like any site.ts problem (#101)", () => {
+    const skill = fakeSkill("never-bad", "none", { getAccount: "read" });
+    writeFileSync(join(skill, "cli/src/site.ts"), `export default { skill: "shop", auth: "none", needsChrome: false, never: [{ path: "api/x" }] };\n`);
+    const r = regen(skill);
+    expect(r.code).toBe(1);
+    expect(r.out.error.message).toBe("site.ts: never[0] needs a why: what the request does and why the CLI never sends it; never[0].path must start with /");
+  });
+
   test("failures print a JSON error", () => {
     const skill = fakeSkill("help-fails", "none", { getAccount: "read" });
     const r = regen(skill, { FAIL_HELP: "1" });
@@ -315,6 +378,31 @@ describe.skipIf(!realStarterReady)("against the real Starter code and the fixtur
       expect(md).toMatch(/\| `shop note add` \| `--text <text>`[^|]*\| \*\*Write\.\*\*/);
       expect(md).toContain("`shop invoice list`");
       expect(readFileSync(site, "utf8")).toContain("needsChrome: true");
+
+      // site.never (#101): regen lists it under When NOT to use, and the plugin's own never-sent test
+      // passes, then fails once a file names the forbidden path; regen refuses a matching Contract.
+      writeFileSync(site, readFileSync(site, "utf8").replace(/(\n\s*auth: "\w+",)/, `$1\n  never: [{ method: "DELETE", path: "/api/account*", why: "Deleting the account" }],`));
+      const listed = regen(skill);
+      expect(listed.code, listed.stderr).toBe(0);
+      expect(listed.out.warnings).toBeUndefined();
+      const notFor = readFileSync(join(skill, "SKILL.md"), "utf8").split("## When NOT to use")[1]!;
+      expect(notFor).toContain("<!-- never:start -->\n- Deleting the account. The CLI never sends `DELETE /api/account*`; the user does it on the site.\n<!-- never:end -->");
+      const neverSent = () =>
+        Bun.spawnSync([process.execPath, "test", "tests/never-sent.test.ts"], { cwd: join(skill, "cli"), env: { ...process.env, SITE_CLI_TEST: "1" }, stdout: "pipe", stderr: "pipe" });
+      const clean = neverSent();
+      expect(clean.exitCode, clean.stderr.toString()).toBe(0);
+      write(join(skill, "cli/src/lib/close.ts"), 'export const closeUrl = (o: string) => `${o}/api/account/close`;\n');
+      const caught = neverSent();
+      expect(caught.exitCode).toBe(1);
+      expect(caught.stderr.toString()).toContain("src/lib/close.ts names DELETE /api/account* (Deleting the account)");
+      rmSync(join(skill, "cli/src/lib/close.ts"));
+      write(
+        join(skill, "cli/src/operations/closeAccount.ts"),
+        `import { z } from "zod";\nimport { defineOperation } from "../runtime/operation";\nexport default defineOperation({ name: "DELETE /api/account", effect: "write", rest: { method: "DELETE", path: "/api/account" }, variables: z.object({}), response: z.unknown() });\n`,
+      );
+      const refused = regen(skill);
+      expect(refused.code).toBe(1);
+      expect(refused.out.error.message).toContain("operations/closeAccount.ts: DELETE /api/account matches site.never DELETE /api/account* (Deleting the account)");
     });
   }
 });

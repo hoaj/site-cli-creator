@@ -167,6 +167,7 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
 | `bootstrap(ctx)` | `auth: "none"`, before the first call and after a 401/403 | `{ headers, ids? }`: what every call must send (a cookie, a CSRF token) |
 | `accounts(ctx)` | one login holds several accounts | `[{ id, label }]`; with more than one, commands need `--account` |
 | `readOnlyRequests` | the pages send non-GET requests that change no data (token refresh, post-login, analytics the page waits for) | a list of URL path substrings or RegExps (a RegExp is tested against the whole URL) |
+| `never` | always: what the maintainer decided the plugin must never do (place an order, pay, delete the account) | a list of `{ method?, path, why }` or `{ graphql, why }` |
 
 `ctx` is `{ fetch, origin, headers, ids, decodeJwt, call }`: `headers` holds the captured `authorization` and `cookie`, `ids` what `postLogin` returned, and `call` performs an Operation like a command does.
 
@@ -215,6 +216,23 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
   - **Still refused:** add `browserWindow: true`, for a site that refuses headless Chrome (a window then opens on every run).
   - **Still refused after that:** a captcha, or a request the page signs one by one, is out of scope. Tell the user.
 - `readOnlyRequests`: while `check --writes` runs a `trigger`, GET requests pass, and so do non-GET requests to a login host, to `tokenRequest` (login skills), to a declared read Operation and to a `readOnlyRequests` entry. Every other non-GET request is aborted, so an undeclared write never reaches the site. A declared write Operation is aborted even when one of these rules matches its URL. A GraphQL request (a POST to `graphqlPath`, or a GraphQL document sent anywhere) is decided by its documents alone, never by `tokenRequest` or `readOnlyRequests`: it passes only when every document runs a query (the definition its `operationName` selects, else its only one; a fragment first does not hide a mutation) or is named as a declared read Operation. A persisted query sent as a hash only passes when its `operationName` is a declared read, so declare the page's persisted reads as Operations. List a request here only when it changes no data; when a page waits for an aborted POST, its `trigger` times out and `check` reports trigger Drift. Capture's `loginFlow: true` calls usually belong here or in `postLogin`.
+- `never`: the requests the CLI must never send, whatever a later Task needs. `add-skill` asks the maintainer for them ([add-skill.md](add-skill.md) step 1). An `--confirm` guards one call; this list guards the plugin.
+  - **Entries:** `path` is a glob over the URL path. `*` spans any run of characters, `/` included, and matching ignores case and a trailing slash. `method` is optional: leave it out to forbid every method, page loads included. `graphql` is an operation name: it matches the `operationName` and every definition in the query, in a batch or a GET's query string too. `why` names the action and the reason, in one line, because it is what the user reads: `"Placing an order: the user always pays"`.
+  - **Where the paths come from:** the requests the Capture aborted or recorded (a read Capture lists every write it aborted). Write the entry for what the site really sends, broad enough to cover its variants (`/api/order/place*`, `/checkout/*`), and add the GraphQL name too when the site sends one.
+  - **What enforces it:**
+    - `regen` refuses an Operation that matches, naming the entry, and writes nothing.
+    - The CLI refuses a matching request before it leaves (exit 1, `bug`, with its own `next`). That covers a command's `call` before any dry run, a redirect, and the `ctx.fetch` that `postLogin`, `bootstrap`, `accounts` and `refresh.renew` get.
+    - `check` refuses a registry that holds one. `check --writes` aborts a trigger request that matches, even a GET or a `readOnlyRequests` entry, and lists it in `warnings`.
+    - The plugin's `tests/never-sent.test.ts` scans the registry and the source of `operations/`, `commands/` and `lib/`, so CI fails on a match. A comment that names a forbidden path counts too: say "the order request", not the path.
+  - **Shown to agents:** `regen` writes one line per entry under the skill's `## When NOT to use`, and `help` and the MCP server's instructions list them.
+
+  ```ts
+  never: [
+    { method: "POST", path: "/api/order/place*", why: "Placing an order: the user always pays" },
+    { path: "/api/account/*/delete", why: "Deleting the account" },
+    { graphql: "SetDeliveryAddress", why: "Changing the delivery address" },
+  ],
+  ```
 - `accounts` labels are what the user recognises (a product name, the last digits of a number), never a full personal identifier. Only the ids are saved; labels are fetched again when the user must choose.
 
 ```ts

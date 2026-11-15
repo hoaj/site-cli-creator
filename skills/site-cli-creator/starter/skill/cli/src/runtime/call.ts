@@ -2,6 +2,7 @@
 //
 // | condition                                              | kind                                 |
 // | variables fail Zod                                     | input, nothing sent                  |
+// | site.never forbids the request (any hop, any hook)     | bug (NeverSent), nothing sent        |
 // | transport error, 5xx, 429 (after retries)              | network                              |
 // | GraphQL data null + server error code (after retries)  | network (INTERNAL*, SERVICE_UNAVAILABLE) |
 // | login: 401/403/redirect to a login host                | renew (login.refresh), else sign in again; retry; still → drift auth |
@@ -21,6 +22,7 @@ import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
 import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
+import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent, refuseNever } from "./never";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
 import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type RefreshConfig, type Site, type SiteCtx } from "./site";
@@ -251,7 +253,7 @@ export class Client {
   siteCtx(session: Session, live: boolean): SiteCtx {
     const caller = live ? this : new Client(this.site, this.deps, { session, reauth: false, confirm: true });
     return {
-      fetch: this.deps.fetch,
+      fetch: guardFetch(this.site, this.deps.fetch),
       origin: this.origin,
       headers: { ...session.headers },
       ids: { ...session.ids },
@@ -336,7 +338,7 @@ export class Client {
     if (refresh.from !== undefined && Object.keys(current.refresh ?? {}).length === 0) return false; // nothing kept to trade
     this.deps.note(`renewing the sign-in to ${this.site.origin} with its refresh token`);
     let renewed: Awaited<ReturnType<typeof refresh.renew>>;
-    const plain = this.deps.plainFetch ?? this.deps.fetch;
+    const plain = guardFetch(this.site, this.deps.plainFetch ?? this.deps.fetch);
     for (let attempt = 0; ; attempt++) {
       // Plain fetch, never transport "browser"'s Chrome; bounded, and cancelled when time runs out,
       // so no request is left open after the lock is released.
@@ -346,6 +348,7 @@ export class Client {
         renewed = await withTimeout(refresh.renew({ ...this.siteCtx(current, false), fetch }), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
+        if (e instanceof ContractError) throw e; // site.never refused it: nothing left, the record stays
         // The error's name only: its message may carry what the site sent.
         const name = errorName(e);
         if (neverSent(e) && attempt < this.deps.retryDelays.length) {
@@ -489,7 +492,8 @@ export class Client {
     let res: Response_;
     try {
       res = await this.fetchFollowing({ method: "GET", url: url.toString(), headers });
-    } catch {
+    } catch (e) {
+      if (e instanceof ContractError) throw e; // site.never forbids the probe
       return undefined; // network trouble: the Operation itself reports it
     }
     if (res.status >= 200 && res.status < 300 && !res.loginRedirect && !res.offsite) return undefined;
@@ -522,6 +526,9 @@ export class Client {
       const issues = v.error.issues.map((i) => `${fieldPath(i.path, op.variables) || "(variables)"}: ${i.message}`).join("; ");
       throw new Failure("input", `${op.name}: ${issues}`);
     }
+    // Before the dry run too: a request the CLI never sends is no dry run to confirm.
+    const never = forbiddenOperation(this.site, op) ?? this.forbiddenBuilt(op, v.data);
+    if (never) throw new NeverSent(never, op.name);
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
     await this.ensureSession();
     await this.probeSession();
@@ -537,6 +544,16 @@ export class Client {
     }
     return this.classify(op, res);
   }) as Call;
+
+  /** The site.never rule the request this Operation would send with these variables breaks, if any. */
+  private forbiddenBuilt(op: Operation, vars: unknown) {
+    try {
+      return forbiddenRequest(this.site, buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: {} }));
+    } catch (e) {
+      if (e instanceof ContractError) return undefined; // send() reports it
+      throw e;
+    }
+  }
 
   /**
    * The accounts under this login. A list fetched earlier is reused from session.json, ids only:
@@ -599,7 +616,7 @@ export class Client {
       try {
         res = await this.fetchFollowing(req);
       } catch (e) {
-        if (e instanceof Failure) throw e; // transport "browser" with no Chrome to send from
+        if (e instanceof Failure || e instanceof ContractError) throw e; // no Chrome to send from (transport "browser"), or site.never
         transport = (e as { code?: string })?.code || (e as Error)?.name || "error";
       }
       const serverError = res && op.graphql !== undefined ? gqlServerError(res.body) : undefined;
@@ -621,6 +638,7 @@ export class Client {
   private async fetchFollowing(req: Request): Promise<Response_> {
     let { url, method, body } = req;
     for (let hop = 0; hop < 6; hop++) {
+      refuseNever(this.site, { method, url, body }); // every hop: a redirect may lead to a forbidden path
       const r = await this.deps.fetch(url, { method, headers: req.headers, body, redirect: "manual" });
       const location = r.headers.get("location");
       if (r.status < 300 || r.status >= 400 || !location) return { status: r.status, body: await readBody(r) };
