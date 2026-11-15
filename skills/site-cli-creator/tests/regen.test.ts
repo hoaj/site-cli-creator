@@ -227,6 +227,20 @@ describe("regen.ts", () => {
     expect(r.stderr).toContain("GET /api/search/suppliers is never checked");
   });
 
+  test("an HTML list with no container (in) is a warning: a changed layout would read as an empty list (#102)", () => {
+    const skill = fakeSkill("html-lists", "none", { getAccount: "read" });
+    const opFile = (name: string, fields: string) =>
+      `import { z } from "zod";\nexport default { name: ${JSON.stringify(name)}, effect: "read", rest: { method: "GET", path: "/x" }, html: { fields: ${fields} }, variables: z.object({}), response: z.unknown() };\n`;
+    write(join(skill, "cli/src/operations/listEvents.ts"), opFile("GET /events", '{ title: "h1", events: { each: "li", fields: { t: "a", tags: { each: "b", fields: {} } } } }'));
+    write(join(skill, "cli/src/operations/listNews.ts"), opFile("GET /news", '{ news: { each: "li", in: "ul.news", fields: { t: "a" } } }'));
+    const r = regen(skill);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.out.warnings).toEqual([
+      "GET /events: the html list events has no container (in), so a changed layout reads as an empty list instead of Drift. Set in to the element that holds the list, which the page has even when the list is empty.",
+      "GET /events: the html list events[].tags has no container (in), so a changed layout reads as an empty list instead of Drift. Set in to the element that holds the list, which the page has even when the list is empty.",
+    ]);
+  });
+
   test("only files whose default export is a command are registered; others are warnings (#37)", () => {
     const skill = fakeSkill("helpers", "none", { getAccount: "read" });
     const commands = join(skill, "cli/src/commands");

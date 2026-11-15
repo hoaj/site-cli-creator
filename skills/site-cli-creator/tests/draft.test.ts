@@ -4,12 +4,14 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildRequest } from "../starter/skill/cli/src/runtime/call";
 import { capturedVariables, compareWrite, parseCaptured } from "../starter/skill/cli/src/runtime/check";
+import { extractHtml } from "../starter/skill/cli/src/runtime/html";
 import { draftOperation, namePathParams, operationFileName } from "../tools/lib/draft";
 import { GENERATOR_ROOT, SKILL_ROOT } from "../tools/lib/paths";
 import { CaptureRecorder, type OperationShape, type RequestInfo } from "../tools/lib/recorder";
 
 const TOOL = join(SKILL_ROOT, "tools", "draft-contract.ts");
-const RUNTIME_OPERATION = join(SKILL_ROOT, "starter", "skill", "cli", "src", "runtime", "operation.ts");
+const RUNTIME = join(SKILL_ROOT, "starter", "skill", "cli", "src", "runtime");
+const RUNTIME_OPERATION = join(RUNTIME, "operation.ts");
 const ORIGIN = "https://www.shop.example";
 const json = (v: unknown) => Buffer.from(JSON.stringify(v));
 
@@ -78,6 +80,8 @@ function scaffoldCli(): string {
   const operationTs = join(cli, "src", "runtime", "operation.ts");
   if (existsSync(RUNTIME_OPERATION)) copyFileSync(RUNTIME_OPERATION, operationTs);
   else writeFileSync(operationTs, "export const defineOperation = <T>(op: T): T => op;\n");
+  // operation.ts names html.ts's types, and html.ts throws envelope.ts's ContractError.
+  for (const file of ["html.ts", "envelope.ts"]) if (existsSync(join(RUNTIME, file))) copyFileSync(join(RUNTIME, file), join(cli, "src", "runtime", file));
   return cli;
 }
 
@@ -95,6 +99,7 @@ async function importDraft(file: string, source: string) {
     effect: string;
     graphql?: string;
     rest?: { method: string; path: string; query?: (v: any) => unknown; body?: (v: any) => unknown };
+    html?: { from?: (body: unknown) => unknown; fields: Parameters<typeof extractHtml>[1] };
     variables: import("zod").ZodType;
     response: import("zod").ZodType;
   };
@@ -209,10 +214,59 @@ describe("draftOperation", () => {
     expect(source).not.toContain("trigger(page)");
   });
 
+  // A server-rendered page (#102): no </li>, inline JSON, a link and a date per item, a data id.
+  const EVENTS = `<!doctype html><html><head><script type="application/ld+json">{"name":"n","startDate":"2026-01-01"}</script></head><body>
+<main class="content"><ul><li class="event" data-id="e1"><h2 class="title">Koncert</h2><a href="/e/1">mere</a><time datetime="2026-12-01">1. dec</time>
+<li class="event" data-id="e2"><h2 class="title">Foredrag</h2><a href="/e/2">mere</a><time datetime="2026-12-02">2. dec</time></ul></main></body></html>`;
+  const htmlCapture = (url: string, body: string, contentType: string, resourceType = "document") => {
+    const r = new CaptureRecorder({ origin: ORIGIN });
+    const plan = r.plan({ method: "GET", url, headers: {}, postData: null, resourceType })!;
+    r.record(plan, { response: { status: 200, headers: { "content-type": contentType }, body: Buffer.from(body) } });
+    return r.operations()[0]!;
+  };
+
+  test("an HTML page drafts html.fields that pick every item's values from the page it was drafted from (#102)", async () => {
+    const shape = htmlCapture(`${ORIGIN}/events?from=2026-01-01`, EVENTS, "text/html; charset=utf-8");
+    const { source } = draftOperation(shape);
+    expect(source).toContain('each: "li.event", in: "main.content ul"');
+    expect(source).toContain("A page load (a document request)");
+    const op = await importDraft("listEvents.ts", source);
+    expect(op.rest?.query?.({ from: "x" })).toEqual({ from: "x" });
+    const picked = extractHtml(EVENTS, op.html!.fields);
+    expect(picked.ok).toBe(true);
+    const value = (picked as { value: any }).value;
+    expect(op.response.safeParse(value).success).toBe(true);
+    const [first] = Object.values(value) as any[][];
+    expect(first).toHaveLength(2);
+    expect(Object.values(first![1])).toEqual(expect.arrayContaining(["e2", "Foredrag", "/e/2", "2026-12-02"]));
+  });
+
+  test("a page with no repeated element drafts a field per element with text, and inline JSON as json: true (#102)", async () => {
+    const page = `<html><head><script type="application/ld+json">{"name":"n","price":1}</script></head><body><article class="event"><h1 class="name">x</h1><p class="where">y</p></article></body></html>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/event/:id`, page, "text/html"));
+    expect(source).toContain('json: true');
+    const op = await importDraft("getEvent.ts", source);
+    const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, unknown> };
+    expect(picked.ok).toBe(true);
+    expect(op.response.safeParse(picked.value).success).toBe(true);
+    expect(Object.values(picked.value)).toEqual(expect.arrayContaining([{ name: "n", price: 1 }, "x", "y"]));
+  });
+
+  test("a JSON answer that carries HTML drafts html.from for that place, which finds it (#102)", async () => {
+    const commands = [{ command: "settings", settings: {} }, { command: "insert", data: EVENTS.replace(/^[\s\S]*<main/, "<main").replace(/<\/body>[\s\S]*$/, "") }];
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/views/ajax`, JSON.stringify(commands), "application/json", "xhr"));
+    expect(source).toContain("carries HTML at [].data");
+    const op = await importDraft("getViewsAjax.ts", source);
+    const html = op.html!.from!(commands);
+    expect(typeof html).toBe("string");
+    const picked = extractHtml(html as string, op.html!.fields) as { ok: true; value: Record<string, unknown> };
+    expect(op.response.safeParse(picked.value).success).toBe(true);
+  });
+
   test("drafts type-check against the runtime's Operation type", () => {
     const tsc = Bun.spawnSync(
       [process.execPath, "x", "tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "esnext", "--module", "esnext",
-        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts"].map((f) => join(work, "cli", "src", "operations", f))],
+        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts"].map((f) => join(work, "cli", "src", "operations", f))],
       { cwd: GENERATOR_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("");
