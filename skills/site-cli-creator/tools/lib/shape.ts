@@ -249,14 +249,12 @@ export function parseJson(text: string): { ok: true; value: unknown } | { ok: fa
 }
 
 /**
- * `parsed`: parseJson() of the same body, when the caller already ran it. `remember` gets the texts of an
- * HTML body (never recorded), so the Capture can redact a path segment that is one of them.
+ * `parsed`: parseJson() of the same body, when the caller already ran it.
  */
 export function bodyShape(
   body: Buffer | string | null | undefined,
   contentType?: string | null,
   parsed?: ReturnType<typeof parseJson>,
-  remember?: (text: string) => void,
 ): BodyShape {
   if (body === null || body === undefined || body.length === 0) return { kind: "empty" };
   const type = mediaType(contentType) ?? "";
@@ -272,7 +270,7 @@ export function bodyShape(
     if (json.ok) return { kind: "json", shape: shapeOf(json.value) };
   }
   if (type.includes("html") || ((type === "" || type === "text/plain") && looksLikeHtml(text))) {
-    const { outline, truncated } = htmlOutline(text, remember);
+    const { outline, truncated } = htmlOutline(text);
     return { kind: "html", ...(outline.length ? { outline } : {}), ...(truncated ? { truncated } : {}) };
   }
   if (type.startsWith("text/") || type.includes("xml") || type.includes("javascript")) return { kind: "text" };

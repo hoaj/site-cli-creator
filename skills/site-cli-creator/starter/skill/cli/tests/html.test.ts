@@ -92,6 +92,11 @@ describe("extractHtml", () => {
     });
   });
 
+  test("block elements are a space between texts, as a browser shows them (review 2)", () => {
+    const page = "<div class='card'><article><span>A</span></article><section>B</section><ul><li>C</li></ul><table><tr><td>D</td></tr></table></div>";
+    expect(extractHtml(page, { t: "div.card" })).toEqual({ ok: true, value: { t: "A B C D" } });
+  });
+
   test("an empty list in a container that is there is an empty list, not Drift", () => {
     expect(extractHtml(PAGE, { items: { each: "li", in: "ul.empty-list", fields: { t: "a" } } })).toEqual({ ok: true, value: { items: [] } });
   });

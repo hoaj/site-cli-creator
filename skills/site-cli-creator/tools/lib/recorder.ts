@@ -341,7 +341,6 @@ export class CaptureRecorder {
   /** Values seen in bodies, variables and query strings, as sent. Memory only. */
   private readonly values = new Set<string>();
   private readonly valueWords = new Set<string>();
-  private readonly valueSlugs = new Set<string>();
   /** The write that went through with --write. */
   wrote?: string;
   /** Writes aborted on hosts outside the recorded scope (`METHOD host/path`, path redacted). */
@@ -421,18 +420,6 @@ export class CaptureRecorder {
     if (s.length < 3 || s.length > 200) return;
     this.values.add(s);
     for (const w of s.split(/[\s,;|/()]+/)) if (w.length >= 3) this.valueWords.add(w);
-    this.rememberPageText(s);
-  }
-
-  /**
-   * A text of an HTML page or fragment: only its slug, when it has three words or more, since a title is often
-   * a path's slug too (`/events/koncert-i-parken` from "Koncert i parken"). A shorter text is often a link's
-   * label that is also a route's name ("bills" for `/bills`), so it is never taken as a value.
-   */
-  private rememberPageText(text: string): void {
-    // Three words at least: a link's label of two ("Mine regninger" for /mine-regninger) is often a route's name.
-    const slug = slugOf(text.trim());
-    if (slug.split("-").length >= 3) this.valueSlugs.add(slug);
   }
 
   /** Splits a request into the Operations it carries, or null when it is out of scope. */
@@ -607,8 +594,9 @@ export class CaptureRecorder {
       }
     }
     const claims = outcome.headers ? bearerClaims(header(outcome.headers, "authorization")) : undefined;
-    // Shapes are never changed once built, so every call of the request shares this one.
-    const whole = response ? bodyShape(response.body, contentType, parsed, (s) => this.rememberPageText(s)) : undefined;
+    // Shapes are never changed once built, so every call of the request shares this one. A page's texts are never
+    // values to redact paths by: a link's label is often a route's name ("Mine regninger" for /mine-regninger).
+    const whole = response ? bodyShape(response.body, contentType, parsed) : undefined;
     for (const call of planned.calls) {
       const shape: OperationShape = structuredClone(call.shape);
       if (outcome.headers) {
@@ -626,10 +614,12 @@ export class CaptureRecorder {
         const cookies = setCookieNames(header(response.headers, "set-cookie"));
         const headers = headerShape(response.headers, (n) => n === "set-cookie");
         const json = splitBodies && call.responseIndex !== undefined ? splitBodies[call.responseIndex] : parsed?.ok ? parsed.value : undefined;
-        const embedded = json === undefined ? [] : htmlInJson(json, (s) => this.rememberPageText(s));
-        // Marked only when the HTML is the data: not a SPA's empty shell, not one rich-text field of a JSON API.
-        const jsonChars = json === undefined ? 0 : JSON.stringify(json).length;
-        if ((body.kind === "html" && outlineHasData(body.outline)) || (embedded.length && htmlIsTheData(embedded, htmlCharsInJson(json), jsonChars))) shape.html = true;
+        const embedded = json === undefined ? [] : htmlInJson(json);
+        // Marked only when a 2xx answer's HTML is the data: not an error or bot-wall page, not a SPA's empty
+        // shell, not one rich-text field of a JSON API.
+        const ok = response.status >= 200 && response.status < 300;
+        const pageData = body.kind === "html" && outlineHasData(body.outline);
+        if (ok && (pageData || (embedded.length > 0 && htmlIsTheData(embedded, htmlCharsInJson(json), JSON.stringify(json).length)))) shape.html = true;
         shape.responses = [
           {
             status: response.status,
@@ -662,16 +652,13 @@ export class CaptureRecorder {
   redactValues(path: string): string {
     return path
       .split("/")
-      .map((seg, i) => {
+      .map((seg) => {
         if (!seg || seg.startsWith(":")) return seg;
         const decoded = safeDecode(seg);
         if (decoded.length < 3) return seg;
         // A whole value (`jens.hansen`), or a capitalised word inside one (`Vesterbrogade` from "Vesterbrogade 1").
         if (this.values.has(decoded)) return ":id";
         if (/[A-Z]/.test(decoded) && this.valueWords.has(decoded)) return ":id";
-        // The slug of a value of several words (`Vestergade-12` from "Vestergade 12").
-        // Never a path's first segment, which names a section of the site (`/kontakt-og-hjaelp`), not an item.
-        if (i > 1 && this.valueSlugs.has(slugOf(decoded))) return ":id";
         return seg;
       })
       .join("/");
@@ -757,16 +744,6 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
 function allOptional(shape: Shape | undefined): Shape | undefined {
   if (shape?.type !== "object") return shape;
   return { ...shape, optional: Object.keys(shape.fields).sort() };
-}
-
-/** A text as a URL slug: lower case, letters and digits joined by single dashes. */
-function slugOf(text: string): string {
-  return text
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^\p{L}\p{N}]+/gu, "-")
-    .replace(/^-|-$/g, "");
 }
 
 /** File names for the shape files: the Operation name made path-safe, unique within one Capture. */

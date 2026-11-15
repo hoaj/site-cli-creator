@@ -276,6 +276,43 @@ describe("draftOperation", () => {
     expect(Object.values(picked.value)[0]![1]).toMatchObject({ text: ["tag2a", "tag2b"] });
   });
 
+  // Every drafted selector picks, on the page it was drafted from, the element it was drafted from (review 2).
+  const picks = async (file: string, page: string) => {
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/p`, page, "text/html"));
+    const op = await importDraft(file, source);
+    const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, any> };
+    expect(picked.ok, source).toBe(true);
+    return { source, value: picked.value };
+  };
+
+  test("a list in a plain ul gets a container no earlier ul matches (review 2)", async () => {
+    const page = `<!doctype html><html><body><nav><ul><li><a href="/a">A</a></li><li><a href="/b">B</a></li></ul></nav>
+<div><ul>${[1, 2, 3].map((i) => `<li class="it"><h3 class="t">T${i}</h3><time datetime="2026-01-0${i}">d</time><a href="/e/${i}">mere</a></li>`).join("")}</ul></div></body></html>`;
+    const { value } = await picks("listIt.ts", page);
+    const [list] = Object.values(value) as any[][];
+    expect(list!.map((x) => x.t)).toEqual(["T1", "T2", "T3"]);
+  });
+
+  test("a plain selector that an earlier element in the item also matches is made specific (review 2)", async () => {
+    const page = `<ul class="l">${[1, 2].map((i) => `<li class="it"><span class="icon"></span><span>Title ${i}</span><b class="x">y</b></li>`).join("")}</ul>`;
+    const { value } = await picks("listIcons.ts", page);
+    const [list] = Object.values(value) as any[][];
+    expect(Object.values(list![1])).toContain("Title 2");
+  });
+
+  test("with no list, two subtrees' h2s draft two selectors that each pick their own (review 2)", async () => {
+    const page = `<!doctype html><html><body><header><h2>Site</h2></header><main><h2>Event title</h2><p class="where">Her</p></main></body></html>`;
+    const { value } = await picks("getDetail.ts", page);
+    expect(Object.values(value)).toEqual(expect.arrayContaining(["Site", "Event title", "Her"]));
+  });
+
+  test("HTML inside JSON drafts from the richest HTML string, not the first (review 2)", () => {
+    const rows = Array.from({ length: 8 }, (_, i) => `<li class="r"><h3>T${i}</h3></li>`).join("");
+    const body = { messages: '<div class="msg">ok</div>', content: `<ul class="results">${rows}</ul>` };
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/search`, JSON.stringify(body), "application/json", "xhr"));
+    expect(source).toContain("from: (body: any) => body?.content");
+  });
+
   test("html.from for a JSON answer that is one HTML string, and for keys that are no identifiers (review)", () => {
     expect(fromSource("")).toBe("(body: any) => body");
     expect(fromSource("content-html")).toBe('(body: any) => body?.["content-html"]');
@@ -309,7 +346,7 @@ describe("draftOperation", () => {
   test("drafts type-check against the runtime's Operation type", () => {
     const tsc = Bun.spawnSync(
       [process.execPath, "x", "tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "esnext", "--module", "esnext",
-        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts", "listProducts.ts", "listTags.ts"].map((f) => join(work, "cli", "src", "operations", f))],
+        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts", "listProducts.ts", "listTags.ts", "listIt.ts", "listIcons.ts", "getDetail.ts"].map((f) => join(work, "cli", "src", "operations", f))],
       { cwd: GENERATOR_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("");

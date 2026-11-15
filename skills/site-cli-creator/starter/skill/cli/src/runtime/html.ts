@@ -153,7 +153,12 @@ function compiled<T>(css: string, run: () => T): T {
   }
 }
 
-const BREAKS = new Set(["br", "p", "div", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "dt", "dd"]);
+/** Elements a browser shows on a line (or in a cell) of their own: a space between their texts. */
+const BREAKS = new Set([
+  "br", "p", "div", "li", "ul", "ol", "dl", "dt", "dd", "tr", "td", "th", "table", "thead", "tbody", "tfoot", "caption",
+  "h1", "h2", "h3", "h4", "h5", "h6", "section", "article", "header", "footer", "nav", "main", "aside", "blockquote",
+  "pre", "figure", "figcaption", "address", "form", "fieldset", "legend", "hr", "details", "summary",
+]);
 /** Never visible text: a <noscript> holds markup (parse5 parses it as text, as a browser with scripts on does). */
 const HIDDEN = new Set(["noscript", "template"]);
 

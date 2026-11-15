@@ -11,7 +11,7 @@ const explore = join(skill, "captures", "explore");
 
 afterAll(() => rmSync(work, { recursive: true, force: true }));
 
-type Entry = { operation: string; kind: "rest" | "graphql"; effect: "read" | "write"; host: string; file: string; pages: string[]; seen?: number; aborted?: number; loginFlow?: true; navigation?: true };
+type Entry = { operation: string; kind: "rest" | "graphql"; effect: "read" | "write"; host: string; file: string; pages: string[]; seen?: number; aborted?: number; loginFlow?: true; navigation?: true; html?: true };
 
 /** A shape file as capture.ts writes one: enough for the tool, which copies it unread. */
 function shape(e: Entry): string {
@@ -40,6 +40,7 @@ const ENTRIES: Entry[] = [
   { operation: "getCustomer", kind: "graphql", effect: "read", host: "www.example.dk", file: "getCustomer.shape.json", pages: ["/", "/bills"] },
   { operation: "createQuote", kind: "graphql", effect: "write", host: "www.example.dk", file: "createQuote.shape.json", pages: ["/"], aborted: 1 },
   { operation: "GET /api/bills", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-api-bills.shape.json", pages: ["/bills"] },
+  { operation: "GET /bills", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-bills.shape.json", pages: ["/bills"], navigation: true, html: true },
   { operation: "GET /api/bills/:id", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-api-bills-id.shape.json", pages: ["/bills/:id"] },
   { operation: "GET /api/status", kind: "rest", effect: "read", host: "www.example.dk", file: "GET-api-status.shape.json", pages: [] },
   { operation: "GET /api/status", kind: "rest", effect: "read", host: "api.example.dk", file: "api.example.dk-GET-api-status.shape.json", pages: [] },
@@ -131,6 +132,16 @@ describe("split-capture.ts", () => {
     refused(["--task", "x-show"], "missing --op");
     refused(["--task", "explore", "--op", "getCustomer"], "reserved");
     refused(["--task", "x-show", "--op", "getCustomer", "--start-path", "bills"], "--start-path must start with /");
+  });
+
+  test("a page load whose page also called JSON reads is taken with a warning naming them (#102, review 2)", () => {
+    const r = split(["--task", "bill-page", "--op", "GET /bills"]);
+    expect(r.code, JSON.stringify(r.out)).toBe(0);
+    expect(r.out.warnings).toEqual([
+      "GET /bills is a page load, and its page also called JSON reads (getCustomer, GET /api/bills): keep those instead when they carry the Task's data, and drop the page load (reference/add-task.md step 3).",
+    ]);
+    // Taken together with the JSON call it would replace, it still warns; alone on an HTML-only page it does not.
+    expect(split(["--task", "bill-page-2", "--op", "GET /bills", "--op", "GET /api/bills"]).out.warnings).toBeDefined();
   });
 
   test("refuses to replace an existing Capture of the Task", () => {
