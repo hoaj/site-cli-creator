@@ -22,6 +22,7 @@ import {
   setNeedsChrome,
   SHARED_CODE_HOME,
 } from "./lib/regen";
+import { listsWithoutContainer, noContainerWarning } from "../starter/skill/cli/src/runtime/html";
 import { neverCheckable, neverCheckedWarning } from "../starter/skill/cli/src/runtime/needs";
 import { parseJson } from "./lib/shape";
 
@@ -112,6 +113,10 @@ await runTool(async () => {
     // The same rule and text as the Starter's `check` (runtime/needs.ts).
     const never = op.effect === "read" ? neverCheckable(op) : undefined;
     if (never) warnings.push(neverCheckedWarning(String(op.name), never));
+    const html = (op as { html?: { fields?: unknown } }).html;
+    if (html?.fields && typeof html.fields === "object") {
+      for (const path of listsWithoutContainer(html.fields as Parameters<typeof listsWithoutContainer>[0])) warnings.push(noContainerWarning(String(op.name), path));
+    }
   }
   for (const w of warnings) progress(`warning: ${w}`);
   const needsChrome = site.auth === "login" || site.transport === "browser" || operations.some((o) => o.effect === "write");

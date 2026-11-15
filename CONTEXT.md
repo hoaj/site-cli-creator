@@ -13,7 +13,7 @@ Something the user wants an agent to be able to do on a site, stated in plain wo
 _Avoid_: use case, feature, command (the command is what a Task becomes)
 
 **Operation**:
-One distinct call a generated CLI makes to a site: a method plus path for REST, or an `operationName` for GraphQL. It is the unit a Contract covers.
+One distinct call a generated CLI makes to a site: a method plus path for REST (a page load whose HTML carries the data included), or an `operationName` for GraphQL. It is the unit a Contract covers.
 _Avoid_: endpoint (one GraphQL URL carries many Operations), call
 
 **Contract**:

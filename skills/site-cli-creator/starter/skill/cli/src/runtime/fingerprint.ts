@@ -7,7 +7,7 @@
 //         <frame> = first stack frame inside src/, as relative/path.ts#function, no line/col.
 import type { DiffEntry } from "./envelope";
 
-export type BreakType = "zod" | "graphql" | "http" | "auth" | "input-rejected" | "request" | "trigger";
+export type BreakType = "zod" | "graphql" | "http" | "auth" | "input-rejected" | "request" | "trigger" | "html";
 type Names = { plugin: string; skill: string };
 
 export function driftFingerprint(site: Names, operation: string, breakType: BreakType, path = "", code = ""): string {
