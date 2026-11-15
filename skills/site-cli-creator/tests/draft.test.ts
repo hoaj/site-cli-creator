@@ -241,6 +241,21 @@ describe("draftOperation", () => {
     expect(Object.values(first![1])).toEqual(expect.arrayContaining(["e2", "Foredrag", "/e/2", "2026-12-02"]));
   });
 
+  test("a query key seen on only some loads of a page drafts as optional, so check can call it with none (#102, cold read)", async () => {
+    const r = new CaptureRecorder({ origin: ORIGIN });
+    for (const url of [`${ORIGIN}/events`, `${ORIGIN}/events?area=x&page=2`, `${ORIGIN}/events?page=1`]) {
+      const plan = r.plan({ method: "GET", url, headers: {}, postData: null, resourceType: "document" })!;
+      r.record(plan, { response: { status: 200, headers: { "content-type": "text/html" }, body: Buffer.from(EVENTS) } });
+    }
+    const [shape] = r.operations();
+    expect(shape!.request.query).toEqual({ type: "object", fields: { area: { type: "string" }, page: { type: "string" } }, optional: ["area", "page"] });
+    const { source } = draftOperation(shape!);
+    const op = await importDraft("listEventsByArea.ts", source);
+    expect(op.variables.safeParse({}).success).toBe(true);
+    expect(op.variables.safeParse({ area: "x" }).success).toBe(true);
+    expect(op.rest?.query?.({ area: "x" })).toEqual({ area: "x", page: undefined });
+  });
+
   test("a page with no repeated element drafts a field per element with text, and inline JSON as json: true (#102)", async () => {
     const page = `<html><head><script type="application/ld+json">{"name":"n","price":1}</script></head><body><article class="event"><h1 class="name">x</h1><p class="where">y</p></article></body></html>`;
     const { source } = draftOperation(htmlCapture(`${ORIGIN}/event/:id`, page, "text/html"));
