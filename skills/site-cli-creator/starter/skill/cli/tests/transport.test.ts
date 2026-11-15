@@ -220,6 +220,23 @@ describe.skipIf(skip)("transport browser", () => {
     expect(await run(["ok", "show"], a)).toEqual({ output: { id: "ok", total: 0 }, code: 0 });
   }, 60_000);
 
+  test("ctx.cookies() holds a cookie the page load set on a narrower Path, as an XSRF cookie on /api (review 3)", async () => {
+    const mini = miniSite(
+      () => new Response("<!doctype html><title>front</title>", { headers: { "content-type": "text/html", "set-cookie": "xsrf=x1; Path=/api" } }),
+      (req) => (cookieOf(req, "xsrf") === "x1" && req.headers.get("x-xsrf") === "x1" ? Response.json({ id: "ok", total: 0 }) : new Response("xsrf", { status: 403 })),
+    );
+    const a = app({
+      origin: mini.url.origin,
+      transport: "browser",
+      bootstrap: async (ctx) => {
+        const token = (await ctx.cookies()).xsrf;
+        if (!token) throw new Error("no xsrf cookie");
+        return { headers: { "x-xsrf": token } };
+      },
+    });
+    expect(await run(["ok", "show"], a)).toEqual({ output: { id: "ok", total: 0 }, code: 0 });
+  }, 60_000);
+
   test("ctx.cookies() on a site Chrome cannot load is a network failure, not an empty jar the hook takes for a bug (#95, review)", async () => {
     const gone = Bun.serve({ port: 0, fetch: () => new Response("") });
     const origin = gone.url.origin;

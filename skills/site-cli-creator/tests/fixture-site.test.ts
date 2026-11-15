@@ -13,7 +13,8 @@ import { copyExpected, fillTokens, OPERATION_NAMES } from "../fixtures/expected/
 import { ACCOUNT, INVOICES, USER } from "../fixtures/site/data";
 import { loginOriginFor } from "../fixtures/site/hosts";
 import { DRIFTS, startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
-import { setCookiePairs } from "../starter/skill/cli/src/runtime/call";
+import { Client } from "../starter/skill/cli/src/runtime/call";
+import type { Site } from "../starter/skill/cli/src/runtime/site";
 
 const PLUGIN_ROOT = resolve(import.meta.dir, "../../..");
 const STARTER_CLI = resolve(import.meta.dir, "../starter/skill/cli");
@@ -656,15 +657,11 @@ function makeCall(origin: string, headers: Headers) {
   };
 }
 
-/** A site hook's ctx as the runtime builds it with plain fetch: cookies() holds what its answers set. */
-function hookCtx(origin: string, headers: Headers) {
-  const set = new Map<string, string>();
-  const ctxFetch = async (url: string | URL | Request, init?: RequestInit) => {
-    const res = await fetch(url, init);
-    for (const [name, value] of setCookiePairs(res.headers)) set.set(name, value);
-    return res;
-  };
-  return { fetch: ctxFetch, cookies: async () => Object.fromEntries(set), origin, headers, ids: {}, refresh: {}, decodeJwt };
+/** A site hook's ctx as the runtime builds it (Client.siteCtx) with plain fetch, in memory. */
+function hookCtx(site: Site, headers: Headers) {
+  const session = { headers, ids: {}, savedAt: new Date().toISOString() };
+  const deps = { fetch, env: {}, login: async () => null, sleep: async () => {}, retryDelays: [], note: () => {} };
+  return new Client(site, deps, { session, reauth: false }).siteCtx(session, false);
 }
 
 for (const auth of ["none", "login"] as const) {
@@ -679,9 +676,9 @@ for (const auth of ["none", "login"] as const) {
       x = await loadExpected(auth, site.url);
       if (auth === "login") {
         headers = await loginHeaders(site);
-        ids = await x.site.login.postLogin(hookCtx(site.url, headers));
+        ids = await x.site.login.postLogin(hookCtx(x.site, headers));
       } else {
-        headers = (await x.site.bootstrap(hookCtx(site.url, {}))).headers;
+        headers = (await x.site.bootstrap(hookCtx(x.site, {}))).headers;
         ids = {};
       }
     });
