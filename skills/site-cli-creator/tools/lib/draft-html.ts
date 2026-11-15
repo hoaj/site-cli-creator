@@ -59,13 +59,27 @@ function score(n: HtmlNode): number {
   return leaves(n).length;
 }
 
-/** The list item: the repeated node with the most values in it, and the nodes above it. */
+/** The site's own chrome: navigation, header and footer, by tag or by a class that names one. */
+const CHROME_TAGS = new Set(["nav", "header", "footer", "aside"]);
+const CHROME_CLASS = /(?:^|[-_])(?:menu|nav|navbar|navigation|breadcrumbs?|footer|header|pager|pagination)(?:$|[-_])/i;
+
+function isChrome(n: HtmlNode): boolean {
+  return CHROME_TAGS.has(n.tag) || (n.classes ?? []).some((c) => CHROME_CLASS.test(c));
+}
+
+/**
+ * The list item: the repeated node with the most values in it, and the nodes above it. A list in the site's
+ * chrome (a menu, a pager) loses to any other list, which is where the data is.
+ */
 function findList(nodes: HtmlNode[], above: HtmlNode[] = []): { item: HtmlNode; above: HtmlNode[] } | null {
+  const rank = (c: { item: HtmlNode; above: HtmlNode[] }) => ([c.item, ...c.above].some(isChrome) ? 0 : 1_000_000) + score(c.item);
   let best: { item: HtmlNode; above: HtmlNode[] } | null = null;
+  const consider = (c: { item: HtmlNode; above: HtmlNode[] } | null) => {
+    if (c && (!best || rank(c) > rank(best))) best = c;
+  };
   for (const n of nodes) {
-    if (n.many && score(n) > 0 && (!best || score(n) > score(best.item))) best = { item: n, above };
-    const inner = findList(n.children ?? [], [...above, n]);
-    if (inner && (!best || score(inner.item) > score(best.item))) best = inner;
+    if (n.many && score(n) > 0) consider({ item: n, above });
+    consider(findList(n.children ?? [], [...above, n]));
   }
   return best;
 }
@@ -96,7 +110,11 @@ class Skeleton {
       const open = `<${node.tag} ${attrs.join(" ")}>`;
       return VOID.has(node.tag) ? open : `${open}${(node.children ?? []).map(render).join("")}</${node.tag}>`;
     };
-    this.doc = parseHtml(`<!doctype html><html><body>${outline.map(render).join("")}</body></html>`);
+    // A fragment of table rows or cells (or options) only parses inside its own context, as it did on the page.
+    const inner = outline.map(render).join("");
+    const top = new Set(outline.map((n) => n.tag));
+    const context = top.has("td") || top.has("th") ? ["<table><tbody><tr>", "</tr></tbody></table>"] : top.has("tr") ? ["<table><tbody>", "</tbody></table>"] : top.has("tbody") || top.has("thead") || top.has("tfoot") ? ["<table>", "</table>"] : top.has("option") ? ["<select>", "</select>"] : ["", ""];
+    this.doc = parseHtml(`<!doctype html><html><body>${context[0]}${inner}${context[1]}</body></html>`);
     const walk = (nodes: AnyNode[]) => {
       for (const n of nodes) {
         const el = n as Element;
@@ -243,8 +261,7 @@ export function draftHtml(outline: HtmlNode[], from?: string): string[] {
 
 /**
  * `html.from` for the HTML at `path` (a Fingerprint path, as `htmlInJson` records it) inside a JSON answer:
- * a plain field path reads it, `[].<key>` takes the first array item whose key is a string; anything else
- * is left for the agent.
+ * a plain field path reads it, `[].<key>` takes the longest string at that key; anything else is left for the agent.
  */
 export function fromSource(path: string): string {
   // The answer is itself one HTML string (a JSON-encoded fragment).
@@ -252,10 +269,12 @@ export function fromSource(path: string): string {
   const access = (key: string) => (/^[A-Za-z_$][\w$]*$/.test(key) ? `?.${key}` : `?.[${JSON.stringify(key)}]`);
   const keys = path.split(".");
   if (keys.every((k) => k && k !== "{}" && !k.includes("[]"))) return `(body: any) => body${keys.map(access).join("")}`;
+  // The longest string at that key: the outline (and so the fields) came from the richest one (Drupal's `insert`
+  // command, not an earlier `add_css` <link>).
   const firstOf = /^\[\]\.([^.[\]{}]+)$/.exec(path);
   if (firstOf) {
     const key = access(firstOf[1]!);
-    return `(body: any) => (Array.isArray(body) ? body : []).find((item: any) => typeof item${key} === "string")${key}`;
+    return `(body: any) => (Array.isArray(body) ? body : []).map((item: any) => item${key}).filter((s: unknown): s is string => typeof s === "string").sort((a: string, b: string) => b.length - a.length)[0]`;
   }
   return `(body: any) => undefined /* TODO: return the HTML string at ${path} */`;
 }

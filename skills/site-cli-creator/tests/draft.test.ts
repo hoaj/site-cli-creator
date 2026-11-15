@@ -328,6 +328,39 @@ describe("draftOperation", () => {
     expect(source).toContain("response: z.unknown()");
   });
 
+  test("Drupal's /views/ajax: html.from returns the listing's HTML, not an earlier command's (review 4, #2)", async () => {
+    const rows = Array.from({ length: 6 }, (_, i) => `<div class="views-row"><h3 class="t">T${i}</h3></div>`).join("");
+    const commands = [
+      { command: "settings", settings: { pager: 0 } },
+      { command: "add_css", data: '<link rel="stylesheet" href="/a.css">' },
+      { command: "insert", method: "replaceWith", data: `<div class="view-content">${rows}</div>` },
+    ];
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/views/ajax`, JSON.stringify(commands), "application/json", "xhr"));
+    const op = await importDraft("getViewsAjaxRows.ts", source);
+    const picked = extractHtml(op.html!.from!(commands) as string, op.html!.fields) as { ok: boolean; value: Record<string, any[]> };
+    expect(picked.ok, source).toBe(true);
+    expect(Object.values(picked.value)[0]).toHaveLength(6);
+  });
+
+  test("rows with alternating classes draft an each that matches every row (review 4, #1)", async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => `<div class="views-row views-row-${i + 1} views-row-${i % 2 ? "even" : "odd"}"><h3 class="t">T${i}</h3></div>`).join("");
+    const { value } = await picks("listViewRows.ts", `<div class="view-content">${rows}</div>`);
+    expect(Object.values(value)[0]).toHaveLength(12);
+  });
+
+  test("a fragment of table rows drafts verified selectors, with no TODO (review 4, #3)", () => {
+    const rows = [1, 2].map((i) => `<tr class="row"><td class="name">N${i}</td><td class="price">${i}</td></tr>`).join("");
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/rows`, rows, "text/html", "xhr"));
+    expect(source).toContain('"td.name"');
+    expect(source).not.toContain("TODO");
+  });
+
+  test("the site's navigation does not win over the data list (review 4, #5)", async () => {
+    const page = `<ul class="menu"><li><a href="/a">A</a></li><li><a href="/b">B</a></li></ul><ul class="events"><li class="event"><h2 class="title">E1</h2></li><li class="event"><h2 class="title">E2</h2></li></ul>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/events`, page, "text/html"));
+    expect(source).toContain('each: "li.event"');
+  });
+
   test("HTML inside JSON drafts from the richest HTML string, not the first (review 2)", () => {
     const rows = Array.from({ length: 8 }, (_, i) => `<li class="r"><h3>T${i}</h3></li>`).join("");
     const body = { messages: '<div class="msg">ok</div>', content: `<ul class="results">${rows}</ul>` };
@@ -339,7 +372,7 @@ describe("draftOperation", () => {
     expect(fromSource("")).toBe("(body: any) => body");
     expect(fromSource("content-html")).toBe('(body: any) => body?.["content-html"]');
     expect(fromSource("data.view.rendered")).toBe("(body: any) => body?.data?.view?.rendered");
-    expect(fromSource("[].data-html")).toBe('(body: any) => (Array.isArray(body) ? body : []).find((item: any) => typeof item?.["data-html"] === "string")?.["data-html"]');
+    expect(fromSource("[].data-html")).toBe('(body: any) => (Array.isArray(body) ? body : []).map((item: any) => item?.["data-html"]).filter((s: unknown): s is string => typeof s === "string").sort((a: string, b: string) => b.length - a.length)[0]');
     expect(fromSource("{}.html")).toContain("TODO");
   });
 
@@ -368,7 +401,7 @@ describe("draftOperation", () => {
   test("drafts type-check against the runtime's Operation type", () => {
     const tsc = Bun.spawnSync(
       [process.execPath, "x", "tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "esnext", "--module", "esnext",
-        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts", "listProducts.ts", "listTags.ts", "listIt.ts", "listIcons.ts", "getDetail.ts", "listMenu.ts"].map((f) => join(work, "cli", "src", "operations", f))],
+        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts", "listProducts.ts", "listTags.ts", "listIt.ts", "listIcons.ts", "getDetail.ts", "listMenu.ts", "getViewsAjaxRows.ts", "listViewRows.ts"].map((f) => join(work, "cli", "src", "operations", f))],
       { cwd: GENERATOR_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("");

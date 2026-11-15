@@ -679,27 +679,30 @@ export class Client {
 
   /** The values html.fields picks from the page (or from the HTML html.from finds in a JSON answer); a changed layout is Drift. */
   private pickHtml(op: Operation, html: HtmlContract, res: Response_): Record<string, unknown> {
-    const { body } = res;
-    let page: unknown = body;
-    if (!html.from && res.text !== undefined && !/json/i.test(res.contentType ?? "") && (res.contentType !== undefined || typeof body === "string")) {
-      page = res.text; // an answer that is not JSON by its content-type is read as the text it is (`3` is a fragment, not a number)
-    }
-    if (html.from) {
-      try {
-        page = html.from(body);
-      } catch {
-        page = undefined;
-      }
-      if (typeof page !== "string") return this.fail(op, "html", "from", "not_html", "the answer no longer carries HTML where html.from looks");
-    } else if (page === undefined) {
-      page = ""; // an empty answer (a fragment endpoint with no results): an empty fragment
-    } else if (typeof page !== "string") {
-      return this.fail(op, "html", "", "not_html", "the site no longer answers this request with HTML (JSON)");
-    }
-    const out = extractHtml(typeof page === "string" ? page : "", html.fields);
+    const out = extractHtml(this.htmlOf(op, html, res), html.fields);
     if (out.ok) return out.value;
     const why = out.code === "no_match" ? `the page no longer has the element html.fields looks for at ${out.path}` : `the inline JSON at ${out.path} no longer parses`;
     return this.fail(op, "html", out.path, out.code, why, [{ path: out.path, code: out.code }]);
+  }
+
+  /** The HTML an HTML Operation reads: what html.from finds in the JSON, or the answer's own text; else Drift. */
+  private htmlOf(op: Operation, html: HtmlContract, res: Response_): string {
+    if (html.from) {
+      let found: unknown;
+      try {
+        found = html.from(res.body);
+      } catch {
+        found = undefined;
+      }
+      if (typeof found !== "string") return this.fail(op, "html", "from", "not_html", "the answer no longer carries HTML where html.from looks");
+      return found;
+    }
+    // An answer that is not JSON by its content-type is the text it is (`3` is a fragment, not a number).
+    const jsonType = /json/i.test(res.contentType ?? "");
+    if (res.text !== undefined && !jsonType && (res.contentType !== undefined || typeof res.body === "string")) return res.text;
+    if (res.body === undefined) return ""; // an empty answer (a fragment endpoint with no results): an empty fragment
+    if (typeof res.body === "string") return res.body;
+    return this.fail(op, "html", "", "not_html", "the site no longer answers this request with HTML (JSON)");
   }
 
   drift(op: Operation, breakType: BreakType, path: string, code: string, why: string, diff: DiffEntry[] = []): Failure {

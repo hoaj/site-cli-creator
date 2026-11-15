@@ -7,7 +7,7 @@
 
 import { decodeJwt, onSiteDomain, siteDomain } from "../../starter/skill/cli/src/runtime/site";
 import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
-import { htmlCharsInJson, htmlInJson, htmlIsTheData, mergeOutlined, outlineHasData, type HtmlNode } from "./html-outline";
+import { htmlCharsInJson, htmlInJson, htmlIsTheData, mergeHtmlInJson, outlineHasData, type HtmlNode } from "./html-outline";
 import {
   bodyShape,
   claimsShape,
@@ -697,12 +697,7 @@ function mergeResponse(a: ResponseShape, b: ResponseShape): ResponseShape {
   const headers = a.headers && b.headers ? mergeHeaders(a.headers, b.headers) : (a.headers ?? b.headers);
   const cookies = [...new Set([...(a.setCookies ?? []), ...(b.setCookies ?? [])])].sort();
   const contentType = a.contentType ?? b.contentType;
-  const embedded = [...(a.htmlInJson ?? [])];
-  for (const e of b.htmlInJson ?? []) {
-    const i = embedded.findIndex((x) => x.path === e.path);
-    if (i === -1) embedded.push(e);
-    else embedded[i] = { path: e.path, outline: [], ...mergeOutlined(embedded[i]!, e) };
-  }
+  const embedded = mergeHtmlInJson(a.htmlInJson ?? [], b.htmlInJson ?? []);
   return {
     status: a.status,
     ...(contentType ? { contentType } : {}),

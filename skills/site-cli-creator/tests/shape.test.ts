@@ -684,8 +684,30 @@ describe("HTML outlines (#102)", () => {
     expect(outline[1]!.children![0]).toMatchObject({ tag: "article", id: ":id", classes: ["author-:id", "category-:id", "post", "tag-:id"] });
   });
 
+  test("rows with alternating or numbered classes beside a shared one are one list (review 4, #1)", () => {
+    const rows = Array.from({ length: 12 }, (_, i) => `<div class="views-row views-row-${i + 1} views-row-${i % 2 ? "even" : "odd"}"><h3>x</h3></div>`).join("");
+    const { outline } = htmlOutline(`<div class="view-content">${rows}</div>`);
+    expect(outline).toEqual([{ tag: "div", classes: ["view-content"], children: [{ tag: "div", classes: ["views-row"], many: true, children: [{ tag: "h3", text: true }] }] }]);
+  });
+
+  test("a prefix like user- or tag- is site code on its own; on a CMS record its value is left out (review 4, #4)", () => {
+    const { outline } = htmlOutline('<div class="user-menu"><a>x</a></div><ul class="tag-list"><li>y</li></ul><p class="author-bio">z</p>');
+    expect(outline.map((n) => n.classes)).toEqual([["user-menu"], ["tag-list"], ["author-bio"]]);
+    const post = htmlOutline('<article class="post-123 post hentry author-jensen"><h2>x</h2></article>').outline[0]!;
+    expect(post.classes).toEqual(["author-:id", "hentry", "post", "post-:id"]);
+  });
+
+  test("a long list does not use up the outline: what comes after it is still there (review 4, #6)", () => {
+    const items = Array.from({ length: 500 }, (_, i) => `<li class="e"><div><h3 class="t">T</h3><p class="a">A</p><time datetime="d">d</time><a href="/x/${i}">l</a><span class="g">g</span><span class="h">h</span></div></li>`).join("");
+    const o = htmlOutline(`<!doctype html><html><body><ul class="list">${items}</ul><nav class="pager"><a href="?page=2">2</a></nav></body></html>`);
+    expect(o.truncated).toBeUndefined();
+    expect(JSON.stringify(o.outline)).toContain('"pager"');
+  });
+
   test("a huge page is cut short and says so", () => {
-    const big = "<div>" + Array.from({ length: 5000 }, (_, i) => `<p class="p${i % 7}"><b class="b${i}">x</b></p>`).join("") + "</div>";
+    // 5000 siblings that are really distinct (each a section with a stable id of its own) cannot collapse.
+    const letters = (i: number) => i.toString(26).replace(/\d/g, (d) => "qrstuvwxyz"[Number(d)]!);
+    const big = "<div>" + Array.from({ length: 5000 }, (_, i) => `<section id="s${letters(i)}"><b>x</b></section>`).join("") + "</div>";
     const o = htmlOutline(big);
     expect(o.truncated).toBe(true);
     expect(JSON.stringify(o).length).toBeLessThan(400_000);
