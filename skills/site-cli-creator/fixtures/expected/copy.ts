@@ -23,6 +23,7 @@ export const OPERATION_NAMES = {
   listInvoices: "GET /api/invoices",
   getInvoice: "GET /api/invoices/:id",
   addNote: "addNote",
+  listNotices: "GET /notices",
 } as const;
 
 /** Fills the add-skill placeholders, plus the fixture's sign-in host, which is derived from `origin`. */

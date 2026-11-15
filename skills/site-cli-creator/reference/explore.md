@@ -20,7 +20,7 @@ It takes the read Task's flags (`--origin`, `--login-host`, `--allow-read`, `--s
 - to show a write an agent should be able to make (add a note, change a setting), fill in the form and submit it once: every write is aborted before it leaves Chrome, so nothing changes on the site (the page may show an error), but the Capture records the write as a candidate;
 - then close the window, or press Enter in the terminal.
 
-The Capture lands in `<skill>/captures/explore/`, shapes only, like any other; capturing `--explore` again replaces it. The output's `pages` lists each page in the order it was visited, as a path with ids and seen values redacted (`/bills/:id`; `host/path` on another host), with the calls it made. Page loads, sign-in steps, server actions and RSC streams are left out of `pages`; they stay in `index.json`, where every Operation also has its own `pages`.
+The Capture lands in `<skill>/captures/explore/`, shapes only, like any other; capturing `--explore` again replaces it. The output's `pages` lists each page in the order it was visited, as a path with ids and seen values redacted (`/bills/:id`; `host/path` on another host), with the calls it made. A page's own load is its `document` when it answered HTML: on a site whose data arrives in no JSON call, that page load is the Operation to keep ([contracts.md](contracts.md#html-operations)); elsewhere it is page chrome. Sign-in steps, server actions and RSC streams are left out of `pages`; they stay in `index.json`, where every Operation also has its own `pages`.
 
 Read the REST paths in `index.json` and the page paths in `pages` once, as for any Capture (add-task step 2): a segment that is still a name, a place or a word the user typed is a value; rename it to `:id`.
 
@@ -29,6 +29,7 @@ Read the REST paths in `index.json` and the page paths in `pages` once, as for a
 From `pages` and the shape files, propose candidate Tasks:
 
 - a page that shows the user's data is usually one Task: a list page becomes `<noun> list`, a detail page `<noun> show` taking an id;
+- a page with a `document` and no call that carries its data is still a candidate: its page load is an HTML Operation;
 - a call made on every page (the customer, feature flags) is a chain link or page chrome, not a Task of its own;
 - one Task may need calls from two pages (a list and the detail it links to).
 
@@ -44,6 +45,6 @@ bun <gen>/tools/split-capture.ts --skill-dir <skill> --task <slug> --op <operati
 
 - `--op` is the Operation's name in `captures/explore/index.json`; when the same name was recorded on two hosts, pass its shape file instead (the error names both).
 - The Task's start page (`startPath` in its `index.json`, which `fix` re-captures from) is the page that called the most of them. Pass `--start-path` with a path from `pages` when the Task starts elsewhere.
-- It refuses sign-in steps (they go in `site.ts`), page loads, calls the explore Capture aborted (capture that Task on its own: `--write` for a write, `--allow-read` for a POST that only reads), and a slug that already has a Capture.
+- It refuses sign-in steps (they go in `site.ts`), page loads that answered no HTML, calls the explore Capture aborted (capture that Task on its own: `--write` for a write, `--allow-read` for a POST that only reads), and a slug that already has a Capture.
 
 Then go on at add-task step 5 for each chosen Task: the cards are accepted. Commit `captures/explore/` with the rest. `draft-contract` never merges it into a draft, and `fix` re-captures a Task into its own folder, so an old explore Capture never brings old shapes back. A later add-task may split another Task from it while the site has not changed since; otherwise capture that Task.
