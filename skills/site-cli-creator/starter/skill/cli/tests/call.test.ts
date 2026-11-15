@@ -370,6 +370,24 @@ describe("auth none", () => {
     expect(loadSession(home.dir)!.headers).toEqual({ "x-csrf": "t1" });
   });
 
+  test("ctx.cookies() in a hook: the cookies ctx.fetch's answers set, so a bootstrap needs no Set-Cookie parsing (#95, cold read)", async () => {
+    let seen: Record<string, string> = {};
+    const site = makeSite({
+      bootstrap: async (ctx) => {
+        await ctx.fetch(`${ctx.origin}/`);
+        seen = await ctx.cookies();
+        return { headers: { "x-csrf": seen.csrf ?? "" } };
+      },
+    });
+    const { fetch } = fakeFetch((r) =>
+      new URL(r.url).pathname === "/"
+        ? new Response("<html></html>", { headers: [["content-type", "text/html"], ["set-cookie", "csrf=t1; Path=/"], ["set-cookie", "other=x; Path=/; HttpOnly"]] })
+        : json({ data: { getCustomer: { id: "C", name: "n" } } }),
+    );
+    await client(site, makeDeps(fetch, home.dir).deps).call(getCustomer, { customerId: "C" });
+    expect(seen).toEqual({ csrf: "t1", other: "x" });
+  });
+
   test("bootstrap runs before the first call and is cached", async () => {
     let boots = 0;
     const site = makeSite({ bootstrap: async () => ({ headers: { cookie: `c${++boots}` } }) });
@@ -901,5 +919,61 @@ describe("login.refresh: renew the session with plain fetch before Chrome (#94)"
     const theirs = saveSession(home.dir, { headers: { authorization: "Bearer new" }, ids: { customerId: "C-1" }, refresh: { token: "r2" }, savedAt: "2026-01-02T00:00:00.000Z" });
     await c.call(getCustomer, { customerId: "C-1" });
     expect(loadSession(home.dir)!.savedAt).toBe(theirs.savedAt);
+  });
+});
+
+describe("bot block: network with `blocked`, never Drift, no sign-in spent on it (#95)", () => {
+  const html = (body: string, status: number, headers: Record<string, string> = {}) =>
+    new Response(body, { status, headers: { "content-type": "text/html; charset=utf-8", ...headers } });
+  const challenge = "<!doctype html><title>Just a moment...</title><div id=cf-chl-widget>Checking your browser</div>";
+
+  const blocked = async (answer: () => Response, site = loginSite()) => {
+    saved();
+    const { fetch, calls } = fakeFetch(answer);
+    const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+    const e = await failure(client(site, deps).call(getCustomer, { customerId: "C-1" }));
+    return { e, loginCalls, calls };
+  };
+
+  test("a 403 with Cloudflare's cf-mitigated header", async () => {
+    const { e, loginCalls, calls } = await blocked(() => html("<html>blocked</html>", 403, { "cf-mitigated": "challenge" }));
+    expect(e.kind).toBe("network");
+    expect(e.details.blocked).toBe("cloudflare");
+    expect(e.message).toMatch(/getCustomer: the site refused the request as automated traffic \(bot protection: cloudflare\)/);
+    expect(loginCalls).toEqual([]); // a sign-in would not get past it
+    expect(calls).toHaveLength(1); // nor would a retry
+  });
+
+  test("a challenge page with no header, as 403, 503 or even 200 where JSON is expected", async () => {
+    for (const status of [403, 503, 200]) {
+      const { e } = await blocked(() => html(challenge, status));
+      expect([status, e.kind, e.details.blocked]).toEqual([status, "network", "cloudflare"]);
+    }
+  });
+
+  test("other vendors' markers: DataDome, PerimeterX, Imperva, a captcha", async () => {
+    const cases: [Response, string][] = [
+      [html("<html>blocked</html>", 403, { "x-datadome": "protected" }), "datadome"],
+      [html(`<script src="https://geo.captcha-delivery.com/captcha/"></script>`, 403), "datadome"],
+      [html(`<div id="px-captcha"></div>`, 403), "perimeterx"],
+      [html("Request unsuccessful. Incapsula incident ID: 0-0", 403), "imperva"],
+      [html(`<div class="g-recaptcha"></div>`, 403), "captcha"],
+    ];
+    for (const [res, vendor] of cases) expect((await blocked(() => res.clone())).e.details.blocked).toBe(vendor);
+  });
+
+  test("a plain refusal is still what it was: a JSON 403 is auth Drift after a sign-in, an HTML 404 is http Drift", async () => {
+    const auth = await blocked(() => json({ error: "forbidden" }, 403));
+    expect([auth.e.kind, auth.e.details.blocked]).toEqual(["drift", undefined]);
+    expect(auth.loginCalls).toEqual([true]);
+    const gone = await blocked(() => html("<html><h1>Not found</h1></html>", 404));
+    expect([gone.e.kind, gone.e.fingerprint]).toEqual(["drift", expect.stringContaining(":http::404")]);
+  });
+
+  test("a sessionProbe answered by a challenge is not a sign-out: no sign-in, the Operation reports the block", async () => {
+    const s = loginSite({ login: { ...loginSite().login!, sessionProbe: "/api/me" } });
+    const { e, loginCalls } = await blocked(() => html(challenge, 403), s);
+    expect([e.kind, e.details.blocked]).toEqual(["network", "cloudflare"]);
+    expect(loginCalls).toEqual([]);
   });
 });

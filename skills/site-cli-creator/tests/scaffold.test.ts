@@ -76,6 +76,8 @@ const newArgs = (dir: string, extra: string[] = [], checks = false) => [
 ];
 
 const readJson = (path: string) => JSON.parse(readFileSync(path, "utf8"));
+/** For hooks that run a generator tool in a child process. */
+const HOOK_TIMEOUT_MS = 60_000;
 
 beforeAll(() => {
   work = mkdtempSync(join(tmpdir(), "scaffold-test-"));
@@ -284,10 +286,12 @@ exit 0
 
 describe("add-skill.ts", () => {
   let plugin: string;
+  // Runs new.ts in a child process: under the full suite's load (e2e builds, Chrome) that can take
+  // longer than a hook's default 5 s.
   beforeAll(() => {
     plugin = join(work, "plugin-b");
     expect(run(NEW, newArgs(plugin, ["--no-labels"])).code).toBe(0);
-  });
+  }, HOOK_TIMEOUT_MS);
 
   test("copies starter/skill, fills placeholders and version pins, lists the skill", () => {
     const r = run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-web", "--origin", "https://www.shop.example/some/page", "--auth", "login"]);
@@ -503,7 +507,7 @@ describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", ()
   beforeAll(() => {
     root = monorepo("mono");
     created = run(NEW, intoArgs(root, ["--no-labels"]), env);
-  });
+  }, HOOK_TIMEOUT_MS);
 
   test("writes the plugin to plugins/<plugin> with no marketplace of its own, and records the layout in generated.json", () => {
     expect(created.code, JSON.stringify(created.out)).toBe(0);

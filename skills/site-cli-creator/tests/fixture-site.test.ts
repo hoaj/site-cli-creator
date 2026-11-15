@@ -655,7 +655,20 @@ function makeCall(origin: string, headers: Headers) {
   };
 }
 
-const ctxFetch = (url: string | URL | Request, init?: RequestInit) => fetch(url, init);
+/** A site hook's ctx as the runtime builds it with plain fetch: cookies() holds what its answers set. */
+function hookCtx(origin: string, headers: Headers) {
+  const set = new Map<string, string>();
+  const ctxFetch = async (url: string | URL | Request, init?: RequestInit) => {
+    const res = await fetch(url, init);
+    for (const c of res.headers.getSetCookie()) {
+      const pair = c.split(";")[0]!;
+      const eq = pair.indexOf("=");
+      if (eq > 0) set.set(pair.slice(0, eq), pair.slice(eq + 1));
+    }
+    return res;
+  };
+  return { fetch: ctxFetch, cookies: async () => Object.fromEntries(set), origin, headers, ids: {}, refresh: {}, decodeJwt };
+}
 
 for (const auth of ["none", "login"] as const) {
   describe(`expected code, auth ${auth}`, () => {
@@ -669,9 +682,9 @@ for (const auth of ["none", "login"] as const) {
       x = await loadExpected(auth, site.url);
       if (auth === "login") {
         headers = await loginHeaders(site);
-        ids = await x.site.login.postLogin({ fetch: ctxFetch, origin: site.url, headers, ids: {}, decodeJwt });
+        ids = await x.site.login.postLogin(hookCtx(site.url, headers));
       } else {
-        headers = (await x.site.bootstrap({ fetch: ctxFetch, origin: site.url, headers: {}, ids: {}, decodeJwt })).headers;
+        headers = (await x.site.bootstrap(hookCtx(site.url, {}))).headers;
         ids = {};
       }
     });

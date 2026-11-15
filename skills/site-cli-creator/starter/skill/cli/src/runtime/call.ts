@@ -51,6 +51,8 @@ export type Deps = {
    * "browser"'s Chrome. Defaults to `fetch`.
    */
   plainFetch?: Fetch;
+  /** transport "browser": the cookies Chrome holds for the origin, by name (SiteCtx.cookies). */
+  cookies?(): Promise<Record<string, string>>;
   /** Opens Chrome on the login profile; null when sign-in didn't complete (headless: the profile is logged out). */
   login(headless: boolean, options?: SignInOptions): Promise<SignedIn | null>;
   /**
@@ -84,7 +86,8 @@ export type ClientOptions = {
 };
 
 export type Request = { method: string; url: string; headers: Record<string, string>; body?: string };
-type Response_ = { status: number; body: unknown; loginRedirect?: boolean; offsite?: boolean };
+/** `blocked`: the bot protection that refused the request (blockSignal), when one did. */
+type Response_ = { status: number; body: unknown; loginRedirect?: boolean; offsite?: boolean; blocked?: string };
 
 export function buildRequest(op: Operation, vars: unknown, base: { origin: string; graphqlPath?: string; headers: Record<string, string> }): Request {
   const headers: Record<string, string> = { accept: "application/json" };
@@ -248,10 +251,25 @@ export class Client {
   }
 
   /** A context for site hooks. `live`: calls go through this client (with reauth); otherwise through a fixed session. */
-  siteCtx(session: Session, live: boolean): SiteCtx {
+  siteCtx(session: Session, live: boolean, base?: Fetch): SiteCtx {
     const caller = live ? this : new Client(this.site, this.deps, { session, reauth: false, confirm: true });
+    // ctx.cookies(): what this hook's ctx.fetch answers set, over Chrome's jar under transport
+    // "browser" (asked only when the hook uses the Operations' fetch, never for renew's plain one).
+    const set = new Map<string, string>();
+    const send = base ?? this.deps.fetch;
+    const chrome = base ? undefined : this.deps.cookies;
+    const fetch: Fetch = async (input, init) => {
+      const res = await send(input, init);
+      for (const c of res.headers.getSetCookie?.() ?? []) {
+        const pair = c.split(";")[0]!;
+        const eq = pair.indexOf("=");
+        if (eq > 0) set.set(pair.slice(0, eq).trim(), pair.slice(eq + 1).trim());
+      }
+      return res;
+    };
     return {
-      fetch: this.deps.fetch,
+      fetch,
+      cookies: async () => ({ ...(chrome ? await chrome().catch(() => ({})) : {}), ...Object.fromEntries(set) }),
       origin: this.origin,
       headers: { ...session.headers },
       ids: { ...session.ids },
@@ -343,7 +361,7 @@ export class Client {
       const abort = new AbortController();
       const fetch: Fetch = (input, init) => plain(input, { ...init, signal: init?.signal ? AbortSignal.any([init.signal, abort.signal]) : abort.signal });
       try {
-        renewed = await withTimeout(refresh.renew({ ...this.siteCtx(current, false), fetch }), RENEW_TIMEOUT_MS, () => abort.abort());
+        renewed = await withTimeout(refresh.renew(this.siteCtx(current, false, fetch)), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
         // The error's name only: its message may carry what the site sent.
@@ -492,9 +510,19 @@ export class Client {
     } catch {
       return undefined; // network trouble: the Operation itself reports it
     }
+    if (res.blocked) return undefined; // a bot wall, not a sign-out: the Operation reports it
     if (res.status >= 200 && res.status < 300 && !res.loginRedirect && !res.offsite) return undefined;
     if (res.status >= 500 || res.status === 429) return undefined; // the site is struggling, not signed out
     return "signed-out";
+  }
+
+  /**
+   * The site refused the request as automated traffic (SPEC §10): network, never Drift, since
+   * nothing in the site changed that a Contract describes. `blocked` names the bot protection.
+   */
+  private blockedFailure(op: Operation, blocked: string): Failure {
+    const how = this.site.transport === "browser" ? ", even from Chrome" : "";
+    return new Failure("network", `${op.name}: the site refused the request as automated traffic${how} (bot protection: ${blocked}).`, { blocked });
   }
 
   /**
@@ -526,8 +554,10 @@ export class Client {
     await this.ensureSession();
     await this.probeSession();
     let res = await this.send(op, v.data);
-    // Renew, then sign in (or rerun bootstrap): each at most once a run, so this ends.
-    while (this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data);
+    // Renew, then sign in (or rerun bootstrap): each at most once a run, so this ends. A bot wall
+    // is no sign-out: no sign-in gets past it, so none is spent on it.
+    while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data);
+    if (res.blocked) throw this.blockedFailure(op, res.blocked);
     if (this.isAuthFailure(op, res)) {
       const after =
         this.site.auth === "login"
@@ -602,6 +632,7 @@ export class Client {
         if (e instanceof Failure) throw e; // transport "browser" with no Chrome to send from
         transport = (e as { code?: string })?.code || (e as Error)?.name || "error";
       }
+      if (res?.blocked) return res; // a bot wall answers the same way again: call() reports it
       const serverError = res && op.graphql !== undefined ? gqlServerError(res.body) : undefined;
       const failed = transport !== undefined || res!.status === 429 || res!.status >= 500 || serverError !== undefined;
       if (!failed) return res!;
@@ -623,7 +654,11 @@ export class Client {
     for (let hop = 0; hop < 6; hop++) {
       const r = await this.deps.fetch(url, { method, headers: req.headers, body, redirect: "manual" });
       const location = r.headers.get("location");
-      if (r.status < 300 || r.status >= 400 || !location) return { status: r.status, body: await readBody(r) };
+      if (r.status < 300 || r.status >= 400 || !location) {
+        const body = await readBody(r);
+        const blocked = blockSignal(r.status, r.headers, body);
+        return { status: r.status, body, ...(blocked && { blocked }) };
+      }
       const next = new URL(location, url);
       if (this.site.auth === "login" && isLoginHost(this.site, next.toString())) return { status: r.status, body: undefined, loginRedirect: true };
       if (next.origin !== new URL(url).origin) return { status: r.status, body: undefined, offsite: true };
@@ -673,6 +708,31 @@ export class Client {
   private fail(op: Operation, breakType: BreakType, path: string, code: string, why: string, diff: DiffEntry[] = []): never {
     throw this.drift(op, breakType, path, code, why, diff);
   }
+}
+
+/**
+ * Markers in an answer that is not JSON (readBody gave text): a bot protection's challenge or block
+ * page. Matched, never kept: only the vendor name leaves this function. First match wins.
+ */
+const BLOCK_PAGES: [RegExp, string][] = [
+  [/cf-chl|challenge-platform|cf_chl_opt|<title>Just a moment\.\.\.<\/title>|Attention Required! \| Cloudflare/i, "cloudflare"],
+  [/captcha-delivery\.com/i, "datadome"],
+  [/px-captcha|_pxCaptcha|perimeterx/i, "perimeterx"],
+  [/Incapsula incident|_Incapsula_Resource/i, "imperva"],
+  [/errors\.edgesuite\.net|Reference #\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+/i, "akamai"],
+  [/g-recaptcha|h-captcha|hcaptcha\.com|recaptcha\/api|checking your browser/i, "captcha"],
+];
+
+/**
+ * The bot protection that refused a request, or undefined (SPEC §10). Headers first: Cloudflare marks
+ * a challenge with `cf-mitigated`, DataDome its refusals with `x-datadome`. Then, for an answer that
+ * is not JSON, the challenge pages' markers, whatever the status (a challenge can come as 200).
+ */
+export function blockSignal(status: number, headers: Headers, body: unknown): string | undefined {
+  if (headers.has("cf-mitigated")) return "cloudflare";
+  if (status >= 400 && (headers.has("x-datadome") || headers.has("x-dd-b"))) return "datadome";
+  if (typeof body !== "string") return undefined;
+  return BLOCK_PAGES.find(([marker]) => marker.test(body))?.[1];
 }
 
 /** Error codes of a request that never reached the site (Bun's fetch, Node's): safe to send again. */

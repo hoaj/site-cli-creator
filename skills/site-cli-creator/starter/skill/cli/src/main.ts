@@ -125,6 +125,7 @@ function defaultDeps(app: App): Deps {
     fetch: tab?.fetch ?? ((input, init) => fetch(input, init)),
     // login.refresh.renew: never through transport "browser"'s Chrome; a test's fake fetch when it gave one.
     plainFetch: app.deps?.fetch ?? ((input, init) => fetch(input, init)),
+    ...(tab && { cookies: () => tab.cookies() }), // hooks' ctx.cookies() under transport "browser"
     env,
     login: (headless, options) => chromeLogin(app.site, { headless, note, env, fromProfile: options?.fromProfile }),
     release: async () => tab?.close(),
