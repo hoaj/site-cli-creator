@@ -279,7 +279,7 @@ describe("regen.ts", () => {
     writeFileSync(join(skill, "cli/src/site.ts"), NEVER_SITE());
     write(
       join(skill, "cli/src/operations/placeOrder.ts"),
-      `import { z } from "zod";\nexport default { name: "POST /api/order/:step", effect: "write", rest: { method: "POST", path: "/api/order/:step" }, variables: z.object({ step: z.string() }), response: z.unknown() };\n`,
+      `import { z } from "zod";\nexport default { name: "POST /api/order/place-now", effect: "write", rest: { method: "POST", path: "/api/order/place-now" }, variables: z.object({}), response: z.unknown() };\n`,
     );
     write(
       join(skill, "cli/src/operations/removeMe.ts"),
@@ -289,7 +289,7 @@ describe("regen.ts", () => {
     const r = regen(skill);
     expect(r.code).toBe(1);
     expect(r.out.error.message).toBe(
-      "site.ts's never list forbids these Operations: operations/placeOrder.ts: POST /api/order/:step matches site.never POST /api/order/place* (Placing an order: the user always pays); operations/removeMe.ts: removeMe matches site.never GraphQL DeleteAccount (Deleting the account). Delete each such Operation and the commands that use it (the CLI never sends these requests), then run regen again. Nothing was written.",
+      "site.ts's never list forbids these Operations: operations/placeOrder.ts: POST /api/order/place-now matches site.never POST /api/order/place* (Placing an order: the user always pays); operations/removeMe.ts: removeMe matches site.never GraphQL DeleteAccount (Deleting the account). Delete each such Operation and the commands that use it (the CLI never sends these requests), then run regen again. Nothing was written.",
     );
     expect(existsSync(join(skill, "cli/src/registry.ts"))).toBe(false);
     expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toBe(md);
@@ -391,7 +391,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code and the fixtur
         Bun.spawnSync([process.execPath, "test", "tests/never-sent.test.ts"], { cwd: join(skill, "cli"), env: { ...process.env, SITE_CLI_TEST: "1" }, stdout: "pipe", stderr: "pipe" });
       const clean = neverSent();
       expect(clean.exitCode, clean.stderr.toString()).toBe(0);
-      write(join(skill, "cli/src/lib/close.ts"), 'export const closeUrl = (o: string) => `${o}/api/account/close`;\n');
+      write(join(skill, "cli/src/lib/close.ts"), 'export const close = (o: string) => fetch(`${o}/api/account/close`, { method: "DELETE" });\n');
       const caught = neverSent();
       expect(caught.exitCode).toBe(1);
       expect(caught.stderr.toString()).toContain("src/lib/close.ts names DELETE /api/account* (Deleting the account)");

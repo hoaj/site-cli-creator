@@ -43,7 +43,7 @@ const gqlPlace = defineOperation({
   response: z.unknown(),
 });
 
-/** A REST Operation whose path template only reaches a forbidden path through a variable. */
+/** A REST Operation whose path template only reaches a forbidden path through a variable: the runtime refuses that call. */
 const anyOrderAction = defineOperation({
   name: "POST /api/order/:action",
   effect: "write",
@@ -92,8 +92,11 @@ describe("matching", () => {
     expect(forbiddenOperation(site, placeOrder)?.why).toBe("Placing an order: the user always pays");
     expect(forbiddenOperation(site, deleteAccount)?.why).toBe("Deleting the account");
     expect(forbiddenOperation(site, gqlPlace)?.why).toBe("Placing an order: the user always pays");
-    // Its :action variable can be "place": the template reaches the forbidden path.
-    expect(forbiddenOperation(site, anyOrderAction)?.why).toBe("Placing an order: the user always pays");
+    // Only a variable makes it forbidden: left to the runtime, so a read of /api/order/:id is no match.
+    expect(forbiddenOperation(site, anyOrderAction)).toBeUndefined();
+    const readAny = defineOperation({ name: "GET /api/account/:id", effect: "read", rest: { method: "GET", path: "/api/account/:id" }, variables: z.object({ id: z.string() }), response: z.unknown() });
+    expect(forbiddenOperation(makeSite({ never: [{ path: "/api/account/*", why: "w" }] }), readAny)?.why).toBe("w");
+    expect(forbiddenOperation(makeSite({ never: [{ path: "/api/account/close*", why: "w" }] }), readAny)).toBeUndefined();
     expect(forbiddenOperation(site, getOrder)).toBeUndefined();
     expect(forbiddenOperation(site, renameOrder)).toBeUndefined();
     // A REST rule on the GraphQL endpoint covers every GraphQL Operation.
@@ -109,12 +112,14 @@ describe("matching", () => {
     expect(NEVER.map(neverRuleLabel)).toEqual(["POST /api/order/place*", "/api/account/*/delete", "GraphQL PlaceOrder"]);
   });
 
-  test("neverInSource finds a forbidden path or GraphQL name in source text, not a longer word or path", () => {
+  test("neverInSource finds a forbidden path or GraphQL name in source text, not a longer word or path, nor a path only another method uses", () => {
     const files = [
       { path: "src/commands/order-place.ts", text: 'await fetch(`${origin}/api/order/placeNow`, { method: "POST" });' },
       { path: "src/operations/del.ts", text: 'rest: { method: "DELETE", path: "/api/account/:id/delete" }' },
       { path: "src/lib/gql.ts", text: "const q = `mutation PlaceOrder { placeOrder { id } }`;" },
       { path: "src/operations/fine.ts", text: 'path: "/api/order/cart", other: "/api/account/:id/deleted", graphql: "query PlaceOrderStatus { x }"' },
+      // The POST rule's path, read with GET: no match.
+      { path: "src/operations/status.ts", text: 'rest: { method: "GET", path: "/api/order/place/status" }' },
     ];
     expect(neverInSource(site, files)).toEqual([
       "src/commands/order-place.ts names POST /api/order/place* (Placing an order: the user always pays)",

@@ -96,17 +96,13 @@ export function forbiddenRequest(site: Site, req: { method: string; url: string;
   return list.find((r) => (r.path !== undefined ? methodMatches(r, req.method) && globRe(r.path).test(path) : nameMatches(r, names)));
 }
 
-/** A REST path template as a RegExp: `:name` is one segment; case-insensitive. */
-function templateRe(path: string): RegExp {
-  const src = path.replace(/\/+$/, "").split(/((?<=\/):[A-Za-z_]\w*)/).map((part) => (/^:[A-Za-z_]\w*$/.test(part) ? "[^/]+" : escape(part))).join("");
-  return new RegExp(`^${src}/?$`, "i");
-}
-
 /**
  * The rule an Operation's declared request breaks, if any. A REST template matches when the rule's
- * glob covers the template, or the template can be filled to a path the glob covers (`/api/order/:step`
- * reaches `/api/order/place*`). A GraphQL Operation is a POST to site.graphqlPath carrying its name
- * and every definition in its query.
+ * glob covers the template as written (`/api/orders/*` covers `/api/orders/:id`). A template that only
+ * some variables fill to a forbidden path (`/api/order/:step` with step "place") is left to the
+ * runtime, which checks the request it builds: refusing it here would refuse every read of
+ * `/api/order/:id` as well. A GraphQL Operation is a POST to site.graphqlPath carrying its name and
+ * every definition in its query.
  */
 export function forbiddenOperation(site: Site, op: Operation): NeverRule | undefined {
   const list = rules(site);
@@ -117,9 +113,7 @@ export function forbiddenOperation(site: Site, op: Operation): NeverRule | undef
   }
   if (!op.rest) return undefined;
   const { method, path } = op.rest;
-  return list.find(
-    (r) => r.path !== undefined && methodMatches(r, method) && (globRe(r.path).test(path) || templateRe(path).test(r.path.replace(/\*/g, "x"))),
-  );
+  return list.find((r) => r.path !== undefined && methodMatches(r, method) && globRe(r.path).test(path));
 }
 
 const describeRule = (rule: NeverRule) => `${neverRuleLabel(rule)} (${rule.why})`;
@@ -135,15 +129,20 @@ export function neverProblems(site: Site, operations: Operation[]): string[] {
 /**
  * One line per source file that names a request site.never forbids: a path glob (its `*` spans any
  * run of characters that is no space or quote, so `:id` and `${id}` match) not followed by more of a
- * path, or a GraphQL name as a whole word. Case-insensitive, like the runtime's match.
+ * path, or a GraphQL name as a whole word; case-insensitive, like the runtime's match. A rule with a
+ * method counts only in a file that also holds that method as a quoted string ("DELETE"), so a read
+ * of the same path (GET /api/cart beside DELETE /api/cart) is no match.
  */
 export function neverInSource(site: Site, files: { path: string; text: string }[]): string[] {
   const res = rules(site).map((rule) => {
     const src =
       rule.path !== undefined ? `${rule.path.replace(/\/+$/, "").split("*").map(escape).join("[^\\s\"'`]*")}(?![\\w-])` : `(?<![\\w$])${escape(rule.graphql!)}(?![\\w$])`;
-    return { rule, re: new RegExp(src, "i") };
+    const method = rule.method ? new RegExp(`["'\`]${rule.method}["'\`]`, "i") : undefined;
+    return { rule, re: new RegExp(src, "i"), method };
   });
-  return files.flatMap((f) => res.filter(({ re }) => re.test(f.text)).map(({ rule }) => `${f.path} names ${describeRule(rule)}`));
+  return files.flatMap((f) =>
+    res.filter(({ re, method }) => re.test(f.text) && (!method || method.test(f.text))).map(({ rule }) => `${f.path} names ${describeRule(rule)}`),
+  );
 }
 
 /**
