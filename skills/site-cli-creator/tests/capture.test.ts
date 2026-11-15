@@ -136,7 +136,7 @@ document.getElementById("street").onclick = () => {
 // whose texts and links hold values, a Drupal-style /views/ajax call whose JSON carries an HTML fragment,
 // and a detail page whose path is a slug of a title on the list.
 const EVENTS_PAGE = `<!doctype html><html><head><script type="application/ld+json">{"name":"Jens Hansen","price":349.75}</script></head>
-<body><ul class="events"><li class="event" data-id="${CUSTOMER_ID}"><h2 class="title">Jens Hansen</h2><a id="detail" href="/events/Vestergade-12">mere</a>
+<body><ul class="events"><li class="event" data-id="${CUSTOMER_ID}"><h2 class="title">Koncert i Vestergade</h2><a id="detail" href="/events/Koncert-i-Vestergade">mere</a>
 <li class="event"><h2 class="title">Vestergade 12</h2><time datetime="2026-12-01">349.75</time></ul>
 <script>fetch("/views/ajax?view_name=calendar_block").then((r) => r.json()).then(() => (window.loaded = true));</script></body></html>`;
 const EVENT_PAGE = `<!doctype html><html><body><article class="event"><h1>Jens Hansen</h1><p class="where">Vestergade 12</p></article></body></html>`;
@@ -217,8 +217,8 @@ beforeAll(() => {
       if (url.pathname === "/u/login" && req.method === "POST") return Response.redirect(`http://127.0.0.1:${server.port}/sso-home`, 302);
       if (url.pathname === "/sso-home") return new Response(SSO_HOME_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/events") return new Response(EVENTS_PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
-      if (url.pathname === "/events/Vestergade-12") return new Response(EVENT_PAGE, { headers: { "content-type": "text/html" } });
-      if (url.pathname === "/views/ajax") return json([{ command: "settings", settings: {} }, { command: "insert", data: `<div class="view"><span class="who">${SECRETS[2]}</span></div>` }]);
+      if (url.pathname === "/events/Koncert-i-Vestergade") return new Response(EVENT_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/views/ajax") return json([{ command: "settings", settings: {} }, { command: "insert", data: `<div class="view">${`<span class="who">${SECRETS[2]}</span>`.repeat(4)}</div>` }]);
       if (url.pathname === "/explore") return new Response(EXPLORE_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === `/explore/customers/${CUSTOMER_ID}/bills`) return new Response(EXPLORE_BILLS_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/api/bills") return json([{ id: "b-1", amount: 349.75, holder: "Jens Hansen" }]);
@@ -412,7 +412,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     assertNoValues(r.everything);
     expect(writesReceived).toEqual([]);
     expect(r.out.operations).toEqual([
-      { operation: "GET /signed-in", effect: "read", navigation: true, html: true, file: "GET-signed-in.shape.json", aborted: 0 },
+      { operation: "GET /signed-in", effect: "read", navigation: true, file: "GET-signed-in.shape.json", aborted: 0 }, // no text in its HTML: no html mark
       { operation: "POST /oauth/token", effect: "write", loginFlow: true, file: "POST-oauth-token.shape.json", aborted: 0 },
       { operation: "POST /api/session/post-login", effect: "write", loginFlow: true, file: "POST-api-session-post-login.shape.json", aborted: 0 },
       { operation: "signInUser", effect: "write", loginFlow: true, file: "signInUser.shape.json", aborted: 0 },
@@ -618,7 +618,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(ul).toContain('"many":true');
     expect(ul).toContain('"json":{"type":"object"');
     const ajax = JSON.parse(readFileSync(join(r.dir, entry("GET /views/ajax").file), "utf8"));
-    expect(ajax.responses[0].htmlInJson).toEqual([{ path: "[].data", outline: [{ tag: "div", classes: ["view"], children: [{ tag: "span", classes: ["who"], text: true }] }] }]);
+    expect(ajax.responses[0].htmlInJson).toEqual([{ path: "[].data", outline: [{ tag: "div", classes: ["view"], children: [{ tag: "span", classes: ["who"], text: true, many: true }] }] }]);
 
     // A page load that answered HTML can be a Task's Operation: split-capture takes it.
     const split = Bun.spawnSync([process.execPath, join(SKILL_ROOT, "tools", "split-capture.ts"), "--skill-dir", skill, "--task", "event-list", "--op", "GET /events"], { stdout: "pipe", stderr: "pipe" });

@@ -67,9 +67,12 @@ type Node = AnyNode;
  * else (a fragment from an HTML or JSON answer) as a fragment, so its table rows stay rows.
  */
 export function parseHtml(html: string): Doc {
-  return /^\s*(?:<!--[\s\S]*?-->\s*)*<(?:!doctype|html[\s>])/i.test(html)
+  const doc = /^\s*(?:<!--[\s\S]*?-->\s*)*<(?:!doctype|html[\s>])/i.test(html)
     ? parse(html, { treeAdapter: adapter })
     : parseFragment(html, { treeAdapter: adapter });
+  // A <template>'s content is inert: a browser's selectors never match inside it, so neither do ours.
+  for (const t of DomUtils.findAll((el) => el.name === "template", doc.children)) DomUtils.removeElement(t);
+  return doc;
 }
 
 class Mismatch {
@@ -151,8 +154,10 @@ function compiled<T>(css: string, run: () => T): T {
 }
 
 const BREAKS = new Set(["br", "p", "div", "li", "tr", "td", "th", "h1", "h2", "h3", "h4", "h5", "h6", "dt", "dd"]);
+/** Never visible text: a <noscript> holds markup (parse5 parses it as text, as a browser with scripts on does). */
+const HIDDEN = new Set(["noscript", "template"]);
 
-/** An element's text: whitespace collapsed, `<br>` and block boundaries a space, scripts and styles inside it left out. */
+/** An element's text: whitespace collapsed, `<br>` and block boundaries a space, scripts, styles and `<noscript>` inside it left out. */
 function textOf(el: Element | null): string | null {
   if (!el) return null;
   const parts: string[] = [];
@@ -160,6 +165,7 @@ function textOf(el: Element | null): string | null {
     if (node.type === "text") parts.push((node as { data: string }).data);
     else if (node.type === "tag") {
       const tag = (node as Element).name;
+      if (HIDDEN.has(tag)) return;
       if (BREAKS.has(tag)) parts.push(" ");
       for (const child of (node as Element).children) walk(child as Node);
       if (BREAKS.has(tag)) parts.push(" ");

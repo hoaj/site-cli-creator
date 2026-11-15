@@ -2,7 +2,7 @@
 // value: strings become {type:"string"}, and object keys that look like data
 // (ids, emails, numbers) collapse into a "record" so they can't leak either.
 
-import { htmlOutline, looksLikeHtml, mergeOutlines, type HtmlNode } from "./html-outline";
+import { htmlOutline, looksLikeHtml, mergeOutlined, type HtmlNode } from "./html-outline";
 
 /** What every observed string looked like, never the string: digits only, an ISO date, an ISO date-time. */
 type StringFormat = "numeric" | "date" | "datetime";
@@ -284,10 +284,7 @@ export function mergeBodies(a: BodyShape, b: BodyShape): BodyShape {
   if ((a.kind === "json" || a.kind === "form") && a.kind === b.kind) {
     return { kind: a.kind, shape: mergeShapes(a.shape, (b as typeof a).shape) };
   }
-  if (a.kind === "html" && b.kind === "html") {
-    const outline = mergeOutlines(a.outline ?? [], b.outline ?? []);
-    return { kind: "html", ...(outline.length ? { outline } : {}), ...(a.truncated || b.truncated ? { truncated: true as const } : {}) };
-  }
+  if (a.kind === "html" && b.kind === "html") return { kind: "html", ...mergeOutlined(a, b) };
   if (a.kind === "empty") return b;
   return a;
 }

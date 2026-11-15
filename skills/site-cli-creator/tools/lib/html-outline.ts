@@ -97,11 +97,16 @@ function unwrap(nodes: HtmlNode[]): HtmlNode[] {
   return nodes.flatMap((n) => (n.tag === "html" || n.tag === "body") && !n.id && !n.classes ? unwrap(n.children ?? []) : [n]);
 }
 
+/** A record number inside a name is data: `post-123` → `post-:id` (one digit stays: `col-md-6`). */
+function withoutNumbers(name: string): string {
+  return name.replace(/\d{2,}/g, ":id");
+}
+
 function describe(el: Element): Omit<HtmlNode, "tag"> {
   const out: Omit<HtmlNode, "tag"> = {};
   const attribs = el.attribs ?? {};
-  if (attribs.id !== undefined && attribs.id !== "") out.id = isIdLike(attribs.id) ? ":id" : attribs.id;
-  const classes = [...new Set((attribs.class ?? "").split(/\s+/).filter((c) => c && !isIdLike(c)))].sort();
+  if (attribs.id !== undefined && attribs.id !== "") out.id = isIdLike(attribs.id) ? ":id" : withoutNumbers(attribs.id);
+  const classes = [...new Set((attribs.class ?? "").split(/\s+/).filter((c) => c && !isIdLike(c)).map(withoutNumbers))].sort();
   if (classes.length) out.classes = classes;
   const attrs = Object.keys(attribs)
     .map((a) => a.toLowerCase())
@@ -171,6 +176,35 @@ export function mergeNode(a: HtmlNode, b: HtmlNode): HtmlNode {
   };
 }
 
+/** Two observations' outlines and `truncated` flags joined (the shape of an HTML body and of an `htmlInJson` entry). */
+export function mergeOutlined(a: { outline?: HtmlNode[]; truncated?: true }, b: { outline?: HtmlNode[]; truncated?: true }): { outline?: HtmlNode[]; truncated?: true } {
+  const outline = mergeOutlines(a.outline ?? [], b.outline ?? []);
+  return { ...(outline.length ? { outline } : {}), ...(a.truncated || b.truncated ? { truncated: true as const } : {}) };
+}
+
+/** An outline with something to read in it: an element with text, or inline JSON. A SPA's shell (`<div id="root">`) has neither. */
+export function outlineHasData(nodes: HtmlNode[] | undefined): boolean {
+  return (nodes ?? []).some((n) => n.text || n.json || outlineHasData(n.children));
+}
+
+/**
+ * Whether a JSON answer's HTML strings are its data (Drupal's `/views/ajax`, whose JSON is commands around
+ * the HTML) rather than one rich-text field of a JSON API: they hold a repeated element or half its text.
+ */
+export function htmlIsTheData(found: { outline: HtmlNode[] }[], htmlChars: number, jsonChars: number): boolean {
+  if (!found.some((e) => outlineHasData(e.outline))) return false;
+  return jsonChars > 0 && htmlChars / jsonChars >= 0.5;
+}
+
+/** The characters of the HTML strings inside a JSON value. */
+export function htmlCharsInJson(value: unknown, depth = 0): number {
+  if (depth > 64) return 0;
+  if (typeof value === "string") return looksLikeHtml(value) ? value.length : 0;
+  if (Array.isArray(value)) return value.reduce<number>((n, v) => n + htmlCharsInJson(v, depth + 1), 0);
+  if (value && typeof value === "object") return Object.values(value).reduce<number>((n, v) => n + htmlCharsInJson(v, depth + 1), 0);
+  return 0;
+}
+
 /** Two outlines of the same place (two loads of one page) joined node by node. */
 export function mergeOutlines(a: HtmlNode[], b: HtmlNode[]): HtmlNode[] {
   const out = [...a];
@@ -195,7 +229,7 @@ export function htmlInJson(value: unknown, remember: (text: string) => void = ()
       if (!looksLikeHtml(v)) return;
       const o = htmlOutline(v, remember);
       const seen = found.get(path);
-      found.set(path, seen ? { outline: mergeOutlines(seen.outline, o.outline), ...(seen.truncated || o.truncated ? { truncated: true as const } : {}) } : o);
+      found.set(path, seen ? { outline: [], ...mergeOutlined(seen, o) } : o);
     } else if (Array.isArray(v)) {
       for (const item of v) walk(item, `${path}[]`, depth + 1);
     } else if (v && typeof v === "object") {

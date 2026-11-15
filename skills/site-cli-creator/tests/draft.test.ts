@@ -6,6 +6,7 @@ import { buildRequest } from "../starter/skill/cli/src/runtime/call";
 import { capturedVariables, compareWrite, parseCaptured } from "../starter/skill/cli/src/runtime/check";
 import { extractHtml } from "../starter/skill/cli/src/runtime/html";
 import { draftOperation, namePathParams, operationFileName } from "../tools/lib/draft";
+import { fromSource } from "../tools/lib/draft-html";
 import { GENERATOR_ROOT, SKILL_ROOT } from "../tools/lib/paths";
 import { CaptureRecorder, type OperationShape, type RequestInfo } from "../tools/lib/recorder";
 
@@ -256,6 +257,33 @@ describe("draftOperation", () => {
     expect(op.rest?.query?.({ area: "x" })).toEqual({ area: "x", page: undefined });
   });
 
+  test("a JSON API with a rich-text field drafts its JSON response, naming the HTML strings in a comment (review)", async () => {
+    const items = [1, 2].map((id) => ({ id, name: "n", price: 10.5, descriptionHtml: "<p>Fin <b>vare</b></p>" }));
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/api/products`, JSON.stringify({ items }), "application/json", "fetch"));
+    expect(source).not.toContain("html: {");
+    expect(source).toContain("items[].descriptionHtml");
+    const op = await importDraft("listProducts.ts", source);
+    expect(op.response.safeParse({ items }).success).toBe(true);
+  });
+
+  test("a repeated element inside an item drafts as all: true, so no value is lost (review)", async () => {
+    const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><h3 class="t">T${i}</h3><span>tag${i}a</span><span>tag${i}b</span></li>`).join("")}</ul>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/tags`, page, "text/html"));
+    expect(source).toContain('{ css: "span", all: true }');
+    const op = await importDraft("listTags.ts", source);
+    const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, any[]> };
+    expect(op.response.safeParse(picked.value).success).toBe(true);
+    expect(Object.values(picked.value)[0]![1]).toMatchObject({ text: ["tag2a", "tag2b"] });
+  });
+
+  test("html.from for a JSON answer that is one HTML string, and for keys that are no identifiers (review)", () => {
+    expect(fromSource("")).toBe("(body: any) => body");
+    expect(fromSource("content-html")).toBe('(body: any) => body?.["content-html"]');
+    expect(fromSource("data.view.rendered")).toBe("(body: any) => body?.data?.view?.rendered");
+    expect(fromSource("[].data-html")).toBe('(body: any) => (Array.isArray(body) ? body : []).find((item: any) => typeof item?.["data-html"] === "string")?.["data-html"]');
+    expect(fromSource("{}.html")).toContain("TODO");
+  });
+
   test("a page with no repeated element drafts a field per element with text, and inline JSON as json: true (#102)", async () => {
     const page = `<html><head><script type="application/ld+json">{"name":"n","price":1}</script></head><body><article class="event"><h1 class="name">x</h1><p class="where">y</p></article></body></html>`;
     const { source } = draftOperation(htmlCapture(`${ORIGIN}/event/:id`, page, "text/html"));
@@ -281,7 +309,7 @@ describe("draftOperation", () => {
   test("drafts type-check against the runtime's Operation type", () => {
     const tsc = Bun.spawnSync(
       [process.execPath, "x", "tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "esnext", "--module", "esnext",
-        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts"].map((f) => join(work, "cli", "src", "operations", f))],
+        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts", "listProducts.ts", "listTags.ts"].map((f) => join(work, "cli", "src", "operations", f))],
       { cwd: GENERATOR_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("");

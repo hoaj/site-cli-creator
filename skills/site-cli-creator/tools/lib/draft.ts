@@ -185,13 +185,17 @@ export function draftOperation(
   if (body?.kind === "html" && body.outline?.length) {
     if (body.truncated) lines.push("  // The page was too big to outline whole: the shape file's outline is cut short.");
     lines.push(...draftHtml(body.outline));
-  } else if (embedded.length) {
+  } else if (embedded.length && op.html) {
     const [first] = embedded;
     lines.push(`  // The JSON answer carries HTML at ${embedded.map((e) => e.path).join(", ")}: drafted as an HTML Operation`);
     lines.push(`  // whose html.from returns the HTML at ${first!.path}. If the JSON's own fields hold the data, draw`);
     lines.push("  // response from the shape file's JSON body instead and drop html.");
     lines.push(...draftHtml(first!.outline, fromSource(first!.path)));
   } else if (body && (body.kind === "json" || body.kind === "form")) {
+    if (embedded.length) {
+      lines.push(`  // HTML strings at ${embedded.map((e) => e.path).join(", ")} (htmlInJson in the shape file): the JSON's own fields are drafted.`);
+      lines.push("  // When the data is only in that HTML, read it with html.from (reference/contracts.md, HTML Operations).");
+    }
     lines.push(`  response: ${zodSource(body.shape, 1)},`);
   } else {
     const why = op.aborted >= op.seen ? "the request was aborted during the Capture" : `the response was ${body?.kind ?? "not seen"}`;

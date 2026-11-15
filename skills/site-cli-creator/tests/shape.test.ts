@@ -670,6 +670,15 @@ describe("HTML outlines (#102)", () => {
     expect(texts).toContain(SECRETS.street);
   });
 
+  test("ids and classes with a record number keep their pattern, not the number, and still collapse into a list (review)", () => {
+    const archive = `<!doctype html><html><body class="page-id-45"><main>${[123, 124, 125].map((n) => `<article id="post-${n}" class="post post-${n}"><h2>x</h2></article>`).join("")}</main></body></html>`;
+    const { outline } = htmlOutline(archive);
+    expect(JSON.stringify(outline)).not.toMatch(/12[345]|45/);
+    expect(outline).toEqual([
+      { tag: "body", classes: ["page-id-:id"], children: [{ tag: "main", children: [{ tag: "article", id: "post-:id", classes: ["post", "post-:id"], many: true, children: [{ tag: "h2", text: true }] }] }] },
+    ]);
+  });
+
   test("a huge page is cut short and says so", () => {
     const big = "<div>" + Array.from({ length: 5000 }, (_, i) => `<p class="p${i % 7}"><b class="b${i}">x</b></p>`).join("") + "</div>";
     const o = htmlOutline(big);
@@ -694,7 +703,7 @@ describe("HTML outlines (#102)", () => {
     const nav = r.plan(req({ url: `${origin}/events?q=${encodeURIComponent(SECRETS.name)}`, resourceType: "document" }))!;
     r.record(nav, { response: { status: 200, headers: { "content-type": "text/html; charset=utf-8" }, body: Buffer.from(page) } });
     const ajax = r.plan(req({ url: `${origin}/views/ajax`, resourceType: "xhr" }))!;
-    r.record(ajax, { response: { status: 200, headers: { "content-type": "application/json" }, body: json([{ command: "insert", data: `<ul><li>${SECRETS.name}</li></ul>` }]) } });
+    r.record(ajax, { response: { status: 200, headers: { "content-type": "application/json" }, body: json([{ command: "insert", data: `<ul>${`<li>${SECRETS.name}</li>`.repeat(3)}</ul>` }]) } });
     const plain = r.plan(req({ url: `${origin}/api/me`, resourceType: "fetch" }))!;
     r.record(plain, { response: { status: 200, headers: { "content-type": "application/json" }, body: json({ name: SECRETS.name }) } });
     const ops = r.operations();
@@ -705,10 +714,44 @@ describe("HTML outlines (#102)", () => {
       ["GET /api/me", false, false],
     ]);
     expect(ops[0]!.responses[0]!.body.kind).toBe("html");
-    expect(ops[1]!.responses[0]!.htmlInJson).toEqual([{ path: "[].data", outline: [{ tag: "ul", children: [{ tag: "li", text: true }] }] }]);
+    expect(ops[1]!.responses[0]!.htmlInJson).toEqual([{ path: "[].data", outline: [{ tag: "ul", children: [{ tag: "li", text: true, many: true }] }] }]);
     // A value seen only as a page text is redacted from a later path, as one seen in JSON is.
     const detail = r.plan(req({ url: `${origin}/events/${encodeURIComponent(SECRETS.street)}`, resourceType: "document" }))!;
     r.record(detail, { response: { status: 200, headers: { "content-type": "text/html" }, body: Buffer.from("<p>ok</p>") } });
     expect(r.operations().map((o) => o.operation)).toContain("GET /events/:id");
+  });
+
+  test("page texts never redact a route: a short label, or any label for a path's first segment (review)", () => {
+    const origin = "https://www.shop.example";
+    const r = new CaptureRecorder({ origin });
+    const nav = `<nav><a href="/om-os">Om os</a><a href="/mine-regninger">Mine regninger</a><a href="/kontakt-og-hjaelp-her">Kontakt og hjaelp her</a></nav><h1>Koncert i parken</h1>`;
+    const home = r.plan(req({ url: `${origin}/`, resourceType: "document" }))!;
+    r.record(home, { response: { status: 200, headers: { "content-type": "text/html" }, body: Buffer.from(nav) } });
+    for (const path of ["/om-os", "/mine-regninger", "/api/mine-regninger", "/kontakt-og-hjaelp-her", "/events/koncert-i-parken"]) {
+      const p = r.plan(req({ url: `${origin}${path}`, resourceType: "fetch" }))!;
+      r.record(p, { response: { status: 200, headers: { "content-type": "application/json" }, body: json({ ok: true }) } });
+    }
+    expect(r.operations().map((o) => o.operation)).toEqual(["GET /", "GET /om-os", "GET /mine-regninger", "GET /api/mine-regninger", "GET /kontakt-og-hjaelp-her", "GET /events/:id"]);
+  });
+
+  test("html marks only an answer whose HTML carries data: not a SPA's empty shell, not a JSON API with a rich-text field (review)", () => {
+    const origin = "https://www.shop.example";
+    const r = new CaptureRecorder({ origin });
+    const shell = r.plan(req({ url: `${origin}/account`, resourceType: "document" }))!;
+    r.record(shell, { response: { status: 200, headers: { "content-type": "text/html" }, body: Buffer.from('<!doctype html><html><head><script src="/app.js"></script></head><body><div id="root"></div></body></html>') } });
+    const products = r.plan(req({ url: `${origin}/api/products` }))!;
+    const items = [1, 2, 3].map((id) => ({ id, name: "n", price: 10.5, sku: "s-1", descriptionHtml: "<p>Fin <b>vare</b></p>" }));
+    r.record(products, { response: { status: 200, headers: { "content-type": "application/json" }, body: json({ items, total: 3, page: 1 }) } });
+    const views = r.plan(req({ url: `${origin}/views/ajax`, resourceType: "xhr" }))!;
+    const rows = Array.from({ length: 10 }, () => '<li class="row"><h3 class="t">Titel</h3><time datetime="2026-01-01">1. jan</time></li>').join("");
+    r.record(views, { response: { status: 200, headers: { "content-type": "application/json" }, body: json([{ command: "settings", settings: { pager: 0 } }, { command: "insert", data: `<ul class="rows">${rows}</ul>` }]) } });
+    const ops = r.operations();
+    expect(ops.map((o) => [o.operation, o.html ?? false])).toEqual([
+      ["GET /account", false],
+      ["GET /api/products", false],
+      ["GET /views/ajax", true],
+    ]);
+    // The HTML strings are still listed, for an agent that needs them.
+    expect(ops[1]!.responses[0]!.htmlInJson?.map((e) => e.path)).toEqual(["items[].descriptionHtml"]);
   });
 });
