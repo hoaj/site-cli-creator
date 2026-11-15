@@ -3,6 +3,8 @@
 // (wider than what the CLI needs), REST calls and, for auth login, the token
 // and post-login steps. The login page is served on the separate login host.
 
+import type { Notice } from "./data";
+
 export type Auth = "login" | "none";
 
 /** The frontend's OAuth client id: it sends it to /oauth/token, which requires it to renew a token. */
@@ -216,6 +218,7 @@ export function accountPage(auth: Auth, form: NoteForm = NOTE_FORM): string {
   </table>
   <h2>Fakturaer</h2>
   <ul id="invoices"></ul>
+  <p><a id="notices-link" href="/notices">Driftsmeddelelser</a></p>
   <h2>Noter</h2>
   <ul id="notes"></ul>
   <form id="note-form">
@@ -224,6 +227,37 @@ export function accountPage(auth: Auth, form: NoteForm = NOTE_FORM): string {
     <button id="add-note" type="submit" disabled>${form.button}</button>
   </form>
   <script>${SCRIPT(auth, form)}</script>
+</body>
+</html>`;
+}
+
+/** HTML-escaped text for a server-rendered page. */
+function escapeHtml(text: string): string {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+/**
+ * The service notices, rendered on the server with no script and no JSON call, as an old CGI site writes
+ * HTML: no </li>, an unclosed <p>, a <br> inside a text (#102). `layout: "moved"` (the html-layout drift)
+ * renders the same notices in a new layout, with no ul.notices.
+ */
+export function noticesPage(notices: Notice[], area: string | null, layout: "list" | "moved" = "list"): string {
+  const shown = area ? notices.filter((n) => n.area === area) : notices;
+  const time = (n: Notice) => (n.startsAt ? `<time datetime="${n.startsAt}">${escapeHtml(n.startsText)}</time>` : `<em>${escapeHtml(n.startsText)}</em>`);
+  const items =
+    layout === "list"
+      ? shown.map((n) => `<li class="notice" data-id="${n.id}"><h3 class="title">${escapeHtml(n.title)}</h3><p class="area">Område:<br>${escapeHtml(n.area)}<p class="when">${time(n)}\n`).join("")
+      : shown.map((n) => `<div class="card" data-ref="${n.id}"><h2>${escapeHtml(n.title)}</h2><span class="place">${escapeHtml(n.area)}</span> ${time(n)}</div>\n`).join("");
+  const list = layout === "list" ? `<ul class="notices">\n${items}</ul>` : `<section class="cards">\n${items}</section>`;
+  return `<!doctype html>
+<html lang="da">
+<head><meta charset="utf-8"><title>Driftsmeddelelser</title><style>${STYLE}</style></head>
+<body>
+  <h1>Driftsmeddelelser</h1>
+  <form method="get" action="/notices"><label for="area">Område</label><input id="area" name="area" value="${escapeHtml(area ?? "")}"><button>Vis</button></form>
+  <p class="count">${shown.length} meddelelser
+  ${list}
+  <p><a href="/">Til min konto</a></p>
 </body>
 </html>`;
 }
