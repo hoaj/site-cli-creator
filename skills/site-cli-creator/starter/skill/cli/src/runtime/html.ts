@@ -4,7 +4,10 @@
 // (`no_match`), inline JSON that no longer parses (`invalid_json`), or, through Zod, a field that is
 // now missing or empty.
 import { selectAll, selectOne } from "css-select";
-import { DomUtils, parseDocument } from "htmlparser2";
+import type { AnyNode, Document, Element } from "domhandler";
+import * as DomUtils from "domutils";
+import { parse, parseFragment } from "parse5";
+import { adapter } from "parse5-htmlparser2-tree-adapter";
 import { ContractError } from "./envelope";
 
 /**
@@ -55,9 +58,19 @@ export function noContainerWarning(operation: string, path: string): string {
   return `${operation}: the html list ${path} has no container (in), so a changed layout reads as an empty list instead of Drift. Set in to the element that holds the list, which the page has even when the list is empty.`;
 }
 
-type Doc = ReturnType<typeof parseDocument>;
-type Node = Doc["children"][number];
-type Element = Parameters<typeof DomUtils.getAttributeValue>[0];
+type Doc = Document;
+type Node = AnyNode;
+
+/**
+ * `html` as a browser builds it (parse5 follows the HTML standard: an open `<p>` ends at the next `<li>`,
+ * a missing `</li>` is implied). A whole page (`<!doctype`, `<html`) is parsed as a document, anything
+ * else (a fragment from an HTML or JSON answer) as a fragment, so its table rows stay rows.
+ */
+export function parseHtml(html: string): Doc {
+  return /^\s*(?:<!--[\s\S]*?-->\s*)*<(?:!doctype|html[\s>])/i.test(html)
+    ? parse(html, { treeAdapter: adapter })
+    : parseFragment(html, { treeAdapter: adapter });
+}
 
 class Mismatch {
   constructor(
@@ -68,7 +81,7 @@ class Mismatch {
 
 /** Picks `fields` out of `html`. Never throws for the page's content; a selector the parser refuses is a ContractError. */
 export function extractHtml(html: string, fields: HtmlFields): Extracted {
-  const doc = parseDocument(html);
+  const doc = parseHtml(html);
   try {
     return { ok: true, value: pick(doc, fields, "") };
   } catch (e) {

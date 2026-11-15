@@ -3,7 +3,9 @@
 // ids and classes that are site code, attribute names, and whether an element has text of its own,
 // never the text or an attribute's value. Repeated siblings (a list's items) collapse into one node
 // marked `many`, so a page of 500 events is one item's outline.
-import { DomUtils, parseDocument } from "htmlparser2";
+import type { AnyNode, Element } from "domhandler";
+import * as DomUtils from "domutils";
+import { parseHtml } from "../../starter/skill/cli/src/runtime/html";
 import { isIdLike, isValueLikeKey, mergeOptional, shapeOf, type Shape } from "./shape";
 
 export type HtmlNode = {
@@ -27,9 +29,7 @@ export type HtmlNode = {
 
 export type HtmlOutline = { outline: HtmlNode[]; truncated?: true };
 
-type Doc = ReturnType<typeof parseDocument>;
-type Node = Doc["children"][number];
-type Element = Parameters<typeof DomUtils.getAttributeValue>[0];
+type Node = AnyNode;
 
 /** Elements whose content is never page data: dropped with everything in them. */
 const DROPPED = new Set(["style", "noscript", "template", "link", "meta", "base", "title"]);
@@ -46,7 +46,7 @@ export function looksLikeHtml(text: string): boolean {
 
 /** The outline of `html`; `remember` gets each text and inline JSON string, for redacting paths that carry one. */
 export function htmlOutline(html: string, remember: (text: string) => void = () => {}): HtmlOutline {
-  const doc = parseDocument(html);
+  const doc = parseHtml(html);
   let count = 0;
   let truncated = false;
   const walk = (nodes: Node[], depth: number): HtmlNode[] => {

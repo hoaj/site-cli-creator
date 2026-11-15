@@ -323,7 +323,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code and the fixtur
       expect(r.code, r.stderr).toBe(0);
       expect(r.out.needsChrome).toBe(true); // addNote is a write
       const names = r.out.commands.map((c: { name: string }) => c.name);
-      expect(names).toEqual(["invoice list", "invoice show", "note add", "subscription show"]);
+      expect(names).toEqual(["invoice list", "invoice show", "note add", "notice list", "subscription show"]);
       expect(r.out.commands.find((c: { name: string }) => c.name === "note add").write).toBe(true);
       const md = readFileSync(join(skill, "SKILL.md"), "utf8");
       expect(md).toMatch(/\| `shop note add` \| `--text <text>`[^|]*\| \*\*Write\.\*\*/);

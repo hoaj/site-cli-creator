@@ -26,6 +26,9 @@ export type Invoice = {
 
 export type Note = { id: string; text: string; createdAt: string };
 
+/** A service notice ("driftsmeddelelse"): served only as a server-rendered page, /notices (#102). */
+export type Notice = { id: string; title: string; area: string; startsAt: string | null; startsText: string };
+
 /** The one test user. `username`/`password` are what /login accepts. */
 export const USER = {
   username: "test",
@@ -100,6 +103,12 @@ export const INVOICES: Invoice[] = [
       { text: "Gebyr for papirfaktura", amountDKK: 129, period: null },
     ],
   },
+];
+
+export const NOTICES: Notice[] = [
+  { id: "N-4471", title: "Planlagt vedligehold af fibernettet", area: "Aarhus C", startsAt: "2026-12-03T22:00", startsText: "3. december kl. 22" },
+  { id: "N-4480", title: "Ustabilt TV-signal", area: "Odense SØ", startsAt: null, startsText: "Nu" },
+  { id: "N-4502", title: "Opgradering af mobilmaster", area: "Aarhus C", startsAt: "2026-12-09T01:30", startsText: "9. december kl. 1.30" },
 ];
 
 export type Store = { notes: Note[] };
