@@ -10,7 +10,8 @@ import { join, resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
 import type { z } from "zod";
 import { copyExpected, fillTokens, OPERATION_NAMES } from "../fixtures/expected/copy";
-import { ACCOUNT, INVOICES, USER } from "../fixtures/site/data";
+import { extractHtml } from "../starter/skill/cli/src/runtime/html";
+import { ACCOUNT, INVOICES, NOTICES, USER } from "../fixtures/site/data";
 import { loginOriginFor } from "../fixtures/site/hosts";
 import { DRIFTS, startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
 
@@ -534,7 +535,7 @@ describe("drift switches", () => {
     const site = startFixtureSite({ auth: "none" });
     sites.push(site);
     expect(() => site.setDrift("nope" as Drift)).toThrow(/unknown drift/);
-    expect(DRIFTS.length).toBe(11);
+    expect(DRIFTS.length).toBe(12);
   });
 });
 
@@ -620,17 +621,19 @@ async function importExpected(src: string) {
       listInvoices: await op("listInvoices"),
       getInvoice: await op("getInvoice"),
       addNote: await op("addNote"),
+      listNotices: await op("listNotices"),
     },
     commands: {
       subscriptionShow: await cmd("subscription-show"),
       invoiceList: await cmd("invoice-list"),
       invoiceShow: await cmd("invoice-show"),
       noteAdd: await cmd("note-add"),
+      noticeList: await cmd("notice-list"),
     },
   };
 }
 
-type Op = { name: string; effect: string; graphql?: string; rest?: any; variables: z.ZodType; response: z.ZodType; needs?: any; trigger?: (p: Page) => Promise<void> };
+type Op = { name: string; effect: string; graphql?: string; rest?: any; html?: any; variables: z.ZodType; response: z.ZodType; needs?: any; trigger?: (p: Page) => Promise<void> };
 
 /** A bare-bones ctx.call: validates variables, performs the call, parses the response with the Contract. */
 function makeCall(origin: string, headers: Headers) {
@@ -645,10 +648,16 @@ function makeCall(origin: string, headers: Headers) {
       });
     } else {
       const path = (op.rest.path as string).replace(/:(\w+)/g, (_, k) => encodeURIComponent(variables[k]!));
-      const query = op.rest.query ? `?${new URLSearchParams(op.rest.query(variables))}` : "";
+      const params = Object.entries(op.rest.query?.(variables) ?? {}).filter(([, v]) => v !== undefined) as [string, string][];
+      const query = params.length ? `?${new URLSearchParams(params)}` : "";
       res = await fetch(`${origin}${path}${query}`, { method: op.rest.method, headers });
     }
     if (!res.ok) throw new Error(`${op.name}: HTTP ${res.status}`);
+    if (op.html) {
+      const picked = extractHtml(await res.text(), op.html.fields);
+      if (!picked.ok) throw new Error(`${op.name}: html ${picked.path} ${picked.code}`);
+      return op.response.parse(picked.value);
+    }
     const body = (await res.json()) as any;
     if (body.errors) throw new Error(`${op.name}: ${body.errors[0].extensions.code}`);
     return op.response.parse(body);
@@ -689,10 +698,12 @@ for (const auth of ["none", "login"] as const) {
         "operations/getAccount.ts",
         "operations/getInvoice.ts",
         "operations/listInvoices.ts",
+        "operations/listNotices.ts",
         "operations/listSubscriptions.ts",
         "commands/invoice-list.ts",
         "commands/invoice-show.ts",
         "commands/note-add.ts",
+        "commands/notice-list.ts",
         "commands/subscription-show.ts",
       ]);
       for (const f of x.files) {
@@ -722,6 +733,9 @@ for (const auth of ["none", "login"] as const) {
     test("Contracts declare names, effects and the chain", () => {
       for (const [file, name] of Object.entries(OPERATION_NAMES)) expect(x.ops[file as keyof typeof x.ops].name).toBe(name);
       expect(Object.values(x.ops).filter((o: any) => o.effect === "write").map((o: any) => o.name)).toEqual(["addNote"]);
+      // The notices come only as a server-rendered page: an HTML Operation, checkable with no input.
+      expect(x.ops.listNotices.html.fields.notices).toMatchObject({ each: "li.notice", in: "ul.notices" });
+      expect(x.ops.listNotices.needs).toBeUndefined();
       expect(typeof x.ops.addNote.trigger).toBe("function");
       for (const op of Object.values(x.ops) as Op[]) if (op.name !== "addNote") expect(op.trigger).toBeUndefined();
       expect(x.ops.listSubscriptions.needs.accountId.from).toBe("getAccount");
@@ -743,6 +757,12 @@ for (const auth of ["none", "login"] as const) {
       const one = await x.commands.invoiceShow.run({ id: list.invoices[1].id }, ctx());
       expect(one.due).toBeNull();
       expect(one.lines.length).toBe(3);
+
+      const notices = await x.commands.noticeList.run({}, ctx());
+      expect(notices.notices).toEqual(NOTICES.map((n) => ({ id: n.id, title: n.title, area: n.area, startsAt: n.startsAt, when: n.startsText })));
+      const aarhus = await x.commands.noticeList.run({ area: "Aarhus C" }, ctx());
+      expect(aarhus.notices.map((n: any) => n.id)).toEqual(NOTICES.filter((n) => n.area === "Aarhus C").map((n) => n.id));
+      expect((await x.commands.noticeList.run({ area: "Skagen" }, ctx())).notices).toEqual([]);
 
       const before = site.notes().length;
       const added = await x.commands.noteAdd.run({ text: "Fra CLI" }, ctx());
@@ -999,7 +1019,7 @@ describe.skipIf(!HAS_CHROME)("expected code on the Starter runtime against the f
         const ops = Object.values(x.ops);
         const plain = await rt.check(client(), ops, {});
         expect(plain.operations.map((r: any) => `${r.operation}:${r.status}`).sort()).toEqual(
-          [`${OPERATION_NAMES.getInvoice}:ok`, `${OPERATION_NAMES.listInvoices}:ok`, "addNote:skipped", "getAccount:ok", "listSubscriptions:ok"].sort(),
+          [`${OPERATION_NAMES.getInvoice}:ok`, `${OPERATION_NAMES.listInvoices}:ok`, `${OPERATION_NAMES.listNotices}:ok`, "addNote:skipped", "getAccount:ok", "listSubscriptions:ok"].sort(),
         );
         const before = site.notes().length;
         const writes = await rt.check(client(), ops, { writes: true });
@@ -1012,6 +1032,9 @@ describe.skipIf(!HAS_CHROME)("expected code on the Starter runtime against the f
         const reads = await withDrift("rename-field", () => failure(rt.check(client(), ops, {})));
         expect(reads.kind).toBe("drift");
         expect(reads.drifts!.map((d) => d.fingerprint)).toEqual([`${prefix}listSubscriptions:zod:data.listSubscriptions[].status:invalid_type`]);
+        // A new layout of a server-rendered page is Drift at the list, never an empty list (#102).
+        const layout = await withDrift("html-layout", () => failure(rt.check(client(), ops, {})));
+        expect(layout.drifts!.map((d) => d.fingerprint)).toEqual([`${prefix}GET /notices:html:notices:no_match`]);
         const before = site.notes().length;
         const shape = await withDrift("write-shape", () => failure(rt.check(client(), ops, { op: "addNote" })));
         expect(shape.drifts!.map((d) => d.fingerprint)).toEqual([`${prefix}addNote:request:text:invalid_type`]);

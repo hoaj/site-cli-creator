@@ -13,7 +13,8 @@
 // | GraphQL validation error                               | drift graphql                        |
 // | 400/422 or GraphQL input error                         | drift input-rejected                 |
 // | other non-2xx                                          | drift http                           |
-// | response fails Zod                                     | drift zod (path, Zod issue code)     |
+// | html: no HTML where expected, a container gone, bad inline JSON | drift html (path, not_html/no_match/invalid_json) |
+// | response (or the values html.fields picked) fails Zod  | drift zod (path, Zod issue code)     |
 // | anything else thrown                                   | bug (caught in main)                 |
 //
 // transport "browser" changes only how a request is sent (deps.fetch from runtime/transport.ts);
@@ -21,6 +22,7 @@
 import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
+import { extractHtml, type HtmlContract } from "./html";
 import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent } from "./never";
 import type { Operation } from "./operation";
@@ -91,11 +93,24 @@ export type ClientOptions = {
 type Refusals = { count: number; last?: NeverSent };
 
 export type Request = { method: string; url: string; headers: Record<string, string>; body?: string };
-type Response_ = { status: number; body: unknown; loginRedirect?: boolean; offsite?: boolean };
+/** `text` and `contentType`: the raw answer, for an HTML Operation (an HTML text that happens to parse as JSON stays HTML). */
+type Response_ = { status: number; body: unknown; text?: string; contentType?: string; loginRedirect?: boolean; offsite?: boolean };
+
+/** What a browser asks for when it loads a page. */
+const HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
+
+/** The headers an Operation's request goes with: accept, then the session's, then what the Operation fixes. */
+function requestHeaders(op: Operation, session: Record<string, string>, contentType?: string): Record<string, string> {
+  const headers: Record<string, string> = { accept: "application/json" };
+  for (const [k, v] of Object.entries(session)) headers[k.toLowerCase()] = v;
+  // An HTML Operation asks for the page; one whose HTML comes inside JSON (html.from) asks for JSON.
+  if (op.html && !op.html.from) headers.accept = HTML_ACCEPT;
+  if (contentType !== undefined) headers["content-type"] = contentType;
+  return headers;
+}
 
 export function buildRequest(op: Operation, vars: unknown, base: { origin: string; graphqlPath?: string; headers: Record<string, string> }): Request {
-  const headers: Record<string, string> = { accept: "application/json" };
-  for (const [k, v] of Object.entries(base.headers)) headers[k.toLowerCase()] = v;
+  const headers = requestHeaders(op, base.headers);
   if (op.graphql !== undefined) {
     if (!base.graphqlPath) throw new ContractError(`site.graphqlPath is not set, but ${op.name} is a GraphQL Operation`);
     headers["content-type"] = "application/json";
@@ -115,7 +130,9 @@ export function buildRequest(op: Operation, vars: unknown, base: { origin: strin
   });
   const url = new URL(base.origin + path);
   for (const [k, val] of Object.entries(op.rest.query?.(vars) ?? {})) {
-    if (val !== undefined && val !== null) url.searchParams.append(k, String(val));
+    for (const item of Array.isArray(val) ? val : [val]) {
+      if (item !== undefined && item !== null) url.searchParams.append(k, String(item));
+    }
   }
   let body: string | undefined;
   if (op.rest.body) {
@@ -131,12 +148,9 @@ export function buildRequest(op: Operation, vars: unknown, base: { origin: strin
   return { method: op.rest.method, url: url.toString(), headers, body };
 }
 
-/** A request built without headers, with the session's added as buildRequest adds them (its content-type wins). */
-function withSessionHeaders(req: Request, session: Record<string, string>): Request {
-  const headers: Record<string, string> = { accept: "application/json" };
-  for (const [k, v] of Object.entries(session)) headers[k.toLowerCase()] = v;
-  if (req.headers["content-type"] !== undefined) headers["content-type"] = req.headers["content-type"];
-  return { ...req, headers };
+/** A request built without the session's headers, with them added as buildRequest adds them (requestHeaders). */
+function withSessionHeaders(op: Operation, req: Request, session: Record<string, string>): Request {
+  return { ...req, headers: requestHeaders(op, session, req.headers["content-type"]) };
 }
 
 /** A form-urlencoded body from a flat object: arrays repeat their key, undefined and null are left out. */
@@ -156,13 +170,13 @@ function formBody(name: string, value: unknown): string {
   return form.toString();
 }
 
-async function readBody(r: Response): Promise<unknown> {
+async function readBody(r: Response): Promise<{ body: unknown; text: string }> {
   const text = await r.text();
-  if (!text.trim()) return undefined;
+  if (!text.trim()) return { body: undefined, text };
   try {
-    return JSON.parse(text);
+    return { body: JSON.parse(text), text };
   } catch {
-    return text;
+    return { body: text, text };
   }
 }
 
@@ -675,7 +689,7 @@ export class Client {
 
   private async send(op: Operation, vars: unknown, prebuilt?: Request): Promise<Response_> {
     const session = this.session ?? (await this.ensureSession());
-    const req = prebuilt ? withSessionHeaders(prebuilt, session.headers) : buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: session.headers });
+    const req = prebuilt ? withSessionHeaders(op, prebuilt, session.headers) : buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: session.headers });
     const delays = this.deps.retryDelays;
     for (let attempt = 0; ; attempt++) {
       let res: Response_ | undefined;
@@ -708,7 +722,10 @@ export class Client {
       // deps.fetch is site.never's guard: every hop is checked, a redirect may lead to a forbidden path.
       const r = await this.deps.fetch(url, { method, headers: req.headers, body, redirect: "manual" });
       const location = r.headers.get("location");
-      if (r.status < 300 || r.status >= 400 || !location) return { status: r.status, body: await readBody(r) };
+      if (r.status < 300 || r.status >= 400 || !location) {
+        const { body, text } = await readBody(r);
+        return { status: r.status, body, text, contentType: r.headers.get("content-type") ?? undefined };
+      }
       const next = new URL(location, url);
       if (this.site.auth === "login" && isLoginHost(this.site, next.toString())) return { status: r.status, body: undefined, loginRedirect: true };
       if (next.origin !== new URL(url).origin) return { status: r.status, body: undefined, offsite: true };
@@ -741,11 +758,40 @@ export class Client {
     }
     if (status === 400 || status === 422) return this.fail(op, "input-rejected", "", String(status), `the site rejected variables that passed the Contract (HTTP ${status})`);
     if (status < 200 || status >= 300) return this.fail(op, "http", "", String(status), `unexpected HTTP ${status}`);
-    const parsed = op.response.safeParse(body);
+    const picked = op.html ? this.pickHtml(op, op.html, res) : body;
+    const parsed = op.response.safeParse(picked);
     if (parsed.success) return parsed.data;
-    const diff = zodDiff(parsed.error.issues, body, op.response);
+    const diff = zodDiff(parsed.error.issues, picked, op.response);
     const first = diff[0] ?? { path: "", code: "" };
     return this.fail(op, "zod", first.path, first.code, `the response no longer matches the Contract at ${first.path || "(root)"} (${first.code})`, diff);
+  }
+
+  /** The values html.fields picks from the page (or from the HTML html.from finds in a JSON answer); a changed layout is Drift. */
+  private pickHtml(op: Operation, html: HtmlContract, res: Response_): Record<string, unknown> {
+    const out = extractHtml(this.htmlOf(op, html, res), html.fields);
+    if (out.ok) return out.value;
+    const why = out.code === "no_match" ? `the page no longer has the element html.fields looks for at ${out.path}` : `the inline JSON at ${out.path} no longer parses`;
+    return this.fail(op, "html", out.path, out.code, why, [{ path: out.path, code: out.code }]);
+  }
+
+  /** The HTML an HTML Operation reads: what html.from finds in the JSON, or the answer's own text; else Drift. */
+  private htmlOf(op: Operation, html: HtmlContract, res: Response_): string {
+    if (html.from) {
+      let found: unknown;
+      try {
+        found = html.from(res.body);
+      } catch {
+        found = undefined;
+      }
+      if (typeof found !== "string") return this.fail(op, "html", "from", "not_html", "the answer no longer carries HTML where html.from looks");
+      return found;
+    }
+    // An answer that is not JSON by its content-type is the text it is (`3` is a fragment, not a number).
+    const jsonType = /json/i.test(res.contentType ?? "");
+    if (res.text !== undefined && !jsonType && (res.contentType !== undefined || typeof res.body === "string")) return res.text;
+    if (res.body === undefined) return ""; // an empty answer (a fragment endpoint with no results): an empty fragment
+    if (typeof res.body === "string") return res.body;
+    return this.fail(op, "html", "", "not_html", "the site no longer answers this request with HTML (JSON)");
   }
 
   drift(op: Operation, breakType: BreakType, path: string, code: string, why: string, diff: DiffEntry[] = []): Failure {

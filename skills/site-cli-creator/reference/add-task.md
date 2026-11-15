@@ -50,7 +50,7 @@ export default async (page) => {
 };
 ```
 
-The Capture lands in `<skill>/captures/<slug>/`: one `<operation>.shape.json` per Operation and `index.json` listing Operations in call order with an effect guess. Shapes hold no values: ids, dotted names and any path segment that matches a value the page sent or received become `:id`, and record keys collapse. Before committing, read the REST paths in `index.json` once: a segment that is still a name, a place or a word the user typed is a value; rename it to `:id` in the shape file and its `operation`. Then commit all of it.
+The Capture lands in `<skill>/captures/<slug>/`: one `<operation>.shape.json` per Operation and `index.json` listing Operations in call order with an effect guess. Shapes hold no values: ids, dotted names and any path segment that matches a value the page sent or received become `:id`, and record keys collapse. Before committing, read the REST paths in `index.json` once: a segment that is still a name, a place, a word the user typed or a title's slug (`/events/koncert-i-parken`) is a value; rename it to `:id` in the shape file and its `operation`. Then commit all of it.
 
 If nothing reached the origin, `capture.ts` exits with an error and leaves any earlier Capture of the Task as it was: check `--url`, `--origin` and that the Task was performed, then run it again.
 
@@ -67,6 +67,8 @@ Read `index.json` and the shape files. Keep:
 - for a write Task, the write itself.
 
 Drop everything else: analytics, feature flags, page chrome, prefetches, page loads (`navigation: true`) and writes that fire as a side effect of a read Task.
+
+**A site whose data arrives in no JSON call** (a server-rendered page, HTML fragments, HTML inside JSON): keep the Operation marked `html: true` whose HTML holds the Task's output, often the page load itself. It becomes an HTML Operation that picks its values with CSS selectors ([contracts.md](contracts.md#html-operations)). When a JSON call carries the same data, keep that call and drop the page load.
 
 Drop every Operation that `site.ts`'s `never` list matches, as a side effect or not. If the Task cannot be done without one, it is no Task (step 1). `regen` refuses such a Contract anyway.
 
@@ -101,7 +103,7 @@ Task 1: "see my subscription and price"
 
 ## 5. Generate
 
-For each new Operation, draft its Contract into its file with `--out` (not shell redirection: `--out` refuses to overwrite an existing Contract), then cut it down by hand. The file is `<operationName>.ts` for GraphQL and a verb + noun for REST (`getInvoice.ts`; the draft's `file` suggests one). `--name` is for a GraphQL query the Capture could not name (anonymous or persisted); a REST name is always `METHOD /path`, so leave `--name` out.
+For each new Operation, draft its Contract into its file with `--out` (an Operation that answered HTML drafts an `html` block from the Capture's outline: the repeated element as a list, each element with text or a link as a field) (not shell redirection: `--out` refuses to overwrite an existing Contract), then cut it down by hand. The file is `<operationName>.ts` for GraphQL and a verb + noun for REST (`getInvoice.ts`; the draft's `file` suggests one). `--name` is for a GraphQL query the Capture could not name (anonymous or persisted); a REST name is always `METHOD /path`, so leave `--name` out.
 
 ```sh
 bun <gen>/tools/draft-contract.ts <skill>/captures/<slug>/<operation>.shape.json --out <skill>/cli/src/operations/<file>.ts

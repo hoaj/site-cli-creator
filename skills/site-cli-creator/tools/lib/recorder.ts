@@ -7,12 +7,14 @@
 
 import { decodeJwt, onSiteDomain, siteDomain } from "../../starter/skill/cli/src/runtime/site";
 import { graphqlFromBody, graphqlFromSearch, isGraphqlPath, type GraphqlCall } from "./graphql";
+import { htmlCharsInJson, htmlInJson, htmlIsTheData, mergeHtmlInJson, outlineHasData, type HtmlNode } from "./html-outline";
 import {
   bodyShape,
   claimsShape,
   mediaType,
   mergeBodies,
   mergeOptional,
+  mergeShapes,
   parseJson,
   queryShape,
   redactPath,
@@ -60,10 +62,12 @@ type ResponseShape = {
   /** Names of the cookies the response sets, never their values: where a bootstrap's cookie comes from. */
   setCookies?: string[];
   body: BodyShape;
+  /** HTML strings inside a JSON answer (Drupal's /views/ajax): where each sits, as a Fingerprint path, and its outline. */
+  htmlInJson?: { path: string; outline: HtmlNode[]; truncated?: true }[];
 };
 
 /** The true-or-absent flags an OperationShape may carry, in the order the Capture writes them. */
-const MARKERS = ["effectUnknown", "loginFlow", "navigation", "allowedRead", "serverAction", "rsc"] as const;
+const MARKERS = ["effectUnknown", "loginFlow", "navigation", "allowedRead", "serverAction", "rsc", "html"] as const;
 
 /** The markers set on `op`, as `{name: true}`. */
 export function markers(op: Partial<Record<(typeof MARKERS)[number], true>>): Partial<Record<(typeof MARKERS)[number], true>> {
@@ -86,6 +90,11 @@ export type OperationShape = {
   serverAction?: true;
   /** A React Server Component stream (`text/x-component`, `?_rsc=`, an `rsc: 1` header): no JSON, so no Zod Contract can parse it. */
   rsc?: true;
+  /**
+   * The answer is HTML (a page, a fragment) or a JSON answer that carries HTML strings: an HTML
+   * Operation can read it with `html.fields` (reference/contracts.md, HTML Operations).
+   */
+  html?: true;
   resourceType: string;
   host: string;
   method: string;
@@ -585,7 +594,16 @@ export class CaptureRecorder {
       }
     }
     const claims = outcome.headers ? bearerClaims(header(outcome.headers, "authorization")) : undefined;
-    // Shapes are never changed once built, so every call of the request shares this one.
+    // Computed once for a body every call shares (a split batch has a value per call): outlining HTML in JSON is not cheap.
+    const ok = response !== undefined && response.status >= 200 && response.status < 300;
+    const embeddedOf = (json: unknown) => {
+      const embedded = json === undefined ? [] : htmlInJson(json);
+      const isData = embedded.length > 0 && htmlIsTheData(embedded, htmlCharsInJson(json), JSON.stringify(json).length);
+      return { embedded, isData };
+    };
+    const shared = response && !splitBodies ? embeddedOf(parsed?.ok ? parsed.value : undefined) : undefined;
+    // Shapes are never changed once built, so every call of the request shares this one. A page's texts are never
+    // values to redact paths by: a link's label is often a route's name ("Mine regninger" for /mine-regninger).
     const whole = response ? bodyShape(response.body, contentType, parsed) : undefined;
     for (const call of planned.calls) {
       const shape: OperationShape = structuredClone(call.shape);
@@ -603,6 +621,12 @@ export class CaptureRecorder {
             : whole!;
         const cookies = setCookieNames(header(response.headers, "set-cookie"));
         const headers = headerShape(response.headers, (n) => n === "set-cookie");
+        const { embedded, isData } =
+          shared ?? embeddedOf(splitBodies && call.responseIndex !== undefined ? splitBodies[call.responseIndex] : parsed?.ok ? parsed.value : undefined);
+        // Marked only when a 2xx answer's HTML is the data: not an error or bot-wall page, not a SPA's empty
+        // shell, not one rich-text field of a JSON API.
+        const pageData = body.kind === "html" && outlineHasData(body.outline);
+        if (ok && (pageData || isData)) shape.html = true;
         shape.responses = [
           {
             status: response.status,
@@ -610,6 +634,7 @@ export class CaptureRecorder {
             ...(Object.keys(headers).length ? { headers } : {}),
             ...(cookies.length ? { setCookies: cookies } : {}),
             body,
+            ...(embedded.length ? { htmlInJson: embedded } : {}),
           },
         ];
       }
@@ -672,12 +697,14 @@ function mergeResponse(a: ResponseShape, b: ResponseShape): ResponseShape {
   const headers = a.headers && b.headers ? mergeHeaders(a.headers, b.headers) : (a.headers ?? b.headers);
   const cookies = [...new Set([...(a.setCookies ?? []), ...(b.setCookies ?? [])])].sort();
   const contentType = a.contentType ?? b.contentType;
+  const embedded = mergeHtmlInJson(a.htmlInJson ?? [], b.htmlInJson ?? []);
   return {
     status: a.status,
     ...(contentType ? { contentType } : {}),
     ...(headers ? { headers } : {}),
     ...(cookies.length ? { setCookies: cookies } : {}),
     body: mergeBodies(a.body, b.body),
+    ...(embedded.length ? { htmlInJson: embedded } : {}),
   };
 }
 
@@ -690,7 +717,8 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
     else responses[i] = mergeResponse(responses[i]!, r);
   }
   responses.sort((x, y) => x.status - y.status);
-  const query = mergeOptional(a.request.query, b.request.query);
+  // A query string on only some of the calls: each of its keys is optional, as a key seen only sometimes is.
+  const query = a.request.query && b.request.query ? mergeShapes(a.request.query, b.request.query) : allOptional(a.request.query ?? b.request.query);
   const variables = mergeOptional(a.request.variables, b.request.variables);
   const bearer = mergeOptional(a.request.bearerClaims, b.request.bearerClaims);
   const body = a.request.body && b.request.body ? mergeBodies(a.request.body, b.request.body) : (a.request.body ?? b.request.body);
@@ -712,6 +740,12 @@ export function mergeOperation(a: OperationShape, b: OperationShape): OperationS
     seen: a.seen + b.seen,
     aborted: a.aborted + b.aborted,
   };
+}
+
+/** An object shape with every key optional (a query string some calls did not have at all). */
+function allOptional(shape: Shape | undefined): Shape | undefined {
+  if (shape?.type !== "object") return shape;
+  return { ...shape, optional: Object.keys(shape.fields).sort() };
 }
 
 /** File names for the shape files: the Operation name made path-safe, unique within one Capture. */

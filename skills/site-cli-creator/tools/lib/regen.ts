@@ -159,7 +159,7 @@ export function replaceCommandsBlock(skillMd: string, table: string): string {
 
 /**
  * SKILL.md with site.never listed between its never markers (under ## When NOT to use), one bullet
- * per rule; undefined when SKILL.md has no such markers (a plugin made before 0.15.0).
+ * per rule; undefined when SKILL.md has no such markers (a plugin made before 0.16.0).
  */
 export function replaceNeverBlock(skillMd: string, never: { request: string; why: string }[]): string | undefined {
   const start = skillMd.indexOf(NEVER_START);
