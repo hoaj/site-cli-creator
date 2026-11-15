@@ -4,12 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildRequest } from "../starter/skill/cli/src/runtime/call";
 import { capturedVariables, compareWrite, parseCaptured } from "../starter/skill/cli/src/runtime/check";
+import { extractHtml } from "../starter/skill/cli/src/runtime/html";
 import { draftOperation, namePathParams, operationFileName } from "../tools/lib/draft";
+import { fromSource } from "../tools/lib/draft-html";
 import { GENERATOR_ROOT, SKILL_ROOT } from "../tools/lib/paths";
 import { CaptureRecorder, type OperationShape, type RequestInfo } from "../tools/lib/recorder";
 
 const TOOL = join(SKILL_ROOT, "tools", "draft-contract.ts");
-const RUNTIME_OPERATION = join(SKILL_ROOT, "starter", "skill", "cli", "src", "runtime", "operation.ts");
+const RUNTIME = join(SKILL_ROOT, "starter", "skill", "cli", "src", "runtime");
+const RUNTIME_OPERATION = join(RUNTIME, "operation.ts");
 const ORIGIN = "https://www.shop.example";
 const json = (v: unknown) => Buffer.from(JSON.stringify(v));
 
@@ -78,6 +81,8 @@ function scaffoldCli(): string {
   const operationTs = join(cli, "src", "runtime", "operation.ts");
   if (existsSync(RUNTIME_OPERATION)) copyFileSync(RUNTIME_OPERATION, operationTs);
   else writeFileSync(operationTs, "export const defineOperation = <T>(op: T): T => op;\n");
+  // operation.ts names html.ts's types, and html.ts throws envelope.ts's ContractError.
+  for (const file of ["html.ts", "envelope.ts"]) if (existsSync(join(RUNTIME, file))) copyFileSync(join(RUNTIME, file), join(cli, "src", "runtime", file));
   return cli;
 }
 
@@ -95,6 +100,7 @@ async function importDraft(file: string, source: string) {
     effect: string;
     graphql?: string;
     rest?: { method: string; path: string; query?: (v: any) => unknown; body?: (v: any) => unknown };
+    html?: { from?: (body: unknown) => unknown; fields: Parameters<typeof extractHtml>[1] };
     variables: import("zod").ZodType;
     response: import("zod").ZodType;
   };
@@ -209,10 +215,193 @@ describe("draftOperation", () => {
     expect(source).not.toContain("trigger(page)");
   });
 
+  // A server-rendered page (#102): no </li>, inline JSON, a link and a date per item, a data id.
+  const EVENTS = `<!doctype html><html><head><script type="application/ld+json">{"name":"n","startDate":"2026-01-01"}</script></head><body>
+<main class="content"><ul><li class="event" data-id="e1"><h2 class="title">Koncert</h2><a href="/e/1">mere</a><time datetime="2026-12-01">1. dec</time>
+<li class="event" data-id="e2"><h2 class="title">Foredrag</h2><a href="/e/2">mere</a><time datetime="2026-12-02">2. dec</time></ul></main></body></html>`;
+  const htmlCapture = (url: string, body: string, contentType: string, resourceType = "document") => {
+    const r = new CaptureRecorder({ origin: ORIGIN });
+    const plan = r.plan({ method: "GET", url, headers: {}, postData: null, resourceType })!;
+    r.record(plan, { response: { status: 200, headers: { "content-type": contentType }, body: Buffer.from(body) } });
+    return r.operations()[0]!;
+  };
+
+  test("an HTML page drafts html.fields that pick every item's values from the page it was drafted from (#102)", async () => {
+    const shape = htmlCapture(`${ORIGIN}/events?from=2026-01-01`, EVENTS, "text/html; charset=utf-8");
+    const { source } = draftOperation(shape);
+    expect(source).toContain('each: "li.event", in: "main.content ul"');
+    expect(source).toContain("A page load (a document request)");
+    const op = await importDraft("listEvents.ts", source);
+    expect(op.rest?.query?.({ from: "x" })).toEqual({ from: "x" });
+    const picked = extractHtml(EVENTS, op.html!.fields);
+    expect(picked.ok).toBe(true);
+    const value = (picked as { value: any }).value;
+    expect(op.response.safeParse(value).success).toBe(true);
+    const [first] = Object.values(value) as any[][];
+    expect(first).toHaveLength(2);
+    expect(Object.values(first![1])).toEqual(expect.arrayContaining(["e2", "Foredrag", "/e/2", "2026-12-02"]));
+  });
+
+  test("a query key seen on only some loads of a page drafts as optional, so check can call it with none (#102, cold read)", async () => {
+    const r = new CaptureRecorder({ origin: ORIGIN });
+    for (const url of [`${ORIGIN}/events`, `${ORIGIN}/events?area=x&page=2`, `${ORIGIN}/events?page=1`]) {
+      const plan = r.plan({ method: "GET", url, headers: {}, postData: null, resourceType: "document" })!;
+      r.record(plan, { response: { status: 200, headers: { "content-type": "text/html" }, body: Buffer.from(EVENTS) } });
+    }
+    const [shape] = r.operations();
+    expect(shape!.request.query).toEqual({ type: "object", fields: { area: { type: "string" }, page: { type: "string" } }, optional: ["area", "page"] });
+    const { source } = draftOperation(shape!);
+    const op = await importDraft("listEventsByArea.ts", source);
+    expect(op.variables.safeParse({}).success).toBe(true);
+    expect(op.variables.safeParse({ area: "x" }).success).toBe(true);
+    expect(op.rest?.query?.({ area: "x" })).toEqual({ area: "x", page: undefined });
+  });
+
+  test("a JSON API with a rich-text field drafts its JSON response, naming the HTML strings in a comment (review)", async () => {
+    const items = [1, 2].map((id) => ({ id, name: "n", price: 10.5, descriptionHtml: "<p>Fin <b>vare</b></p>" }));
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/api/products`, JSON.stringify({ items }), "application/json", "fetch"));
+    expect(source).not.toContain("html: {");
+    expect(source).toContain("items[].descriptionHtml");
+    const op = await importDraft("listProducts.ts", source);
+    expect(op.response.safeParse({ items }).success).toBe(true);
+  });
+
+  test("a repeated element inside an item drafts as all: true, so no value is lost (review)", async () => {
+    const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><h3 class="t">T${i}</h3><span>tag${i}a</span><span>tag${i}b</span></li>`).join("")}</ul>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/tags`, page, "text/html"));
+    expect(source).toContain('{ css: "span", all: true }');
+    const op = await importDraft("listTags.ts", source);
+    const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, any[]> };
+    expect(op.response.safeParse(picked.value).success).toBe(true);
+    expect(Object.values(picked.value)[0]![1]).toMatchObject({ text: ["tag2a", "tag2b"] });
+  });
+
+  // Every drafted selector picks, on the page it was drafted from, the element it was drafted from (review 2).
+  const picks = async (file: string, page: string) => {
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/p`, page, "text/html"));
+    const op = await importDraft(file, source);
+    const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, any> };
+    expect(picked.ok, source).toBe(true);
+    return { source, value: picked.value };
+  };
+
+  test("a list in a plain ul gets a container no earlier ul matches (review 2)", async () => {
+    const page = `<!doctype html><html><body><nav><ul><li><a href="/a">A</a></li><li><a href="/b">B</a></li></ul></nav>
+<div><ul>${[1, 2, 3].map((i) => `<li class="it"><h3 class="t">T${i}</h3><time datetime="2026-01-0${i}">d</time><a href="/e/${i}">mere</a></li>`).join("")}</ul></div></body></html>`;
+    const { value } = await picks("listIt.ts", page);
+    const [list] = Object.values(value) as any[][];
+    expect(list!.map((x) => x.t)).toEqual(["T1", "T2", "T3"]);
+  });
+
+  test("a plain selector that an earlier element in the item also matches is made specific (review 2)", async () => {
+    const page = `<ul class="l">${[1, 2].map((i) => `<li class="it"><span class="icon"></span><span>Title ${i}</span><b class="x">y</b></li>`).join("")}</ul>`;
+    const { value } = await picks("listIcons.ts", page);
+    const [list] = Object.values(value) as any[][];
+    expect(Object.values(list![1])).toContain("Title 2");
+  });
+
+  test("with no list, two subtrees' h2s draft two selectors that each pick their own (review 2)", async () => {
+    const page = `<!doctype html><html><body><header><h2>Site</h2></header><main><h2>Event title</h2><p class="where">Her</p></main></body></html>`;
+    const { value } = await picks("getDetail.ts", page);
+    expect(Object.values(value)).toEqual(expect.arrayContaining(["Site", "Event title", "Her"]));
+  });
+
+  test("each matches every item, even when one item differs (an active class) (review 3)", async () => {
+    const page = `<ul><li class="active"><a href="/">Home</a></li><li><a href="/b">B</a></li><li><a href="/c">C</a></li></ul>`;
+    const { value } = await picks("listMenu.ts", page);
+    const [list] = Object.values(value) as any[][];
+    expect(list!.length).toBeGreaterThanOrEqual(2);
+    expect(list!.map((x) => Object.values(x)).flat()).toEqual(expect.arrayContaining(["B", "C"]));
+  });
+
+  test("a field is never drafted with a position the collapsed outline cannot know (review 3)", () => {
+    const page = `<main><p class="x">a</p><p class="x">b</p><p>c</p></main>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/ps`, page, "text/html"));
+    expect(source).not.toContain("nth-of-type");
+  });
+
+  test("a page load the Capture did not mark html (an app's empty shell) drafts no html block (review 3)", () => {
+    const shell = htmlCapture(`${ORIGIN}/app`, '<!doctype html><html><body><div id="root"></div></body></html>', "text/html");
+    expect(shell.html).toBeUndefined();
+    const { source } = draftOperation(shell);
+    expect(source).not.toContain("html: {");
+    expect(source).toContain("response: z.unknown()");
+  });
+
+  test("Drupal's /views/ajax: html.from returns the listing's HTML, not an earlier command's (review 4, #2)", async () => {
+    const rows = Array.from({ length: 6 }, (_, i) => `<div class="views-row"><h3 class="t">T${i}</h3></div>`).join("");
+    const commands = [
+      { command: "settings", settings: { pager: 0 } },
+      { command: "add_css", data: '<link rel="stylesheet" href="/a.css">' },
+      { command: "insert", method: "replaceWith", data: `<div class="view-content">${rows}</div>` },
+    ];
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/views/ajax`, JSON.stringify(commands), "application/json", "xhr"));
+    const op = await importDraft("getViewsAjaxRows.ts", source);
+    const picked = extractHtml(op.html!.from!(commands) as string, op.html!.fields) as { ok: boolean; value: Record<string, any[]> };
+    expect(picked.ok, source).toBe(true);
+    expect(Object.values(picked.value)[0]).toHaveLength(6);
+  });
+
+  test("rows with alternating classes draft an each that matches every row (review 4, #1)", async () => {
+    const rows = Array.from({ length: 12 }, (_, i) => `<div class="views-row views-row-${i + 1} views-row-${i % 2 ? "even" : "odd"}"><h3 class="t">T${i}</h3></div>`).join("");
+    const { value } = await picks("listViewRows.ts", `<div class="view-content">${rows}</div>`);
+    expect(Object.values(value)[0]).toHaveLength(12);
+  });
+
+  test("a fragment of table rows drafts verified selectors, with no TODO (review 4, #3)", () => {
+    const rows = [1, 2].map((i) => `<tr class="row"><td class="name">N${i}</td><td class="price">${i}</td></tr>`).join("");
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/rows`, rows, "text/html", "xhr"));
+    expect(source).toContain('"td.name"');
+    expect(source).not.toContain("TODO");
+  });
+
+  test("the site's navigation does not win over the data list (review 4, #5)", async () => {
+    const page = `<ul class="menu"><li><a href="/a">A</a></li><li><a href="/b">B</a></li></ul><ul class="events"><li class="event"><h2 class="title">E1</h2></li><li class="event"><h2 class="title">E2</h2></li></ul>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/events`, page, "text/html"));
+    expect(source).toContain('each: "li.event"');
+  });
+
+  test("HTML inside JSON drafts from the richest HTML string, not the first (review 2)", () => {
+    const rows = Array.from({ length: 8 }, (_, i) => `<li class="r"><h3>T${i}</h3></li>`).join("");
+    const body = { messages: '<div class="msg">ok</div>', content: `<ul class="results">${rows}</ul>` };
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/search`, JSON.stringify(body), "application/json", "xhr"));
+    expect(source).toContain("from: (body: any) => body?.content");
+  });
+
+  test("html.from for a JSON answer that is one HTML string, and for keys that are no identifiers (review)", () => {
+    expect(fromSource("")).toBe("(body: any) => body");
+    expect(fromSource("content-html")).toBe('(body: any) => body?.["content-html"]');
+    expect(fromSource("data.view.rendered")).toBe("(body: any) => body?.data?.view?.rendered");
+    expect(fromSource("[].data-html")).toBe('(body: any) => (Array.isArray(body) ? body : []).map((item: any) => item?.["data-html"]).filter((s: unknown): s is string => typeof s === "string").sort((a: string, b: string) => b.length - a.length)[0]');
+    expect(fromSource("{}.html")).toContain("TODO");
+  });
+
+  test("a page with no repeated element drafts a field per element with text, and inline JSON as json: true (#102)", async () => {
+    const page = `<html><head><script type="application/ld+json">{"name":"n","price":1}</script></head><body><article class="event"><h1 class="name">x</h1><p class="where">y</p></article></body></html>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/event/:id`, page, "text/html"));
+    expect(source).toContain('json: true');
+    const op = await importDraft("getEvent.ts", source);
+    const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, unknown> };
+    expect(picked.ok).toBe(true);
+    expect(op.response.safeParse(picked.value).success).toBe(true);
+    expect(Object.values(picked.value)).toEqual(expect.arrayContaining([{ name: "n", price: 1 }, "x", "y"]));
+  });
+
+  test("a JSON answer that carries HTML drafts html.from for that place, which finds it (#102)", async () => {
+    const commands = [{ command: "settings", settings: {} }, { command: "insert", data: EVENTS.replace(/^[\s\S]*<main/, "<main").replace(/<\/body>[\s\S]*$/, "") }];
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/views/ajax`, JSON.stringify(commands), "application/json", "xhr"));
+    expect(source).toContain("carries HTML at [].data");
+    const op = await importDraft("getViewsAjax.ts", source);
+    const html = op.html!.from!(commands);
+    expect(typeof html).toBe("string");
+    const picked = extractHtml(html as string, op.html!.fields) as { ok: true; value: Record<string, unknown> };
+    expect(op.response.safeParse(picked.value).success).toBe(true);
+  });
+
   test("drafts type-check against the runtime's Operation type", () => {
     const tsc = Bun.spawnSync(
       [process.execPath, "x", "tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "esnext", "--module", "esnext",
-        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts"].map((f) => join(work, "cli", "src", "operations", f))],
+        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts", "listProducts.ts", "listTags.ts", "listIt.ts", "listIcons.ts", "getDetail.ts", "listMenu.ts", "getViewsAjaxRows.ts", "listViewRows.ts"].map((f) => join(work, "cli", "src", "operations", f))],
       { cwd: GENERATOR_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("");

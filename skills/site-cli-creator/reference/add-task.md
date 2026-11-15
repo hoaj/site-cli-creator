@@ -50,7 +50,7 @@ export default async (page) => {
 };
 ```
 
-The Capture lands in `<skill>/captures/<slug>/`: one `<operation>.shape.json` per Operation and `index.json` listing Operations in call order with an effect guess. Shapes hold no values: ids, dotted names and any path segment that matches a value the page sent or received become `:id`, and record keys collapse. Before committing, read the REST paths in `index.json` once: a segment that is still a name, a place or a word the user typed is a value; rename it to `:id` in the shape file and its `operation`. Then commit all of it.
+The Capture lands in `<skill>/captures/<slug>/`: one `<operation>.shape.json` per Operation and `index.json` listing Operations in call order with an effect guess. Shapes hold no values: ids, dotted names and any path segment that matches a value the page sent or received become `:id`, and record keys collapse. Before committing, read the REST paths in `index.json` once: a segment that is still a name, a place, a word the user typed or a title's slug (`/events/koncert-i-parken`) is a value; rename it to `:id` in the shape file and its `operation`. Then commit all of it.
 
 If nothing reached the origin, `capture.ts` exits with an error and leaves any earlier Capture of the Task as it was: check `--url`, `--origin` and that the Task was performed, then run it again.
 
@@ -67,6 +67,8 @@ Read `index.json` and the shape files. Keep:
 - for a write Task, the write itself.
 
 Drop everything else: analytics, feature flags, page chrome, prefetches, page loads (`navigation: true`) and writes that fire as a side effect of a read Task.
+
+**A site whose data arrives in no JSON call** (a server-rendered page, HTML fragments, HTML inside JSON): keep the Operation marked `html: true` whose HTML holds the Task's output, often the page load itself. It becomes an HTML Operation that picks its values with CSS selectors ([contracts.md](contracts.md#html-operations)). When a JSON call carries the same data, keep that call and drop the page load.
 
 Operations marked `loginFlow: true` in `index.json` are sign-in steps (a token request, a post-login call, a login host's pages). They are never Operations: they belong in `site.ts`, as `login.tokenRequest` or inside `postLogin` ([contracts.md](contracts.md#sitets)). When the page sends such a POST (or any other non-GET that changes no data) before the Task's data appears, list it in `readOnlyRequests` so `check --writes` lets it through. An Operation marked `effectUnknown: true` is a persisted query: decide its `effect` from what it does. Reuse an existing `operations/<file>.ts` when the Operation is already there; widen its `response` only by the fields this Task reads.
 
@@ -99,7 +101,7 @@ Task 1: "see my subscription and price"
 
 ## 5. Generate
 
-For each new Operation, draft its Contract into its file with `--out` (not shell redirection: `--out` refuses to overwrite an existing Contract), then cut it down by hand. The file is `<operationName>.ts` for GraphQL and a verb + noun for REST (`getInvoice.ts`; the draft's `file` suggests one). `--name` is for a GraphQL query the Capture could not name (anonymous or persisted); a REST name is always `METHOD /path`, so leave `--name` out.
+For each new Operation, draft its Contract into its file with `--out` (an Operation that answered HTML drafts an `html` block from the Capture's outline: the repeated element as a list, each element with text or a link as a field) (not shell redirection: `--out` refuses to overwrite an existing Contract), then cut it down by hand. The file is `<operationName>.ts` for GraphQL and a verb + noun for REST (`getInvoice.ts`; the draft's `file` suggests one). `--name` is for a GraphQL query the Capture could not name (anonymous or persisted); a REST name is always `METHOD /path`, so leave `--name` out.
 
 ```sh
 bun <gen>/tools/draft-contract.ts <skill>/captures/<slug>/<operation>.shape.json --out <skill>/cli/src/operations/<file>.ts

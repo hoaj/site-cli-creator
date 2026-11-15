@@ -2,6 +2,8 @@
 // value: strings become {type:"string"}, and object keys that look like data
 // (ids, emails, numbers) collapse into a "record" so they can't leak either.
 
+import { htmlOutline, looksLikeHtml, mergeOutlined, type HtmlNode } from "./html-outline";
+
 /** What every observed string looked like, never the string: digits only, an ISO date, an ISO date-time. */
 type StringFormat = "numeric" | "date" | "datetime";
 
@@ -225,11 +227,12 @@ function toRecord(o: Extract<Shape, { type: "object" }>): Shape {
   return values ? { type: "record", values } : { type: "record" };
 }
 
-/** What a request or response body was, by kind; only JSON and form bodies get a Shape. */
+/** What a request or response body was, by kind; JSON and form bodies get a Shape, HTML an outline (html-outline.ts). */
 export type BodyShape =
   | { kind: "json"; shape: Shape }
   | { kind: "form"; shape: Shape }
-  | { kind: "empty" | "text" | "html" | "multipart" | "binary" };
+  | { kind: "html"; outline?: HtmlNode[]; truncated?: true }
+  | { kind: "empty" | "text" | "multipart" | "binary" };
 
 /** The media type without parameters (a multipart boundary is random, a charset is noise). */
 export function mediaType(contentType: string | undefined | null): string | undefined {
@@ -245,8 +248,14 @@ export function parseJson(text: string): { ok: true; value: unknown } | { ok: fa
   }
 }
 
-/** `parsed`: parseJson() of the same body, when the caller already ran it. */
-export function bodyShape(body: Buffer | string | null | undefined, contentType?: string | null, parsed?: ReturnType<typeof parseJson>): BodyShape {
+/**
+ * `parsed`: parseJson() of the same body, when the caller already ran it.
+ */
+export function bodyShape(
+  body: Buffer | string | null | undefined,
+  contentType?: string | null,
+  parsed?: ReturnType<typeof parseJson>,
+): BodyShape {
   if (body === null || body === undefined || body.length === 0) return { kind: "empty" };
   const type = mediaType(contentType) ?? "";
   if (type.startsWith("multipart/")) return { kind: "multipart" };
@@ -260,7 +269,10 @@ export function bodyShape(body: Buffer | string | null | undefined, contentType?
     const json = parsed ?? parseJson(text);
     if (json.ok) return { kind: "json", shape: shapeOf(json.value) };
   }
-  if (type.includes("html")) return { kind: "html" };
+  if (type.includes("html") || ((type === "" || type === "text/plain") && looksLikeHtml(text))) {
+    const { outline, truncated } = htmlOutline(text);
+    return { kind: "html", ...(outline.length ? { outline } : {}), ...(truncated ? { truncated } : {}) };
+  }
   if (type.startsWith("text/") || type.includes("xml") || type.includes("javascript")) return { kind: "text" };
   if (typeof body !== "string" && body.subarray(0, 4000).includes(0)) return { kind: "binary" };
   return type === "" ? { kind: "text" } : { kind: "binary" };
@@ -270,6 +282,7 @@ export function mergeBodies(a: BodyShape, b: BodyShape): BodyShape {
   if ((a.kind === "json" || a.kind === "form") && a.kind === b.kind) {
     return { kind: a.kind, shape: mergeShapes(a.shape, (b as typeof a).shape) };
   }
+  if (a.kind === "html" && b.kind === "html") return { kind: "html", ...mergeOutlined(a, b) };
   if (a.kind === "empty") return b;
   return a;
 }
