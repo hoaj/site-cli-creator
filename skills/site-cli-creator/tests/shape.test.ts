@@ -675,6 +675,15 @@ describe("HTML outlines (#102)", () => {
     ]);
   });
 
+  test("siblings with different stable ids stay apart; content slugs in ids and classes are not recorded (review 3)", () => {
+    const page = `<!doctype html><html><body><div id="header"><h1>Site</h1></div><div id="content"><article class="post category-jazz author-jensen tag-copenhagen" id="mit-foredrag-om-jazz"><h2>x</h2></article></div></body></html>`;
+    const { outline } = htmlOutline(page);
+    const text = JSON.stringify(outline);
+    for (const v of ["jensen", "jazz", "copenhagen", "foredrag"]) expect(text).not.toContain(v);
+    expect(outline.map((n) => [n.tag, n.id, n.many ?? false])).toEqual([["div", "header", false], ["div", "content", false]]);
+    expect(outline[1]!.children![0]).toMatchObject({ tag: "article", id: ":id", classes: ["author-:id", "category-:id", "post", "tag-:id"] });
+  });
+
   test("a huge page is cut short and says so", () => {
     const big = "<div>" + Array.from({ length: 5000 }, (_, i) => `<p class="p${i % 7}"><b class="b${i}">x</b></p>`).join("") + "</div>";
     const o = htmlOutline(big);

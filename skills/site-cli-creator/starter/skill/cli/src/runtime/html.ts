@@ -63,11 +63,12 @@ type Node = AnyNode;
 
 /**
  * `html` as a browser builds it (parse5 follows the HTML standard: an open `<p>` ends at the next `<li>`,
- * a missing `</li>` is implied). A whole page (`<!doctype`, `<html`) is parsed as a document, anything
+ * a missing `</li>` is implied). A whole page (`<!doctype html` or `<html` in its first 4 KB) is parsed as a document, anything
  * else (a fragment from an HTML or JSON answer) as a fragment, so its table rows stay rows.
  */
 export function parseHtml(html: string): Doc {
-  const doc = /^\s*(?:<!--[\s\S]*?-->\s*)*<(?:!doctype|html[\s>])/i.test(html)
+  // A doctype or <html> near the start, even after output a server printed first (a PHP notice), is a page.
+  const doc = /<(?:!doctype\s+html|html[\s>])/i.test(html.slice(0, 4096))
     ? parse(html, { treeAdapter: adapter })
     : parseFragment(html, { treeAdapter: adapter });
   // A <template>'s content is inert: a browser's selectors never match inside it, so neither do ours.

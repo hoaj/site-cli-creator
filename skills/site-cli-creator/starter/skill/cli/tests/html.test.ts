@@ -163,6 +163,26 @@ describe("an HTML Operation through the Client", () => {
     }
   });
 
+  test("an HTML answer whose text is also valid JSON (a bare count) is still HTML (review 3)", async () => {
+    const count = defineOperation({
+      name: "GET /cart/count",
+      effect: "read",
+      rest: { method: "GET", path: "/cart/count" },
+      html: { fields: { n: { css: "b", all: true } } },
+      variables: z.object({}),
+      response: z.object({ n: z.array(z.string()) }),
+    });
+    for (const text of ["3", "null", "[]"]) {
+      const { fetch } = fakeFetch(() => htmlResponse(text));
+      expect(await client(makeSite(), makeDeps(fetch, home.dir).deps).call(count, {})).toEqual({ n: [] });
+    }
+  });
+
+  test("a whole page with output before its doctype (a PHP notice) is still parsed as a page (review 3)", () => {
+    const page = `Notice: Undefined index x in /var/www/a.php on line 3\n<!DOCTYPE html><html><body class="home"><ul class="x"><li>A</li></ul></body></html>`;
+    expect(extractHtml(page, { items: { each: "li", in: "body.home ul.x", fields: { t: ":scope" } } })).toEqual({ ok: true, value: { items: [{ t: "A" }] } });
+  });
+
   test("a page that now answers JSON is Drift (not_html), never a bug", async () => {
     const { fetch } = fakeFetch(() => new Response(JSON.stringify({ events: [] }), { headers: { "content-type": "application/json" } }));
     const f = await failure(client(makeSite(), makeDeps(fetch, home.dir).deps).call(listEvents, { categories: [] }));

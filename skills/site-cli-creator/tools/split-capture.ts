@@ -149,10 +149,10 @@ await runTool(async () => {
   const warnings: string[] = [];
   for (const e of chosen.filter((c) => c.navigation)) {
     const reads = explore.index.operations.filter(
-      (o) => o !== e && !o.navigation && !o.loginFlow && !o.serverAction && !o.rsc && !o.html && o.effect === "read" && o.aborted < o.seen && (o.pages ?? []).some((p) => (e.pages ?? []).includes(p)),
+      (o) => o !== e && !o.navigation && !o.loginFlow && !o.serverAction && !o.rsc && o.effect === "read" && o.aborted < o.seen && (o.pages ?? []).some((p) => (e.pages ?? []).includes(p)),
     );
     if (reads.length) {
-      warnings.push(`${e.operation} is a page load, and its page also called JSON reads (${reads.map((o) => o.operation).join(", ")}): keep those instead when they carry the Task's data, and drop the page load (reference/add-task.md step 3).`);
+      warnings.push(`${e.operation} is a page load, and its page also called reads (${reads.map((o) => o.operation).join(", ")}): keep those instead when they carry the Task's data (JSON, or HTML inside JSON), and drop the page load (reference/add-task.md step 3).`);
     }
   }
   return { task, dir, startPath, operations: chosen.map((e) => ({ operation: e.operation, file: e.file })), ...(warnings.length ? { warnings } : {}) };

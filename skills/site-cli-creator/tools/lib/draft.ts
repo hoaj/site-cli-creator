@@ -182,7 +182,7 @@ export function draftOperation(
 
   const body = successBody(op);
   const embedded = successHtmlInJson(op);
-  if (body?.kind === "html" && body.outline?.length) {
+  if (body?.kind === "html" && body.outline?.length && op.html) {
     if (body.truncated) lines.push("  // The page was too big to outline whole: the shape file's outline is cut short.");
     lines.push(...draftHtml(body.outline));
   } else if (embedded.length && op.html) {
