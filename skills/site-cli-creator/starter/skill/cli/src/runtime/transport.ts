@@ -150,8 +150,9 @@ export function browserTransport(site: Site, options: { env: Env; note(message: 
       await opening;
     } catch (e) {
       await close();
-      if (e instanceof Failure) throw e;
-      return {};
+      if (e instanceof Failure) throw e; // Chrome is missing
+      // The site did not load in Chrome: the hook cannot read its cookies, so it stops as a fetch would.
+      throw new Failure("network", `${origin} isn't responding (${transportError("page").message}).`);
     }
     const held = context ? await context.cookies(`${origin}/`).catch(() => []) : [];
     return Object.fromEntries(held.map((c) => [c.name, c.value]));

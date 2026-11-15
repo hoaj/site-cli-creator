@@ -99,11 +99,6 @@ export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, su
   }
 }
 
-/**
- * The same steps for an MCP client: tools and arguments instead of commands and flags. An MCP
- * client may have no skills, so a report goes through the Feedback skill when it has one, else
- * through the repo's new-issue page.
- */
 /** How an MCP client offers a report: the Feedback skill when it has it, else the repo's new-issue page. */
 function feedbackOffer(site: EnvelopeSite): string {
   return `if the ${site.plugin}-feedback skill is available, offer to file it through it, passing this whole error; otherwise offer the user ${site.repo ? `https://github.com/${site.repo}/issues/new` : "the plugin's repo"} to report it with this error. Do either only if the user says yes`;
@@ -111,6 +106,11 @@ function feedbackOffer(site: EnvelopeSite): string {
 
 const capitalized = (s: string) => `${s[0]!.toUpperCase()}${s.slice(1)}`;
 
+/**
+ * The same steps for an MCP client: tools and arguments instead of commands and flags. An MCP
+ * client may have no skills, so a report goes through the Feedback skill when it has one, else
+ * through the repo's new-issue page.
+ */
 function mcpNextStep(kind: Kind, site: EnvelopeSite, hasAccounts: boolean): string {
   const report = `${capitalized(feedbackOffer(site))}.`;
   switch (kind) {

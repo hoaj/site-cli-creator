@@ -23,7 +23,7 @@ import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type 
 import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
-import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type RefreshConfig, type Site, type SiteCtx } from "./site";
+import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, onSiteDomain, siteDomain, type Env, type Fetch, type RefreshConfig, type Site, type SiteCtx } from "./site";
 
 /** `fromProfile`: seed the sign-in from another Chrome profile's cookies (`login --from-profile`). */
 export type SignInOptions = {
@@ -145,13 +145,28 @@ function formBody(name: string, value: unknown): string {
 }
 
 async function readBody(r: Response): Promise<unknown> {
-  const text = await r.text();
+  return parsedBody(await r.text());
+}
+
+/** An answer's text as JSON when it parses, else the text; undefined when empty. */
+function parsedBody(text: string): unknown {
   if (!text.trim()) return undefined;
   try {
     return JSON.parse(text);
   } catch {
     return text;
   }
+}
+
+/** A header's value whatever its name's case. */
+function headerValue(headers: Record<string, string>, name: string): string | undefined {
+  return Object.entries(headers).find(([k]) => k.toLowerCase() === name)?.[1];
+}
+
+/** The host a fetch input goes to, a relative one resolved against the site's origin. */
+function requestHost(input: Parameters<Fetch>[0], origin: string): string {
+  const url = typeof input === "string" ? input : input instanceof URL ? input.href : (input as globalThis.Request).url;
+  return new URL(url, origin).hostname;
 }
 
 type GqlError = { message?: unknown; extensions?: { code?: unknown } };
@@ -258,20 +273,22 @@ export class Client {
     const set = new Map<string, string>();
     const send = base ?? this.deps.fetch;
     const chrome = base ? undefined : this.deps.cookies;
+    const domain = siteDomain(this.origin);
     const fetch: Fetch = async (input, init) => {
       const res = await send(input, init);
       // A hook's request (bootstrap's first one, renew's) meets a bot wall as often as an Operation:
-      // the same block, never a bug in the hook.
-      const json = /json/i.test(res.headers.get("content-type") ?? "");
-      const blocked = blockSignal(res.status, res.headers, json ? undefined : await res.clone().text().catch(() => undefined));
+      // the same block, never a bug in the hook. Read as the Operations read an answer.
+      const text = await res.clone().text().catch(() => undefined);
+      const blocked = blockSignal(res.status, res.headers, text === undefined ? undefined : parsedBody(text));
       if (blocked) throw this.blockedFailure("site.ts", blocked);
-      for (const [name, value] of setCookiePairs(res.headers)) set.set(name, value);
+      // Only the site's own cookies: a hook may call another host (an identity provider).
+      if (onSiteDomain(domain, requestHost(input, this.origin))) for (const [name, value] of setCookiePairs(res.headers)) set.set(name, value);
       return res;
     };
     return {
       fetch,
       // Chrome opens with the session's cookies, as for the Operations; a Failure (no Chrome) passes on.
-      cookies: async () => ({ ...(chrome ? await chrome(session.headers.cookie) : {}), ...Object.fromEntries(set) }),
+      cookies: async () => ({ ...(chrome ? await chrome(headerValue(session.headers, "cookie")) : {}), ...Object.fromEntries(set) }),
       origin: this.origin,
       headers: { ...session.headers },
       ids: { ...session.ids },
@@ -366,8 +383,12 @@ export class Client {
         renewed = await withTimeout(refresh.renew(this.siteCtx(current, false, fetch)), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
-        // A bot wall refused the token request: the site never took the token, which stays; the block is reported.
-        if (e instanceof Failure && e.details.blocked) throw e;
+        // A bot wall refused the token request: the site never took the token, which stays, and
+        // Chrome signs in instead (a real browser may pass where a plain request was refused).
+        if (e instanceof Failure && e.details.blocked) {
+          this.deps.note(`renewing the sign-in was refused as automated traffic (bot protection: ${e.details.blocked}); signing in with Chrome instead`);
+          return false;
+        }
         // The error's name only: its message may carry what the site sent.
         const name = errorName(e);
         if (neverSent(e) && attempt < this.deps.retryDelays.length) {
@@ -667,6 +688,8 @@ export class Client {
         return { status: r.status, body, ...(blocked && { blocked }) };
       }
       const next = new URL(location, url);
+      const blocked = blockHost(next);
+      if (blocked) return { status: r.status, body: undefined, blocked };
       if (this.site.auth === "login" && isLoginHost(this.site, next.toString())) return { status: r.status, body: undefined, loginRedirect: true };
       if (next.origin !== new URL(url).origin) return { status: r.status, body: undefined, offsite: true };
       if (r.status === 303 || ((r.status === 301 || r.status === 302) && method !== "GET" && method !== "HEAD")) {
@@ -729,22 +752,49 @@ const BLOCK_PAGES: [RegExp, string][] = [
   [/captcha-delivery\.com/i, "datadome"],
   [/px-captcha|_pxCaptcha/i, "perimeterx"],
   [/Incapsula incident/i, "imperva"],
-  [/errors\.edgesuite\.net|Reference #\d+\.[0-9a-f]+\.\d+\.[0-9a-f]+/i, "akamai"],
+  // Akamai's Access Denied page writes them as HTML entities.
+  [/errors(?:\.|&#46;)edgesuite(?:\.|&#46;)net|Reference(?: |&#32;)(?:#|&#35;)\d+(?:\.|&#46;)[0-9a-f]+/i, "akamai"],
 ];
-/** A captcha or "checking your browser" wall: only as a refusal, since a sign-in page carries a captcha too. */
+/** A refusal of an API call as JSON (DataDome's captcha url, PerimeterX's block script), never data. */
+const BLOCK_JSON: [RegExp, string][] = [
+  [/captcha-delivery\.com/i, "datadome"],
+  [/"blockScript"\s*:/, "perimeterx"],
+];
+/**
+ * A captcha or "checking your browser" wall: only as a refusal, and never a page with a password
+ * field, since a sign-in page carries a captcha too.
+ */
 const CAPTCHA_WALL = /g-recaptcha|h-captcha|hcaptcha\.com|recaptcha\/api|checking your browser/i;
+const SIGN_IN_FORM = /type\s*=\s*["']?password/i;
 const REFUSALS = new Set([403, 429, 503]);
+/** Hosts a bot protection redirects a refused request to. */
+const BLOCK_HOSTS: [RegExp, string][] = [
+  [/(?:^|\.)captcha-delivery\.com$/i, "datadome"],
+  [/(?:^|\.)challenges\.cloudflare\.com$/i, "cloudflare"],
+  [/(?:^|\.)(?:px-cloud\.net|perimeterx\.net)$/i, "perimeterx"],
+];
 
 /**
  * The bot protection that refused a request, or undefined (SPEC §10): Cloudflare's `cf-mitigated`
- * header (set on a challenge only), else the block pages' markers, else a captcha wall as a refusal.
+ * header (set on a challenge only); a block page's markers in an answer that is not JSON, at any
+ * status; a JSON refusal's markers; a captcha wall as a refusal on a page with no sign-in form.
  */
 export function blockSignal(status: number, headers: Headers, body: unknown): string | undefined {
   if (headers.has("cf-mitigated")) return "cloudflare";
+  if (body !== null && typeof body === "object") {
+    if (status < 400) return undefined;
+    const text = JSON.stringify(body).slice(0, 100_000);
+    return BLOCK_JSON.find(([marker]) => marker.test(text))?.[1];
+  }
   if (typeof body !== "string") return undefined;
   const vendor = BLOCK_PAGES.find(([marker]) => marker.test(body))?.[1];
   if (vendor) return vendor;
-  return REFUSALS.has(status) && CAPTCHA_WALL.test(body) ? "captcha" : undefined;
+  return REFUSALS.has(status) && CAPTCHA_WALL.test(body) && !SIGN_IN_FORM.test(body) ? "captcha" : undefined;
+}
+
+/** The bot protection a redirect leads to, by its host, or undefined. */
+export function blockHost(location: URL): string | undefined {
+  return BLOCK_HOSTS.find(([host]) => host.test(location.hostname))?.[1];
 }
 
 /** The name=value pairs of a response's Set-Cookie headers (SiteCtx.cookies). */
