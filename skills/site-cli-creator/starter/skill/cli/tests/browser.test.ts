@@ -87,6 +87,13 @@ const server = Bun.serve({
           .then(() => (navigator.serviceWorker.controller ? ready() : navigator.serviceWorker.addEventListener("controllerchange", ready)));
         document.getElementById("save").onclick = () => fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});`);
     // A form post (fetch with URLSearchParams sends application/x-www-form-urlencoded).
+    if (url.pathname === "/never-orders")
+      return page(`
+        document.getElementById("save").onclick = async () => {
+          await fetch("/api/order/place", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => {});
+          await fetch("/graphql", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ operationName: "PlaceOrder", query: "query PlaceOrder { x }" }) }).catch(() => {});
+          fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});
+        };`);
     if (url.pathname === "/form-orders")
       return page(`
         document.getElementById("save").onclick = () => fetch("/api/orders/5", { method: "PATCH", body: new URLSearchParams({ name: "New" }) }).catch(() => {});`);
@@ -260,6 +267,33 @@ describe.skipIf(skip)("Chrome", () => {
     expect((await chromeWriteChecker(undeclared, env)([op], [])).get(op.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#save'):TimeoutError");
     expect(received).not.toContain("POST /api/session/post-login");
     expect(received.filter((r) => r.startsWith("PATCH") || r === "POST /api/track")).toEqual([]);
+  }, 90_000);
+
+  test("check --writes aborts and reports a trigger's request site.never forbids, although readOnlyRequests and a query would let it through (#101)", async () => {
+    received.length = 0;
+    graphqlReceived.length = 0;
+    const s = makeSite({
+      origin: server.url.origin,
+      readOnlyRequests: ["/api/order/place"],
+      never: [
+        { method: "POST", path: "/api/order/place*", why: "Placing an order: the user always pays" },
+        { graphql: "PlaceOrder", why: "Placing an order: the user always pays" },
+      ],
+    });
+    const op = rename(async (p) => {
+      await p.goto("/never-orders");
+      await p.click("#save");
+    });
+    const warnings: string[] = [];
+    const out = await chromeWriteChecker(s, { SITE_CLI_HOME: home.dir })([op], [], [op], (m) => warnings.push(m));
+    expect(out.get(op.name)).toBeNull();
+    expect(warnings).toEqual([
+      "PATCH /api/orders/:orderId's trigger sent a request site.never forbids (POST /api/order/place*: Placing an order: the user always pays); it was aborted. Change the trigger so it stops before that request.",
+      "PATCH /api/orders/:orderId's trigger sent a request site.never forbids (GraphQL PlaceOrder: Placing an order: the user always pays); it was aborted. Change the trigger so it stops before that request.",
+    ]);
+    expect(received).not.toContain("POST /api/order/place");
+    expect(graphqlReceived).not.toContain("PlaceOrder");
+    expect(received.filter((r) => r.startsWith("PATCH"))).toEqual([]);
   }, 90_000);
 
   test("check --writes reads a form post by its content-type: a form Contract passes, a JSON one drifts", async () => {

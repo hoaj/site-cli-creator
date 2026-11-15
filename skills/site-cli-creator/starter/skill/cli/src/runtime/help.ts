@@ -2,6 +2,7 @@
 import type { z } from "zod";
 import type { Command } from "./command";
 import { EXIT, nextStep, type Kind } from "./envelope";
+import { neverList } from "./never";
 import { unwrap } from "./fingerprint";
 import type { Site } from "./site";
 
@@ -94,6 +95,8 @@ export function help(site: Site, commands: Command[]) {
     commands: commands.map((c) => ({ name: c.name, summary: c.summary, write: isWriteCommand(c), flags: flagSpecs(c.args) })),
     builtins,
     globalFlags: GLOBAL_FLAGS,
+    // site.never: what the CLI never does, whatever the flags; the user does it on the site.
+    ...(neverList(site).length > 0 && { never: neverList(site) }),
     exitCodes: (Object.entries(EXIT) as [keyof typeof EXIT, number][]).map(([kind, code]) => ({
       code,
       kind,
