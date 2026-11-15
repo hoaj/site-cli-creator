@@ -25,6 +25,7 @@ export function neverListProblems(list: unknown): string[] {
     if (!hasPath && !hasGraphql) return out.push(`${at} needs a path or a graphql name`);
     if (hasPath === hasGraphql || (hasGraphql && r.method !== undefined)) return out.push(`${at} takes a path or a graphql name, not both`);
     if (hasPath && !(typeof r.path === "string" && r.path.startsWith("/"))) out.push(`${at}.path must start with /`);
+    else if (hasPath && /[?#]/.test(r.path as string)) out.push(`${at}.path is a URL path only: no ? or # (the query string and fragment are never matched)`);
     if (r.method !== undefined && !(typeof r.method === "string" && METHODS.includes(r.method))) out.push(`${at}.method must be GET, POST, PUT, PATCH or DELETE`);
     if (hasGraphql && !(typeof r.graphql === "string" && GRAPHQL_NAME.test(r.graphql))) out.push(`${at}.graphql must be a GraphQL operation name`);
   });
@@ -140,31 +141,65 @@ export function neverProblems(site: Site, operations: Operation[]): string[] {
   });
 }
 
-/** What may follow a path in source for it to be the whole path: an optional `/`, then a quote, space, `?`, `#` or the end. */
-const PATH_END = "(?=/?(?:[\\s\"'`?#),;]|$))";
+/**
+ * The paths a source text names: every run of characters that is no space or quote and holds a path,
+ * with a URL's scheme and host or a template's leading `${…}` (an origin) taken off, cut at `?` or
+ * `#`. `at` is where it stands in the text. `//` (a comment) is no path.
+ */
+function sourcePaths(text: string): { path: string; at: number }[] {
+  const out: { path: string; at: number }[] = [];
+  for (const m of text.matchAll(/[^\s"'`]+/g)) {
+    const token = m[0]
+      .replace(/^[})]+/, "")
+      .replace(/^[a-z][a-z0-9+.-]*:\/\/[^/]*/i, "")
+      .replace(/^(?:\$\{[^}]*\})+/, "");
+    if (!token.startsWith("/") || token.startsWith("//")) continue;
+    const path = token.split(/[?#]/)[0]!.replace(/[),;.]+$/, "").replace(/\/{2,}/g, "/");
+    if (path) out.push({ path, at: m.index! });
+  }
+  return out;
+}
+
+const QUOTED_METHOD = /["'`](GET|POST|PUT|PATCH|DELETE)["'`]/gi;
+/** How far from a path a quoted method may stand to be that request's method (a Contract's rest, a fetch's init). */
+const METHOD_REACH = 200;
+
+/** The method a path in source is sent with: the nearest quoted method within METHOD_REACH, else GET (fetch's default). */
+function methodNear(text: string, at: number): string {
+  let best: { method: string; distance: number } | undefined;
+  for (const m of text.matchAll(QUOTED_METHOD)) {
+    const distance = Math.abs(m.index! - at);
+    if (distance <= METHOD_REACH && (!best || distance < best.distance)) best = { method: m[1]!.toUpperCase(), distance };
+  }
+  return best?.method ?? "GET";
+}
 
 /**
- * One line per source file that names a request site.never forbids, as the runtime would match it:
- * - a path glob (its `*` spans any run of characters that is no space or quote, so `:id` and `${id}`
- *   match), case-insensitive, ending where the path ends (`/api/cart` is not `/api/cart/items`). A
- *   rule with a method counts only in a file that also holds that method as a quoted string
- *   ("DELETE"), so a read of the same path (GET /api/cart beside DELETE /api/cart) is no match;
- * - a GraphQL name where GraphQL names one: after `query`, `mutation` or `subscription`, or quoted
- *   (an operationName). A field or a path holding the same word is no match.
+ * One line per source file that names a request site.never forbids, matched as the runtime would:
+ * - a path rule: a path the text names (sourcePaths) that the rule's glob covers, the same anchored,
+ *   case-insensitive glob the runtime uses (`*` covers `:id` and `${id}` written in a template), and
+ *   for a rule with a method, sent with that method: the quoted method nearest to it, else GET. So a
+ *   GET of /api/cart next to a POST /api/cart rule, or a POST of another path in the same file, is
+ *   no match;
+ * - a GraphQL rule: its name after `query`, `mutation` or `subscription`, or quoted (an
+ *   operationName), case-insensitive. A field or a path holding the same word is no match.
+ * A best effort before release: the runtime refuses every real request either way.
  */
 export function neverInSource(site: Site, files: { path: string; text: string }[]): string[] {
-  const res = rules(site).map((rule) => {
-    if (rule.path === undefined) {
-      const name = escape(rule.graphql!);
-      return { rule, re: new RegExp(`\\b(?:query|mutation|subscription)\\s+${name}(?![\\w$])|["'\`]${name}["'\`]`), method: undefined };
-    }
-    const src = `${rule.path.replace(/\/+$/, "").split("*").map(escape).join("[^\\s\"'`]*")}${PATH_END}`;
-    const method = rule.method ? new RegExp(`["'\`]${rule.method}["'\`]`, "i") : undefined;
-    return { rule, re: new RegExp(src, "i"), method };
+  const list = rules(site);
+  return files.flatMap((f) => {
+    const paths = sourcePaths(f.text);
+    return list
+      .filter((rule) => {
+        if (rule.path === undefined) {
+          const name = escape(rule.graphql!);
+          return new RegExp(`\\b(?:query|mutation|subscription)\\s+${name}(?![\\w$])|["'\`]${name}["'\`]`, "i").test(f.text);
+        }
+        const glob = globRe(rule.path);
+        return paths.some((p) => glob.test(p.path) && (!rule.method || methodNear(f.text, p.at) === rule.method));
+      })
+      .map((rule) => `${f.path} names ${describeRule(rule)}`);
   });
-  return files.flatMap((f) =>
-    res.filter(({ re, method }) => re.test(f.text) && (!method || method.test(f.text))).map(({ rule }) => `${f.path} names ${describeRule(rule)}`),
-  );
 }
 
 /**
@@ -202,15 +237,36 @@ async function bodyText(body: RequestInit["body"], request: Request | undefined)
 }
 
 const MAX_HOPS = 20;
+const GUARDED = Symbol("site.never guard");
+/** Headers that carry the session: never sent on a redirect off the site's domain. */
+const SESSION_HEADERS = ["authorization", "cookie", "proxy-authorization"];
+/** Headers that describe a body: dropped when a redirect turns the request into a GET, as fetch does. */
+const BODY_HEADERS = ["content-type", "content-length", "content-encoding", "content-language", "content-location"];
+
+/** Whether a host is on the site's domain (the origin's host without www., or a subdomain of it). */
+function onDomain(site: Site, host: string): boolean {
+  let domain: string;
+  try {
+    domain = new URL(site.origin).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return false;
+  }
+  const h = host.toLowerCase();
+  return h === domain || h.endsWith(`.${domain}`);
+}
 
 /**
- * A fetch that refuses what site.never forbids (the hooks' ctx.fetch, login.refresh.renew). Redirects
- * are followed by hand, as fetch would follow them (303, and 301/302 after a non-GET, go on as a GET
- * without a body), so every hop is checked before it is sent; a caller's own `redirect: "manual"` or
- * "error" is kept. `onRefuse` hears of each refusal, even one the caller then catches.
+ * A fetch that refuses what site.never forbids: the Client wraps every fetch it makes with it (the
+ * Operations', the hooks' ctx.fetch, login.refresh.renew's). Redirects are followed by hand, as fetch
+ * would follow them, so every hop is checked before it is sent:
+ * - 303, and 301/302 after a non-GET, go on as a GET without the body or its headers;
+ * - a hop off the site's domain (and off the current origin) goes without the session's headers;
+ * - a caller's own `redirect: "manual"` or "error" is kept (the Client's fetchFollowing).
+ * `onRefuse` hears of each refusal, even one the caller then catches. A fetch already guarded is
+ * returned as it is.
  */
 export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverSent) => void): Fetch {
-  if (rules(site).length === 0) return fetch;
+  if (rules(site).length === 0 || (fetch as { [GUARDED]?: true })[GUARDED]) return fetch;
   const refuse = (req: { method: string; url: string; body?: string }) => {
     const rule = forbiddenRequest(site, req);
     if (!rule) return;
@@ -218,7 +274,7 @@ export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverS
     onRefuse?.(refused);
     throw refused;
   };
-  return async (input, init = {}) => {
+  const guarded: Fetch = async (input, init = {}) => {
     const request = input instanceof Request ? input : undefined;
     let method = (init.method ?? request?.method ?? "GET").toUpperCase();
     let url = request ? request.url : String(input);
@@ -226,23 +282,27 @@ export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverS
     refuse({ method, url, body: text });
     if (init.redirect === "manual" || init.redirect === "error") return fetch(input, init);
     let body: RequestInit["body"] = init.body ?? text;
-    const headers = init.headers ?? request?.headers;
+    const headers = new Headers(init.headers ?? request?.headers);
     let res = await fetch(input, { ...init, redirect: "manual" });
     for (let hop = 0; hop < MAX_HOPS; hop++) {
       const location = res.headers.get("location");
       if (res.status < 300 || res.status >= 400 || res.status === 304 || !location) return res;
-      const next = new URL(location, url).href;
+      const next = new URL(location, url);
       if (res.status === 303 || ((res.status === 301 || res.status === 302) && method !== "GET" && method !== "HEAD")) {
         if (method !== "HEAD") method = "GET";
         body = undefined;
         text = undefined;
+        for (const h of BODY_HEADERS) headers.delete(h);
       }
-      refuse({ method, url: next, body: text });
-      url = next;
+      if (next.origin !== new URL(url).origin && !onDomain(site, next.hostname)) for (const h of SESSION_HEADERS) headers.delete(h);
+      refuse({ method, url: next.href, body: text });
+      url = next.href;
       res = await fetch(url, { ...init, method, headers, body, redirect: "manual" });
     }
     return res;
   };
+  Object.defineProperty(guarded, GUARDED, { value: true });
+  return guarded;
 }
 
 /** The `next` of a NeverSent envelope: the user does this on the site; a command that tried it is a bug. */

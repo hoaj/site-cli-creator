@@ -28,14 +28,15 @@ export type CheckOptions = { op?: string; writes?: boolean; account?: string };
  * Checks write Operations; returns one entry per Operation, null when its request still matches.
  * `reads` are the registry's read Operations: requests matching them may pass while a trigger runs.
  * `declaredWrites` are all the registry's write Operations: they are always aborted (triggerVerdict).
- * `warn` gets one line per trigger that sent a request site.never forbids (aborted, not Drift).
+ * `warn` gets one line per trigger that sent a request site.never forbids (aborted, not Drift); an
+ * Operation whose trigger reached only such a request, never its own write, is "never".
  */
 export type WriteChecker = (
   writes: Operation[],
   reads: Operation[],
   declaredWrites?: Operation[],
   warn?: (message: string) => void,
-) => Promise<Map<string, DriftEntry | null>>;
+) => Promise<Map<string, DriftEntry | null | "never">>;
 
 /** Operations ordered so every Operation comes after the ones it `needs`; ties keep registry order. */
 export function chainOrder(ops: Operation[]): Operation[] {
@@ -179,7 +180,9 @@ export async function check(client: Client, operations: Operation[], options: Ch
       const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env, client.fromProfile()))(withTrigger, reads, declaredWrites, warn);
       for (const op of withTrigger) {
         const d = outcome.get(op.name);
-        if (d) drifts.push(d);
+        // The trigger stopped at a request site.never forbids: the plugin's trigger is wrong, no Drift.
+        if (d === "never") rows.push({ operation: op.name, effect: "write", status: "failed", reason: "never" });
+        else if (d) drifts.push(d);
         else rows.push({ operation: op.name, effect: "write", status: "ok" });
       }
     } catch (e) {
@@ -201,7 +204,8 @@ export async function check(client: Client, operations: Operation[], options: Ch
 
 // ---- write checks in Chrome ----
 
-export type Captured = { method: string; url: URL; body: unknown; contentType?: string };
+/** `raw`: the body as sent, when known (check --writes keeps it, so site.never reads it as it is). */
+export type Captured = { method: string; url: URL; body: unknown; contentType?: string; raw?: string };
 
 const mediaType = (contentType: string | undefined) => (contentType ?? "").split(";")[0]!.trim().toLowerCase();
 
@@ -315,7 +319,7 @@ export function triggerVerdict(site: Site, target: Operation, writes: Operation[
 
 /** A captured request in the form site.never matches: its body as text again. */
 function capturedRequest(req: Captured): { method: string; url: string; body?: string } {
-  const body = req.body === undefined ? undefined : typeof req.body === "string" ? req.body : JSON.stringify(req.body);
+  const body = req.raw ?? (req.body === undefined ? undefined : typeof req.body === "string" ? req.body : JSON.stringify(req.body));
   return { method: req.method, url: req.url.href, body };
 }
 
@@ -440,7 +444,7 @@ const ACTION_TIMEOUT_MS = 15_000;
  */
 export function chromeWriteChecker(site: Site, env = process.env, fromProfile?: string): WriteChecker {
   return async (writes, reads, declaredWrites = writes, warn = () => {}) => {
-    const out = new Map<string, DriftEntry | null>();
+    const out = new Map<string, DriftEntry | null | "never">();
     const seeded = site.auth === "login" && fromProfile !== undefined;
     const temp = site.auth === "none" ? mkdtempSync(join(tmpdir(), `${site.skill}-check-`)) : undefined;
     let context: BrowserContext | undefined;
@@ -468,7 +472,7 @@ async function checkOne(
   origin: string,
   signIn: string,
   warn: (message: string) => void,
-): Promise<DriftEntry | null> {
+): Promise<DriftEntry | null | "never"> {
   let captured: Captured | undefined;
   let signedOut = false;
   /** Labels of the site.never rules this trigger's requests broke, each reported once. */
@@ -476,11 +480,14 @@ async function checkOne(
   const handler = async (route: Route) => {
     const req = route.request();
     const contentType = (await req.allHeaders())["content-type"];
-    const c: Captured = { method: req.method(), url: new URL(req.url()), body: parseCaptured(req.postData(), contentType), contentType };
-    const rule = forbiddenRequest(site, capturedRequest(c));
-    const verdict = rule ? "never" : triggerVerdict(site, op, writes, reads, origin, c);
+    const raw = req.postData() ?? undefined;
+    const c: Captured = { method: req.method(), url: new URL(req.url()), body: parseCaptured(raw ?? null, contentType), contentType, raw };
+    const verdict = triggerVerdict(site, op, writes, reads, origin, c);
     if (verdict === "target") captured ??= c;
-    if (rule) forbidden.set(neverRuleLabel(rule), rule.why);
+    if (verdict === "never") {
+      const rule = forbiddenRequest(site, capturedRequest(c))!;
+      forbidden.set(neverRuleLabel(rule), rule.why);
+    }
     return verdict === "pass" ? route.continue() : route.abort();
   };
   await context.route("**/*", handler);
@@ -500,6 +507,8 @@ async function checkOne(
   for (const [label, why] of forbidden) {
     warn(`${op.name}'s trigger sent a request site.never forbids (${label}: ${why}); it was aborted. Change the trigger so it stops before that request.`);
   }
+  // It reached only what the plugin must never send: a trigger to fix, not Drift (the warning says which).
+  if (!captured && forbidden.size > 0) return "never";
   if (!captured && signedOut) {
     throw new Failure("session", `${signIn[0]!.toUpperCase()}${signIn.slice(1)} is signed out of ${site.origin}, so ${op.name} could not be checked.`);
   }

@@ -261,7 +261,8 @@ function failed(e: unknown, site: Site, commandName: string, surface: Surface = 
   const bug = new Failure("bug", what, {
     fingerprint: bugKey(site, commandName, e),
     stack: redactStack(e),
-    ...(e instanceof NeverSent && { next: neverNext(e.rule, site, surface) }),
+    // A Task that tried it: the user does it on the site. check's own refusal is a plain bug in the plugin.
+    ...(e instanceof NeverSent && commandName !== "check" && { next: neverNext(e.rule, site, surface) }),
   });
   return { output: errorEnvelope(bug, site, surface), code: EXIT.bug };
 }

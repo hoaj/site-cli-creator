@@ -22,7 +22,7 @@ import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
 import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
-import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent, refuseNever } from "./never";
+import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
 import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, type Env, type Fetch, type RefreshConfig, type Site, type SiteCtx } from "./site";
@@ -83,7 +83,12 @@ export type ClientOptions = {
    * arguments instead of CLI flags.
    */
   surface?: Surface;
+  /** The refusals site.never made, shared with the Clients siteCtx makes for hooks (internal). */
+  refusals?: Refusals;
 };
+
+/** How many requests site.never refused in this run, and the last one: a hook that catches one still fails with it. */
+type Refusals = { count: number; last?: NeverSent };
 
 export type Request = { method: string; url: string; headers: Record<string, string>; body?: string };
 type Response_ = { status: number; body: unknown; loginRedirect?: boolean; offsite?: boolean };
@@ -214,10 +219,15 @@ export class Client {
   private persisted: boolean;
   /** The account list fetched in this run, labels included. Only the ids are saved (SPEC §7). */
   private fetchedAccounts?: Account[];
+  private readonly refusals: Refusals;
 
   constructor(site: Site, deps: Deps, options: ClientOptions = {}) {
     this.site = site;
-    this.deps = deps;
+    this.refusals = options.refusals ?? { count: 0 };
+    // Every request this Client makes goes through one site.never guard: Operations (each redirect
+    // hop of fetchFollowing), the hooks' ctx.fetch and login.refresh.renew's plain fetch.
+    const note = (e: NeverSent) => this.noteRefusal(e);
+    this.deps = { ...deps, fetch: guardFetch(site, deps.fetch, note), plainFetch: guardFetch(site, deps.plainFetch ?? deps.fetch, note) };
     this.confirm = options.confirm ?? false;
     this.session = options.session ?? null;
     this.persisted = !options.session;
@@ -249,11 +259,29 @@ export class Client {
     return this.session;
   }
 
+  private noteRefusal(e: NeverSent): void {
+    this.refusals.count++;
+    this.refusals.last = e;
+  }
+
+  /** Runs a site hook; a request site.never refused while it ran fails it, even when the hook caught that. */
+  private async hook<T>(run: () => Promise<T>): Promise<T> {
+    const before = this.refusals.count;
+    let out: T;
+    try {
+      out = await run();
+    } catch (e) {
+      throw this.refusals.count > before ? this.refusals.last! : e;
+    }
+    if (this.refusals.count > before) throw this.refusals.last!;
+    return out;
+  }
+
   /** A context for site hooks. `live`: calls go through this client (with reauth); otherwise through a fixed session. */
   siteCtx(session: Session, live: boolean): SiteCtx {
-    const caller = live ? this : new Client(this.site, this.deps, { session, reauth: false, confirm: true });
+    const caller = live ? this : new Client(this.site, this.deps, { session, reauth: false, confirm: true, refusals: this.refusals });
     return {
-      fetch: guardFetch(this.site, this.deps.fetch),
+      fetch: this.deps.fetch,
       origin: this.origin,
       headers: { ...session.headers },
       ids: { ...session.ids },
@@ -274,7 +302,8 @@ export class Client {
     const draft: Session = { headers, ids: {}, ...(signedIn.refresh && { refresh: signedIn.refresh }), savedAt: new Date().toISOString() };
     let raw: Record<string, unknown> | undefined;
     try {
-      raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
+      const postLogin = this.site.login?.postLogin;
+      raw = postLogin ? await this.hook(() => postLogin(this.siteCtx(draft, false))) : {};
     } finally {
       await this.deps.release?.();
     }
@@ -339,8 +368,9 @@ export class Client {
     this.deps.note(`renewing the sign-in to ${this.site.origin} with its refresh token`);
     let renewed: Awaited<ReturnType<typeof refresh.renew>>;
     // A refusal is remembered even when renew catches it: nothing left, so the record stays.
-    let refused: NeverSent | undefined;
-    const plain = guardFetch(this.site, this.deps.plainFetch ?? this.deps.fetch, (e) => (refused ??= e));
+    const before = this.refusals.count;
+    const refused = () => (this.refusals.count > before ? this.refusals.last : undefined);
+    const plain = this.deps.plainFetch ?? this.deps.fetch;
     for (let attempt = 0; ; attempt++) {
       // Plain fetch, never transport "browser"'s Chrome; bounded, and cancelled when time runs out,
       // so no request is left open after the lock is released.
@@ -350,7 +380,7 @@ export class Client {
         renewed = await withTimeout(refresh.renew({ ...this.siteCtx(current, false), fetch }), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
-        if (refused || e instanceof NeverSent) throw refused ?? e; // site.never refused it: nothing left, the record stays
+        if (refused() || e instanceof NeverSent) throw refused() ?? e; // site.never refused it: nothing left, the record stays
         // The error's name only: its message may carry what the site sent.
         const name = errorName(e);
         if (neverSent(e) && attempt < this.deps.retryDelays.length) {
@@ -369,7 +399,8 @@ export class Client {
         return false;
       }
     }
-    if (refused) throw refused;
+    const refusal = refused();
+    if (refusal) throw refusal;
     if (!renewed?.headers) {
       // Refused: perhaps because another run spent the token meanwhile. Its session wins, and a
       // session.json another run already changed is left as it is.
@@ -459,7 +490,7 @@ export class Client {
 
   private async bootstrap(): Promise<Session> {
     const empty: Session = { headers: {}, ids: {}, savedAt: new Date().toISOString() };
-    const r = await this.site.bootstrap!(this.siteCtx(empty, false));
+    const r = await this.hook(() => this.site.bootstrap!(this.siteCtx(empty, false)));
     this.session = saveSession(this.dir, { headers: r.headers ?? {}, ids: r.ids ?? {} });
     this.persisted = true;
     this.fresh = true;
@@ -531,7 +562,11 @@ export class Client {
     }
     // Before the dry run too: a request the CLI never sends is no dry run to confirm.
     const never = forbiddenOperation(this.site, op) ?? this.forbiddenBuilt(op, v.data);
-    if (never) throw new NeverSent(never, op.name);
+    if (never) {
+      const refused = new NeverSent(never, op.name);
+      this.noteRefusal(refused);
+      throw refused;
+    }
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
     await this.ensureSession();
     await this.probeSession();
@@ -568,7 +603,8 @@ export class Client {
     const s = await this.ensureSession();
     if (this.fetchedAccounts) return this.fetchedAccounts;
     if (!refresh && s.accounts) return s.accounts.map((a) => ({ id: String(a.id) }));
-    const raw = await this.site.accounts(this.siteCtx(s, true));
+    const accounts = this.site.accounts;
+    const raw = await this.hook(() => accounts(this.siteCtx(s, true)));
     const list: Account[] = raw.map((a) => (typeof a === "string" ? { id: a } : { id: String(a.id), ...(a.label ? { label: String(a.label) } : {}) }));
     this.fetchedAccounts = list;
     // The accounts go onto session.json as it is now when it is the same login: another run may have
@@ -641,7 +677,7 @@ export class Client {
   private async fetchFollowing(req: Request): Promise<Response_> {
     let { url, method, body } = req;
     for (let hop = 0; hop < 6; hop++) {
-      refuseNever(this.site, { method, url, body }); // every hop: a redirect may lead to a forbidden path
+      // deps.fetch is site.never's guard: every hop is checked, a redirect may lead to a forbidden path.
       const r = await this.deps.fetch(url, { method, headers: req.headers, body, redirect: "manual" });
       const location = r.headers.get("location");
       if (r.status < 300 || r.status >= 400 || !location) return { status: r.status, body: await readBody(r) };

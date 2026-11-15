@@ -404,6 +404,124 @@ describe("review round 1", () => {
     expect(h2.loginCalls).toEqual([]);
   });
 
+  test("review 2: a redirect off the site's domain drops the session's headers; a redirect to a GET drops the body's headers", async () => {
+    const f = fakeFetch((req) => {
+      const u = new URL(req.url);
+      if (u.pathname === "/api/away") return new Response(null, { status: 302, headers: { location: "https://cdn.other.test/file" } });
+      if (u.pathname === "/api/sub") return new Response(null, { status: 307, headers: { location: "https://api.shop.example.test/x" } });
+      if (u.pathname === "/api/see") return new Response(null, { status: 303, headers: { location: "/api/seen" } });
+      return json({});
+    });
+    const s = makeSite({
+      never: NEVER,
+      bootstrap: async (ctx) => {
+        const headers = { authorization: "Bearer secret", cookie: "sid=1", "content-type": "application/json" };
+        await ctx.fetch(`${ctx.origin}/api/away`, { headers });
+        await ctx.fetch(`${ctx.origin}/api/sub`, { method: "POST", headers, body: "{}" });
+        await ctx.fetch(`${ctx.origin}/api/see`, { method: "POST", headers, body: "{}" });
+        return { headers: {} };
+      },
+    });
+    await new Client(s, makeDeps(f.fetch, home()).deps).call(getOrder, { orderId: "1" }).catch(() => {});
+    const hop = (host: string, path: string) => f.calls.find((r) => new URL(r.url).host === host && new URL(r.url).pathname === path)!;
+    expect(hop("cdn.other.test", "/file").headers.authorization).toBeUndefined();
+    expect(hop("cdn.other.test", "/file").headers.cookie).toBeUndefined();
+    // Another host of the site's own domain keeps them, as a 307 keeps the body.
+    expect(hop("api.shop.example.test", "/x").headers.authorization).toBe("Bearer secret");
+    expect(hop("api.shop.example.test", "/x").body).toEqual({});
+    const seen = hop("shop.example.test", "/api/seen");
+    expect(seen.method).toBe("GET");
+    expect(seen.headers["content-type"]).toBeUndefined();
+    expect(seen.headers.authorization).toBe("Bearer secret");
+  });
+
+  test("review 2: a hook that catches a refused ctx.call or ctx.fetch still ends in NeverSent: renew keeps the record, postLogin saves nothing", async () => {
+    const tokenOp = defineOperation({ name: "POST /oauth/revoke", effect: "read", rest: { method: "POST", path: "/oauth/revoke" }, variables: z.object({}), response: z.unknown() });
+    const f = fakeFetch((req) => (req.headers.authorization === "Bearer old" ? json({}, 401) : json({ id: "1", total: 1 })));
+    const s = loginSite({
+      never: [{ path: "/oauth/revoke", why: "Revoking every sign-in" }],
+      login: {
+        startUrl: `${ORIGIN}/account`,
+        hosts: [],
+        tokenRequest: "/graphql",
+        refresh: { renew: async (ctx) => ctx.call(tokenOp, {}).then(() => ({ headers: {} }), () => null) },
+      },
+    });
+    const h = makeDeps(f.fetch, home());
+    saveSession(stateDir(s, h.deps.env), { headers: { authorization: "Bearer old" }, ids: {}, refresh: { token: "rt" } });
+    expect(await new Client(s, h.deps, { confirm: true }).call(getOrder, { orderId: "1" }).catch((x) => x)).toBeInstanceOf(NeverSent);
+    expect(loadSession(stateDir(s, h.deps.env))?.refresh).toEqual({ token: "rt" });
+
+    const p = loginSite({
+      never: NEVER,
+      login: {
+        startUrl: `${ORIGIN}/account`,
+        hosts: [],
+        tokenRequest: "/graphql",
+        postLogin: async (ctx): Promise<Record<string, string>> => {
+          const id = await ctx.fetch(`${ctx.origin}/api/order/place`, { method: "POST" }).then(() => "C-1", () => undefined);
+          return id ? { customerId: id } : {};
+        },
+      },
+    });
+    const h2 = makeDeps(f.fetch, home(), [{ authorization: "Bearer t" }]);
+    expect(await new Client(p, h2.deps, { confirm: true }).call(getOrder, { orderId: "1" }).catch((x) => x)).toBeInstanceOf(NeverSent);
+    expect(loadSession(stateDir(p, h2.deps.env))).toBeNull();
+  });
+
+  test("review 2: neverInSource anchors a path at its start, finds the method next to it, and matches GraphQL names case-insensitively", () => {
+    const s = makeSite({ never: [{ method: "DELETE", path: "/cart", why: "Emptying the cart" }, { method: "POST", path: "/api/cart", why: "Changing the cart" }, { graphql: "PlaceOrder", why: "Placing an order" }] });
+    const scan = (text: string) => neverInSource(s, [{ path: "f.ts", text }]);
+    // /cart is not /api/cart, though "DELETE" is in the file.
+    expect(scan('rest: { method: "DELETE", path: "/api/cart/item" }; const read = "/api/cart";')).toEqual([]);
+    // A full URL or an origin in a template names the path all the same.
+    expect(scan('fetch("https://shop.example/cart", { method: "DELETE" })')).toEqual(["f.ts names DELETE /cart (Emptying the cart)"]);
+    expect(scan("fetch(`${ctx.origin}/cart`, { method: 'DELETE' })")).toEqual(["f.ts names DELETE /cart (Emptying the cart)"]);
+    // A GET of /api/cart and a POST elsewhere in the same file are no POST /api/cart.
+    const hooks = `accounts: async (ctx) => (await ctx.fetch(ctx.origin + "/api/cart")).json(),
+      // … many lines later, an unrelated sign-in call …
+      ${"x".repeat(300)}
+      renew: async (ctx) => ctx.fetch(ctx.origin + "/oauth/token", { method: "POST" }),`;
+    expect(scan(hooks)).toEqual([]);
+    expect(scan('ctx.fetch(ctx.origin + "/api/cart", { method: "POST", body })')).toEqual(["f.ts names POST /api/cart (Changing the cart)"]);
+    expect(scan('rest: { method: "POST", path: "/api/cart" }')).toEqual(["f.ts names POST /api/cart (Changing the cart)"]);
+    expect(scan("const q = `mutation placeOrder { placeOrder { id } }`;")).toEqual(["f.ts names GraphQL PlaceOrder (Placing an order)"]);
+  });
+
+  test("review 2: a path rule holding a query string or fragment is refused, since only the path is matched", () => {
+    expect(siteProblems(makeSite({ never: [{ method: "POST", path: "/api/cart?action=checkout", why: "Paying" }] }))).toEqual([
+      "never[0].path is a URL path only: no ? or # (the query string and fragment are never matched)",
+    ]);
+  });
+
+  test("review 2: check's own refusal gets the plain bug next, not the user's 'do it on the site'", async () => {
+    const forbiddenRead = defineOperation({
+      name: "GET /api/orders/:orderId",
+      effect: "read",
+      rest: { method: "GET", path: "/api/orders/:orderId" },
+      variables: z.object({ orderId: z.string() }),
+      response: z.unknown(),
+      needs: { orderId: { value: "secret" } },
+    });
+    const app: App = { site: makeSite({ never: [{ path: "/api/orders/secret", why: "w" }] }), operations: [forbiddenRead], commands: [], deps: makeDeps(fakeFetch(() => json({})).fetch, home()).deps };
+    const r = await run(["check"], app);
+    expect(r.code).toBe(1);
+    expect((r.output as any).error.next).toStartWith("Tell the user this is a bug in the shop CLI.");
+  });
+
+  test("review 2: check --writes reports a trigger that only hit a site.never request as that, not as Drift", async () => {
+    const write = defineOperation({ ...renameOrder, trigger: async () => {} });
+    const checker = async (_w: unknown, _r: unknown, _d: unknown, warn?: (m: string) => void) => {
+      warn?.("PATCH /api/orders/:orderId's trigger sent a request site.never forbids (POST /api/order/place*: Placing an order: the user always pays); it was aborted.");
+      return new Map([[write.name, "never" as const]]);
+    };
+    const c = new Client(site, makeDeps(fakeFetch(() => json({})).fetch, home()).deps);
+    const r = await check(c, [write], { writes: true }, checker as never);
+    expect(r.ok).toBe(false);
+    expect(r.operations).toEqual([{ operation: write.name, effect: "write", status: "failed", reason: "never" }]);
+    expect(r.warnings).toHaveLength(1);
+  });
+
   test("stripNeverList removes the never list from site.ts text, so the CI scan reads the hooks and not the list", () => {
     const text = `export default defineSite({\n  origin: "x",\n  never: [\n    { method: "POST", path: "/api/order/place*", why: "Placing an order: [the user] pays" },\n  ],\n  postLogin: async (ctx) => ctx.fetch("/api/order/place", { method: "POST" }),\n});\n`;
     const stripped = stripNeverList(text);
