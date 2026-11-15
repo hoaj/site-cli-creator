@@ -49,8 +49,25 @@ export function htmlOutline(html: string): HtmlOutline {
   const doc = parseHtml(html);
   let count = 0;
   let truncated = false;
+  // Siblings collapse as they are walked, and `count` holds the nodes left after it, so a list of 500 items costs
+  // one item's outline and what comes after it (a pager, later sections) still fits.
   const walk = (nodes: Node[], depth: number): HtmlNode[] => {
     const out: HtmlNode[] = [];
+    const at = new Map<string, number>();
+    const seen = new Map<string, number>();
+    const add = (n: HtmlNode) => {
+      const sig = signature(n);
+      seen.set(sig, (seen.get(sig) ?? 0) + 1);
+      const i = at.get(sig);
+      if (i === undefined) {
+        at.set(sig, out.length);
+        out.push(n);
+        return;
+      }
+      const before = sizeOf([out[i]!, n]);
+      out[i] = mergeNode(out[i]!, n);
+      count -= before - sizeOf([out[i]!]);
+    };
     for (const node of nodes) {
       if (node.type === "text") continue;
       if (node.type !== "tag" && node.type !== "script") continue; // comments, directives, <style> (type "style")
@@ -59,11 +76,11 @@ export function htmlOutline(html: string): HtmlOutline {
       if (DROPPED.has(name)) continue;
       if (name === "script") {
         const json = inlineJson(el);
-        if (json) out.push(json);
+        if (json) add(json);
         continue;
       }
       if (name === "head") {
-        out.push(...walk(el.children as Node[], depth)); // only its inline JSON survives
+        for (const n of walk(el.children as Node[], depth)) add(n); // only its inline JSON survives
         continue;
       }
       if (count >= MAX_NODES || depth > MAX_DEPTH) {
@@ -83,9 +100,13 @@ export function htmlOutline(html: string): HtmlOutline {
         const children = walk(el.children as Node[], depth + 1);
         if (children.length) own.children = children;
       }
-      out.push(own);
+      add(own);
     }
-    return collapse(out);
+    const marked = out.map((n) => ((seen.get(signature(n)) ?? 0) > 1 ? { ...n, many: true as const } : n));
+    const before = sizeOf(marked);
+    const grouped = regroup(marked);
+    count -= before - sizeOf(grouped);
+    return grouped;
   };
   const outline = walk(doc.children as Node[], 0);
   // <html><body> wrap every page: start the outline at what is inside them.
@@ -104,10 +125,19 @@ const VALUE_PREFIX = /^(category|tag|author|term|postid|post_tag|cat|taxonomy|us
  * A name with data in it keeps only its pattern: a record number (`post-123` → `post-:id`; one digit stays,
  * `col-md-6`), or the value after a CMS prefix (`author-jensen` → `author-:id`).
  */
-function withoutValues(name: string): string {
-  const prefix = VALUE_PREFIX.exec(name);
+function withoutValues(name: string, cmsRecord: boolean): string {
+  const prefix = cmsRecord ? VALUE_PREFIX.exec(name) : null;
   if (prefix) return `${prefix[0]}:id`;
   return name.replace(/\d{2,}/g, ":id");
+}
+
+/**
+ * An element a CMS marks as one record (WordPress's post and body classes): a class with a record number
+ * (`post-123`, `page-id-45`), `hentry`, or two classes with a value prefix. Only there is `author-<x>` a value;
+ * elsewhere `user-menu`, `tag-list` and `author-bio` are the site's own names.
+ */
+function isCmsRecord(classes: string[]): boolean {
+  return classes.some((c) => /\d{2,}/.test(c)) || classes.includes("hentry") || classes.filter((c) => VALUE_PREFIX.test(c)).length >= 2;
 }
 
 /** An id that is a slug of words (a heading's anchor, `mit-foredrag-om-jazz`) is the page's text, not site code. */
@@ -118,8 +148,10 @@ function isTextId(id: string): boolean {
 function describe(el: Element): Omit<HtmlNode, "tag"> {
   const out: Omit<HtmlNode, "tag"> = {};
   const attribs = el.attribs ?? {};
-  if (attribs.id !== undefined && attribs.id !== "") out.id = isIdLike(attribs.id) || isTextId(attribs.id) ? ":id" : withoutValues(attribs.id);
-  const classes = [...new Set((attribs.class ?? "").split(/\s+/).filter((c) => c && !isIdLike(c)).map(withoutValues))].sort();
+  const raw = (attribs.class ?? "").split(/\s+/).filter((c) => c && !isIdLike(c));
+  const record = isCmsRecord(raw);
+  if (attribs.id !== undefined && attribs.id !== "") out.id = isIdLike(attribs.id) || isTextId(attribs.id) ? ":id" : withoutValues(attribs.id, record);
+  const classes = [...new Set(raw.map((c) => withoutValues(c, record)))].sort();
   if (classes.length) out.classes = classes;
   const attrs = Object.keys(attribs)
     .map((a) => a.toLowerCase())
@@ -152,17 +184,32 @@ function signature(n: HtmlNode): string {
   return [n.tag, (n.classes ?? []).join("."), n.type ?? "", id].join("|");
 }
 
-/** Siblings with the same tag and classes become one node marked `many`, their outlines joined. */
-function collapse(nodes: HtmlNode[]): HtmlNode[] {
-  const bySig = new Map<string, HtmlNode>();
-  const counts = new Map<string, number>();
-  for (const n of nodes) {
-    const sig = signature(n);
-    counts.set(sig, (counts.get(sig) ?? 0) + 1);
-    const seen = bySig.get(sig);
-    bySig.set(sig, seen ? mergeNode(seen, n) : n);
+/** The nodes in an outline, children included. */
+function sizeOf(nodes: HtmlNode[]): number {
+  return nodes.reduce((n, c) => n + 1 + sizeOf(c.children ?? []), 0);
+}
+
+/**
+ * Siblings of one tag whose classes differ only beside a class they all share are one list too: Drupal's
+ * `views-row views-row-1 views-row-odd` rows become one `div.views-row` marked `many`. Siblings without a shared
+ * class, or with stable ids of their own (`#header`, `#content`), stay apart.
+ */
+function regroup(nodes: HtmlNode[]): HtmlNode[] {
+  const byTag = new Map<string, HtmlNode[]>();
+  for (const n of nodes) byTag.set(`${n.tag}|${n.type ?? ""}`, [...(byTag.get(`${n.tag}|${n.type ?? ""}`) ?? []), n]);
+  const joined = new Map<HtmlNode, HtmlNode | null>();
+  for (const group of byTag.values()) {
+    if (group.length < 2 || group.some((n) => !n.classes?.length || (n.id && !n.id.includes(":id")))) continue;
+    const shared = group.slice(1).reduce((common, n) => common.filter((c) => n.classes!.includes(c)), group[0]!.classes!);
+    if (!shared.length) continue;
+    const merged = group.reduce((a, b) => mergeNode(a, b));
+    joined.set(group[0]!, { ...merged, classes: shared, many: true });
+    for (const n of group.slice(1)) joined.set(n, null);
   }
-  return [...bySig].map(([sig, n]) => ((counts.get(sig) ?? 0) > 1 ? { ...n, many: true as const } : n));
+  return nodes.flatMap((n) => {
+    const j = joined.get(n);
+    return j === undefined ? [n] : j === null ? [] : [j];
+  });
 }
 
 /** Two observations of one element joined: attribute names and children of both, text when either had it. */
@@ -189,6 +236,17 @@ export function mergeNode(a: HtmlNode, b: HtmlNode): HtmlNode {
 export function mergeOutlined(a: { outline?: HtmlNode[]; truncated?: true }, b: { outline?: HtmlNode[]; truncated?: true }): { outline?: HtmlNode[]; truncated?: true } {
   const outline = mergeOutlines(a.outline ?? [], b.outline ?? []);
   return { ...(outline.length ? { outline } : {}), ...(a.truncated || b.truncated ? { truncated: true as const } : {}) };
+}
+
+/** Two observations' `htmlInJson` lists joined by path (a response seen twice, or in two Captures). */
+export function mergeHtmlInJson<T extends { path: string; outline: HtmlNode[]; truncated?: true }>(a: T[], b: T[]): { path: string; outline: HtmlNode[]; truncated?: true }[] {
+  const out: { path: string; outline: HtmlNode[]; truncated?: true }[] = [...a];
+  for (const e of b) {
+    const i = out.findIndex((x) => x.path === e.path);
+    if (i === -1) out.push(e);
+    else out[i] = { path: e.path, outline: [], ...mergeOutlined(out[i]!, e) };
+  }
+  return out;
 }
 
 /** An outline with something to read in it: an element with text, or inline JSON. A SPA's shell (`<div id="root">`) has neither. */
@@ -232,10 +290,13 @@ export function mergeOutlines(a: HtmlNode[], b: HtmlNode[]): HtmlNode[] {
  */
 export function htmlInJson(value: unknown): { path: string; outline: HtmlNode[]; truncated?: true }[] {
   const found = new Map<string, HtmlOutline>();
+  // A sample per path is enough for its outline: a JSON API with 500 rich-text items is not parsed 500 times.
+  const outlined = new Map<string, number>();
   const walk = (v: unknown, path: string, depth: number) => {
     if (depth > 64 || found.size > 20) return;
     if (typeof v === "string") {
-      if (!looksLikeHtml(v)) return;
+      if (!looksLikeHtml(v) || (outlined.get(path) ?? 0) >= 20) return;
+      outlined.set(path, (outlined.get(path) ?? 0) + 1);
       const o = htmlOutline(v);
       const seen = found.get(path);
       found.set(path, seen ? { outline: [], ...mergeOutlined(seen, o) } : o);
