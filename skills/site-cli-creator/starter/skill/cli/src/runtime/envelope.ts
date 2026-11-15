@@ -78,7 +78,7 @@ export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, su
     // only fix in the plugin (transport "browser"), so a block that keeps happening is worth a report.
     const report =
       surface === "mcp"
-        ? `Ask the user whether it happens every time; if so, the plugin cannot reach the site this way: ${feedbackOffer(site)} as a feature request ("the site blocks the CLI").`
+        ? `Ask the user whether it happens every time; if so, the plugin cannot reach the site this way, which is a feature request ("the site blocks the CLI"). ${capitalized(feedbackOffer(site))}.`
         : `Ask the user whether it happens every time; if so, offer to report it through the ${feedback} skill as a feature request (the site blocks the CLI), and file it only if the user says yes.`;
     return `Tell the user the site refused the request as automated traffic (bot protection), and stop. Do not retry, not even to find out whether it keeps happening, and do not work around it with raw calls or the browser. ${report}`;
   }
@@ -109,9 +109,10 @@ function feedbackOffer(site: EnvelopeSite): string {
   return `if the ${site.plugin}-feedback skill is available, offer to file it through it, passing this whole error; otherwise offer the user ${site.repo ? `https://github.com/${site.repo}/issues/new` : "the plugin's repo"} to report it with this error. Do either only if the user says yes`;
 }
 
+const capitalized = (s: string) => `${s[0]!.toUpperCase()}${s.slice(1)}`;
+
 function mcpNextStep(kind: Kind, site: EnvelopeSite, hasAccounts: boolean): string {
-  const offer = feedbackOffer(site);
-  const report = `${offer[0]!.toUpperCase()}${offer.slice(1)}.`;
+  const report = `${capitalized(feedbackOffer(site))}.`;
   switch (kind) {
     case "bug":
       return `Tell the user this is a bug in the ${site.skill} MCP server. ${report}`;

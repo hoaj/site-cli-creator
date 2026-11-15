@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
-import { buildRequest, Client } from "../src/runtime/call";
+import { blockSignal, buildRequest, Client } from "../src/runtime/call";
 import { DryRun, Failure } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
 import { loadSession, saveSession } from "../src/runtime/session";
@@ -386,6 +386,35 @@ describe("auth none", () => {
     );
     await client(site, makeDeps(fetch, home.dir).deps).call(getCustomer, { customerId: "C" });
     expect(seen).toEqual({ csrf: "t1", other: "x" });
+  });
+
+  test("ctx.cookies() asks transport browser's Chrome with the session's cookie, and passes on a Failure (no Chrome) (review)", async () => {
+    // accounts runs with the saved session (bootstrap, by design, with an empty one).
+    saveSession(home.dir, { headers: { cookie: "sid=s1" }, ids: {} });
+    const asked: (string | undefined)[] = [];
+    const reads = loginSite({ accounts: async (ctx) => [(await ctx.cookies()).k ?? "none"] });
+    const { fetch } = fakeFetch(() => json({}));
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.cookies = async (cookie) => (asked.push(cookie), { k: "v" });
+    expect(await client(reads, deps).listAccounts(true)).toEqual([{ id: "v" }]);
+    expect(asked).toEqual(["sid=s1"]);
+    deps.cookies = async () => {
+      throw new Failure("input", "Google Chrome was not found");
+    };
+    const e = await failure(client(reads, deps).listAccounts(true));
+    expect([e.kind, e.message]).toEqual(["input", "Google Chrome was not found"]);
+  });
+
+  test("a bootstrap rerun releases transport browser's Chrome first, so its ctx.cookies() is not the stale jar (review)", async () => {
+    let boots = 0;
+    const order: string[] = [];
+    const site = makeSite({ bootstrap: async () => (order.push("bootstrap"), { headers: { "x-csrf": `t${++boots}` } }) });
+    saveSession(home.dir, { headers: { "x-csrf": "stale" }, ids: {} });
+    const { fetch } = fakeFetch((r) => (r.headers["x-csrf"] === "t1" ? json({ data: { getCustomer: { id: "C", name: "n" } } }) : json({}, 401)));
+    const { deps } = makeDeps(fetch, home.dir);
+    deps.release = async () => void order.push("release");
+    await client(site, deps).call(getCustomer, { customerId: "C" });
+    expect(order).toEqual(["release", "bootstrap"]);
   });
 
   test("bootstrap runs before the first call and is cached", async () => {
@@ -953,7 +982,6 @@ describe("bot block: network with `blocked`, never Drift, no sign-in spent on it
 
   test("other vendors' markers: DataDome, PerimeterX, Imperva, a captcha", async () => {
     const cases: [Response, string][] = [
-      [html("<html>blocked</html>", 403, { "x-datadome": "protected" }), "datadome"],
       [html(`<script src="https://geo.captcha-delivery.com/captcha/"></script>`, 403), "datadome"],
       [html(`<div id="px-captcha"></div>`, 403), "perimeterx"],
       [html("Request unsuccessful. Incapsula incident ID: 0-0", 403), "imperva"],
@@ -968,6 +996,45 @@ describe("bot block: network with `blocked`, never Drift, no sign-in spent on it
     expect(auth.loginCalls).toEqual([true]);
     const gone = await blocked(() => html("<html><h1>Not found</h1></html>", 404));
     expect([gone.e.kind, gone.e.fingerprint]).toEqual(["drift", expect.stringContaining(":http::404")]);
+  });
+
+  test("blockSignal is not fooled by ordinary pages of protected sites (review)", () => {
+    const h = (o: Record<string, string> = {}) => new Headers({ "content-type": "text/html", ...o });
+    // DataDome tags ordinary answers with x-datadome too: a header alone is no block.
+    expect(blockSignal(401, h({ "x-datadome": "protected" }), "")).toBeUndefined();
+    expect(blockSignal(404, h({ "x-datadome": "protected" }), "<html>Not found</html>")).toBeUndefined();
+    // Cloudflare injects its challenge-platform script into ordinary pages.
+    expect(blockSignal(404, h(), `<html><h1>Not found</h1><script src="/cdn-cgi/challenge-platform/scripts/jsd/main.js"></script></html>`)).toBeUndefined();
+    // A sign-in page with a captcha on it is a sign-in page.
+    expect(blockSignal(401, h(), `<form action="/login"><div class="g-recaptcha"></div></form>`)).toBeUndefined();
+    expect(blockSignal(200, h(), `<form action="/login"><div class="g-recaptcha"></div></form>`)).toBeUndefined();
+    // Still blocks: a captcha wall, DataDome's captcha host, Cloudflare's challenge page.
+    expect(blockSignal(403, h(), `<div class="g-recaptcha"></div>`)).toBe("captcha");
+    expect(blockSignal(403, h({ "x-datadome": "protected" }), `<script src="https://geo.captcha-delivery.com/c.js"></script>`)).toBe("datadome");
+    expect(blockSignal(200, h(), "<title>Just a moment...</title>")).toBe("cloudflare");
+  });
+
+  test("a hook's own request that meets the wall is a block too, never a bug; renew keeps its token (review)", async () => {
+    const wall = () => html(challenge, 403);
+    // bootstrap's first request
+    const boot = makeSite({ bootstrap: async (ctx) => {
+      const res = await ctx.fetch(`${ctx.origin}/`);
+      if (!res.ok) throw new Error(`front page answered HTTP ${res.status}`);
+      return { headers: {} };
+    } });
+    const { fetch } = fakeFetch(wall);
+    const e = await failure(client(boot, makeDeps(fetch, home.dir).deps).call(getCustomer, { customerId: "C" }));
+    expect([e.kind, e.details.blocked]).toEqual(["network", "cloudflare"]);
+    // renew's request
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
+    const renewing = loginSite({ login: { ...loginSite().login!, refresh: { renew: async (ctx) => {
+      const res = await ctx.fetch("https://auth.example.test/token");
+      return res.ok ? { headers: { authorization: "Bearer new" } } : null;
+    } } } });
+    const site401 = fakeFetch((r) => (r.url.includes("auth.example.test") ? wall() : json({}, 401)));
+    const r = await failure(client(renewing, makeDeps(site401.fetch, home.dir).deps).call(getCustomer, { customerId: "C-1" }));
+    expect([r.kind, r.details.blocked]).toEqual(["network", "cloudflare"]);
+    expect(loadSession(home.dir)!.refresh).toEqual({ token: "r1" }); // the site never took it
   });
 
   test("a sessionProbe answered by a challenge is not a sign-out: no sign-in, the Operation reports the block", async () => {

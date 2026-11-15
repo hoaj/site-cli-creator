@@ -125,7 +125,7 @@ function defaultDeps(app: App): Deps {
     fetch: tab?.fetch ?? ((input, init) => fetch(input, init)),
     // login.refresh.renew: never through transport "browser"'s Chrome; a test's fake fetch when it gave one.
     plainFetch: app.deps?.fetch ?? ((input, init) => fetch(input, init)),
-    ...(tab && { cookies: () => tab.cookies() }), // hooks' ctx.cookies() under transport "browser"
+    ...(tab && { cookies: (cookie?: string) => tab.cookies(cookie) }), // hooks' ctx.cookies() under transport "browser"
     env,
     login: (headless, options) => chromeLogin(app.site, { headless, note, env, fromProfile: options?.fromProfile }),
     release: async () => tab?.close(),
@@ -273,6 +273,7 @@ function sessionReason(e: unknown, skill: string): string {
   if (e instanceof Failure) {
     const refused = e.kind === "session" || (e.kind === "drift" && !!e.drifts?.length && e.drifts.every((d) => d.fingerprint.split(":")[3] === "auth"));
     if (refused) return `the site did not accept this Session (signed out or expired). Run \`${skill} login\` on your computer again and upload the new session.json`;
+    if (e.kind === "network" && e.details.blocked) return "the site refused this server's requests as automated traffic (bot protection), so it cannot reach the site this way; trying again will not help";
     if (e.kind === "network") return "the site is not responding right now; try again later";
     if (e.kind === "drift") return `the site has changed (Drift), so the Session could not be checked; run \`${skill} check\` on your computer`;
   }

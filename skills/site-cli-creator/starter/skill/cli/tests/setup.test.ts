@@ -536,6 +536,16 @@ describe("checkSession", () => {
     expect(await checkSession(appWith(() => json({}, 503)), candidate)).toEqual({ ok: false, reason: "the site is not responding right now; try again later" });
   });
 
+  test("a bot block says the site refuses the server as automated traffic, not 'try again later' (#95, review)", async () => {
+    const wall = () => new Response("<title>Just a moment...</title>", { status: 403, headers: { "content-type": "text/html" } });
+    const r = await checkSession(appWith(wall), candidate);
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.reason).toMatch(/automated traffic/);
+      expect(r.reason).not.toMatch(/try again later/);
+    }
+  });
+
   test("another Drift says the site changed and points at `<skill> check`", async () => {
     const r = await checkSession(appWith((req) => (new URL(req.url).pathname === "/graphql" ? json({ message: "gone" }, 404) : json({}))), candidate);
     expect(r.ok).toBe(false);

@@ -11,7 +11,7 @@ import { closeContext, launchInMemory } from "./login";
 import { effectiveOrigin, isTest, type Env, type Fetch, type Site } from "./site";
 
 /** `cookies()`: what Chrome holds for the origin, by name, the tab opened first (SiteCtx.cookies). */
-export type BrowserTransport = { fetch: Fetch; cookies(): Promise<Record<string, string>>; close(): Promise<void> };
+export type BrowserTransport = { fetch: Fetch; cookies(cookieHeader?: string): Promise<Record<string, string>>; close(): Promise<void> };
 
 const PAGE_TIMEOUT_MS = 30_000;
 /** How long the front page may keep loading after `load` (a challenge that reloads, late scripts). */
@@ -144,9 +144,9 @@ export function browserTransport(site: Site, options: { env: Env; note(message: 
     }
   };
 
-  const cookies = async (): Promise<Record<string, string>> => {
+  const cookies = async (cookieHeader?: string): Promise<Record<string, string>> => {
     try {
-      opening ??= open(undefined);
+      opening ??= open(cookieHeader); // with the session's cookies, as an Operation's first request would
       await opening;
     } catch (e) {
       await close();
