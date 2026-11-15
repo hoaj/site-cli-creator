@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { Client } from "../src/runtime/call";
-import { check, triggerVerdict, type Captured } from "../src/runtime/check";
+import { check, compareWrite, triggerVerdict, type Captured } from "../src/runtime/check";
 import { defineCommand } from "../src/runtime/command";
 import { ContractError, DryRun } from "../src/runtime/envelope";
 import { help } from "../src/runtime/help";
@@ -426,8 +426,10 @@ describe("review round 1", () => {
     const hop = (host: string, path: string) => f.calls.find((r) => new URL(r.url).host === host && new URL(r.url).pathname === path)!;
     expect(hop("cdn.other.test", "/file").headers.authorization).toBeUndefined();
     expect(hop("cdn.other.test", "/file").headers.cookie).toBeUndefined();
-    // Another host of the site's own domain keeps them, as a 307 keeps the body.
-    expect(hop("api.shop.example.test", "/x").headers.authorization).toBe("Bearer secret");
+    // Another host of the site's own domain: authorization goes as fetch drops it on any other origin
+    // (review 4); the cookie stays on the site's domain, and a 307 keeps the body.
+    expect(hop("api.shop.example.test", "/x").headers.authorization).toBeUndefined();
+    expect(hop("api.shop.example.test", "/x").headers.cookie).toBe("sid=1");
     expect(hop("api.shop.example.test", "/x").body).toEqual({});
     const seen = hop("shop.example.test", "/api/seen");
     expect(seen.method).toBe("GET");
@@ -509,19 +511,95 @@ describe("review round 1", () => {
     expect((r.output as any).error.next).toStartWith("Tell the user this is a bug in the shop CLI.");
   });
 
-  test("review 2: check --writes reports a trigger that only hit a site.never request as that, not as Drift", async () => {
-    const write = defineOperation({ ...renameOrder, trigger: async () => {} });
-    const checker = async (_w: unknown, _r: unknown, _d: unknown, warn?: (m: string) => void) => {
-      warn?.("PATCH /api/orders/:orderId's trigger sent a request site.never forbids (POST /api/order/place*: Placing an order: the user always pays); it was aborted.");
-      return new Map([[write.name, "never" as const]]);
-    };
-    const c = new Client(site, makeDeps(fakeFetch(() => json({})).fetch, home()).deps);
-    // A bug in the plugin's trigger, like a read whose request is refused (review 3): exit 1, the warning in the message.
-    const e = await check(c, [write], { writes: true }, checker as never).catch((x) => x);
-    expect(e).toBeInstanceOf(ContractError);
-    expect(e.message).toBe(
-      "check: a trigger reached only requests site.never forbids: PATCH /api/orders/:orderId's trigger sent a request site.never forbids (POST /api/order/place*: Placing an order: the user always pays); it was aborted.",
-    );
+  test("review 4: a write that was not sent is trigger Drift as before, and names the site.never rules its page hit (the cause may be either)", () => {
+    // The page may have sent a forbidden request on its own load while the site removed the write:
+    // check cannot tell, so it reports Drift with the evidence, never a bug that hides a site change.
+    expect(compareWrite(site, renameOrder, undefined, undefined, ["POST /api/order/place*"])).toEqual({
+      operation: renameOrder.name,
+      fingerprint: "acme:shop:PATCH /api/orders/{orderId}:trigger::no_request",
+      diff: [
+        { path: "", code: "no_request" },
+        { path: "POST /api/order/place*", code: "site_never" },
+      ],
+    });
+    expect(compareWrite(site, renameOrder, undefined, undefined, [])!.diff).toEqual([{ path: "", code: "no_request" }]);
+  });
+
+  test("review 4: a GraphQL rule also matches a mutation's root field, under any operation name or alias", () => {
+    const r = (doc: unknown) => forbiddenRequest(site, { method: "POST", url: `${ORIGIN}/graphql`, body: JSON.stringify(doc) })?.why;
+    expect(r({ operationName: "Checkout", query: "mutation Checkout { placeOrder { id } }" })).toBe("Placing an order: the user always pays");
+    expect(r({ operationName: "X", query: "mutation X($c: ID!) {\n  done: placeOrder(cartId: $c) { id }\n  other { id }\n}" })).toBeDefined();
+    expect(r({ query: "mutation { placeOrder }" })).toBeDefined();
+    // A query's field, or a nested field of that name, is no mutation of it.
+    expect(r({ operationName: "Q", query: "query Q { placeOrder { allowed } }" })).toBeUndefined();
+    expect(r({ operationName: "M", query: "mutation M { cart { placeOrder { id } } }" })).toBeUndefined();
+    const renamed = defineOperation({ name: "Checkout", effect: "write", graphql: "mutation Checkout { placeOrder { id } }", variables: z.object({}), response: z.unknown() });
+    expect(forbiddenOperation(site, renamed)?.why).toBe("Placing an order: the user always pays");
+  });
+
+  test("review 4: a 301/302 turns only a POST into a GET, as fetch does; a DELETE stays a DELETE", async () => {
+    const f = fakeFetch((req) => (new URL(req.url).pathname === "/api/old" ? new Response(null, { status: 302, headers: { location: "/api/new" } }) : json({})));
+    const s = makeSite({ never: NEVER, bootstrap: async (ctx) => (await ctx.fetch(`${ctx.origin}/api/old`, { method: "DELETE" }), { headers: {} }) });
+    await new Client(s, makeDeps(f.fetch, home()).deps).call(getOrder, { orderId: "1" }).catch(() => {});
+    expect(f.calls.slice(0, 2).map((r) => `${r.method} ${new URL(r.url).pathname}`)).toEqual(["DELETE /api/old", "DELETE /api/new"]);
+  });
+
+  test("review 4: renew that renewed but also caught a refusal saves the new session, then fails with the refusal", async () => {
+    const f = fakeFetch((req) => (new URL(req.url).pathname === "/api/orders/1" && req.headers.authorization === "Bearer old" ? json({}, 401) : json({ id: "1", total: 1 })));
+    const s = loginSite({
+      never: [{ path: "/oauth/revoke", why: "Revoking every sign-in" }],
+      login: {
+        startUrl: `${ORIGIN}/account`,
+        hosts: [],
+        tokenRequest: "/graphql",
+        refresh: {
+          renew: async (ctx) => {
+            await ctx.fetch(`${ctx.origin}/oauth/token`, { method: "POST" }); // the old refresh token is spent here
+            await ctx.fetch(`${ctx.origin}/oauth/revoke`, { method: "POST" }).catch(() => {});
+            return { headers: { authorization: "Bearer new" }, refresh: { token: "rt2" } };
+          },
+        },
+      },
+    });
+    const h = makeDeps(f.fetch, home());
+    saveSession(stateDir(s, h.deps.env), { headers: { authorization: "Bearer old" }, ids: {}, refresh: { token: "rt" } });
+    expect(await new Client(s, h.deps, { confirm: true }).call(getOrder, { orderId: "1" }).catch((x) => x)).toBeInstanceOf(NeverSent);
+    const saved = loadSession(stateDir(s, h.deps.env))!;
+    expect(saved.headers).toEqual({ authorization: "Bearer new" });
+    expect(saved.refresh).toEqual({ token: "rt2" });
+  });
+
+  test("review 4: the CI scan counts a quoted name only as an operationName, not as a JSON key or index", () => {
+    const scan = (text: string) => neverInSource(site, [{ path: "f.ts", text }]);
+    expect(scan('response: z.object({ data: z.object({ "placeOrder": z.boolean() }) }); const x = data["placeOrder"];')).toEqual([]);
+    expect(scan('body: JSON.stringify({ operationName: "PlaceOrder", query })')).toEqual(["f.ts names GraphQL PlaceOrder (Placing an order: the user always pays)"]);
+    expect(scan("{ operationName: 'placeOrder' }")).toEqual(["f.ts names GraphQL PlaceOrder (Placing an order: the user always pays)"]);
+  });
+
+  test("review 4: check stops at a refusal a hook made (bootstrap), runs the hook once and names no read as the cause", async () => {
+    let boots = 0;
+    const s = makeSite({ never: NEVER, bootstrap: async (ctx) => (boots++, await ctx.fetch(`${ctx.origin}/api/order/place`, { method: "POST" }), { headers: {} }) });
+    const readA = defineOperation({ name: "GET /api/a", effect: "read", rest: { method: "GET", path: "/api/a" }, variables: z.object({}), response: z.unknown() });
+    const readB = defineOperation({ name: "GET /api/b", effect: "read", rest: { method: "GET", path: "/api/b" }, variables: z.object({}), response: z.unknown() });
+    const e = await check(new Client(s, makeDeps(fakeFetch(() => json({})).fetch, home()).deps), [readA, readB], {}).catch((x) => x);
+    expect(e).toBeInstanceOf(NeverSent);
+    expect(e.message).toStartWith("A request is a request site.never forbids");
+    expect(boots).toBe(1);
+  });
+
+  test("review 4: with a never list, a call builds its request once", async () => {
+    let built = 0;
+    const counted = defineOperation({
+      name: "POST /api/notes",
+      effect: "write",
+      rest: { method: "POST", path: "/api/notes", body: (v: { text: string }) => (built++, { text: v.text }) },
+      variables: z.object({ text: z.string() }),
+      response: z.unknown(),
+    });
+    const f = fakeFetch(() => json({}));
+    await new Client(site, makeDeps(f.fetch, home()).deps, { confirm: true }).call(counted, { text: "hi" });
+    expect(built).toBe(1);
+    expect(f.calls.map((r) => `${r.method} ${new URL(r.url).pathname} ${JSON.stringify(r.body)}`)).toEqual(['POST /api/notes {"text":"hi"}']);
   });
 
   test("review 3: a write whose body cannot be built still gives its dry run, with or without a never list", async () => {

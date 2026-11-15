@@ -28,15 +28,15 @@ export type CheckOptions = { op?: string; writes?: boolean; account?: string };
  * Checks write Operations; returns one entry per Operation, null when its request still matches.
  * `reads` are the registry's read Operations: requests matching them may pass while a trigger runs.
  * `declaredWrites` are all the registry's write Operations: they are always aborted (triggerVerdict).
- * `warn` gets one line per trigger that sent a request site.never forbids (aborted, not Drift); an
- * Operation whose trigger reached only such a request, never its own write, is "never".
+ * `warn` gets one line per trigger that sent a request site.never forbids (aborted); a write that
+ * was not sent is trigger Drift as ever, its diff naming those rules (code `site_never`).
  */
 export type WriteChecker = (
   writes: Operation[],
   reads: Operation[],
   declaredWrites?: Operation[],
   warn?: (message: string) => void,
-) => Promise<Map<string, DriftEntry | null | "never">>;
+) => Promise<Map<string, DriftEntry | null>>;
 
 /** Operations ordered so every Operation comes after the ones it `needs`; ties keep registry order. */
 export function chainOrder(ops: Operation[]): Operation[] {
@@ -100,11 +100,14 @@ export async function check(client: Client, operations: Operation[], options: Ch
   let stopped: Failure | undefined;
   /** The first request site.never refused (a variable built a forbidden path): a bug, reported unless something drifted. */
   let refused: NeverSent | undefined;
-  /** Write triggers that reached only requests site.never forbids, and the warnings that say so: a bug too. */
-  const neverTriggers: string[] = [];
-  const neverWarnings: string[] = [];
+  /** A hook (bootstrap, postLogin) made a request site.never refused: no Operation can be reached, nothing is blamed on one. */
+  let hookRefused = false;
 
   for (const op of selected) {
+    if (hookRefused) {
+      rows.push({ operation: op.name, effect: op.effect, status: "skipped", reason: "never" });
+      continue;
+    }
     if (stopped?.kind === "session") {
       // Signed out and the sign-in did not complete: no other Operation can be reached.
       rows.push({ operation: op.name, effect: op.effect, status: "skipped", reason: "session" });
@@ -157,8 +160,11 @@ export async function check(client: Client, operations: Operation[], options: Ch
     } catch (e) {
       if (e instanceof NeverSent) {
         unavailable.add(op.name);
-        rows.push({ operation: op.name, effect: "read", status: "failed", reason: "never" });
         refused ??= e;
+        // Not this Operation's own request (a hook's, a redirect's): the same refusal would end every
+        // other Operation, and each would run the hook again.
+        hookRefused = e.operation !== op.name;
+        rows.push({ operation: op.name, effect: "read", status: hookRefused ? "skipped" : "failed", reason: "never" });
         continue;
       }
       if (!(e instanceof Failure)) throw e;
@@ -175,23 +181,15 @@ export async function check(client: Client, operations: Operation[], options: Ch
 
   const withTrigger = writes.filter((op) => op.trigger);
   for (const op of writes) if (!op.trigger) rows.push({ operation: op.name, effect: "write", status: "skipped", reason: "no trigger" });
-  if (withTrigger.length > 0 && stopped?.kind !== "session") {
+  if (withTrigger.length > 0 && stopped?.kind !== "session" && !hookRefused) {
     const reads = operations.filter((op) => op.effect === "read");
     const declaredWrites = operations.filter((op) => op.effect === "write");
     try {
-      const warn = (m: string) => {
-        warnings.push(m);
-        neverWarnings.push(m);
-      };
+      const warn = (m: string) => void warnings.push(m);
       const outcome = await (checkWrites ?? chromeWriteChecker(client.site, client.deps.env, client.fromProfile()))(withTrigger, reads, declaredWrites, warn);
       for (const op of withTrigger) {
         const d = outcome.get(op.name);
-        // The trigger stopped at a request site.never forbids: the plugin's trigger is wrong, no Drift.
-        if (d === "never") {
-          rows.push({ operation: op.name, effect: "write", status: "failed", reason: "never" });
-          neverTriggers.push(op.name);
-        }
-        else if (d) drifts.push(d);
+        if (d) drifts.push(d);
         else rows.push({ operation: op.name, effect: "write", status: "ok" });
       }
     } catch (e) {
@@ -207,10 +205,6 @@ export async function check(client: Client, operations: Operation[], options: Ch
     throw new Failure("drift", `check: ${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation).join(", ")}.${also}`, { drifts });
   }
   if (refused) throw refused;
-  if (neverTriggers.length > 0) {
-    const why = neverWarnings.filter((w) => neverTriggers.some((name) => w.startsWith(`${name}'s trigger`)));
-    throw new ContractError(`check: a trigger reached only requests site.never forbids: ${why.join(" ")}`);
-  }
   if (stopped) throw stopped;
   return { ok: warnings.length === 0, operations: rows, ...(warnings.length ? { warnings } : {}) };
 }
@@ -437,14 +431,20 @@ export function triggerStep(error: unknown): string {
     .slice(0, 80);
 }
 
-export function compareWrite(site: Site, op: Operation, req: Captured | undefined, triggerError?: unknown): DriftEntry | null {
+/**
+ * `forbidden`: the site.never rules (labels) the trigger's page sent requests for. A write that was
+ * not sent is trigger Drift either way: the site may have changed, or the page stopped at such a
+ * request; its diff lists them after the first entry (code `site_never`), so the Fingerprint stays.
+ */
+export function compareWrite(site: Site, op: Operation, req: Captured | undefined, triggerError?: unknown, forbidden: string[] = []): DriftEntry | null {
   const fp = (breakType: "trigger" | "request", path: string, code: string) => driftFingerprint(site, op.name, breakType, path, code);
+  const never = forbidden.map((path) => ({ path, code: "site_never" }));
   if (triggerError !== undefined && !req) {
     const code = errorName(triggerError);
     const path = triggerStep(triggerError);
-    return { operation: op.name, fingerprint: fp("trigger", path, code), diff: [{ path, code }] };
+    return { operation: op.name, fingerprint: fp("trigger", path, code), diff: [{ path, code }, ...never] };
   }
-  if (!req) return { operation: op.name, fingerprint: fp("trigger", "", "no_request"), diff: [{ path: "", code: "no_request" }] };
+  if (!req) return { operation: op.name, fingerprint: fp("trigger", "", "no_request"), diff: [{ path: "", code: "no_request" }, ...never] };
   if (op.rest?.body) {
     // The body's encoding is part of the request's shape: a site that now expects JSON instead of a
     // form post (or the reverse) would reject what the CLI sends. Type names only, never values.
@@ -473,7 +473,7 @@ const ACTION_TIMEOUT_MS = 15_000;
  */
 export function chromeWriteChecker(site: Site, env = process.env, fromProfile?: string): WriteChecker {
   return async (writes, reads, declaredWrites = writes, warn = () => {}) => {
-    const out = new Map<string, DriftEntry | null | "never">();
+    const out = new Map<string, DriftEntry | null>();
     const seeded = site.auth === "login" && fromProfile !== undefined;
     const temp = site.auth === "none" ? mkdtempSync(join(tmpdir(), `${site.skill}-check-`)) : undefined;
     let context: BrowserContext | undefined;
@@ -501,7 +501,7 @@ async function checkOne(
   origin: string,
   signIn: string,
   warn: (message: string) => void,
-): Promise<DriftEntry | null | "never"> {
+): Promise<DriftEntry | null> {
   let captured: Captured | undefined;
   let signedOut = false;
   /** Labels of the site.never rules this trigger's requests broke, each reported once. */
@@ -536,8 +536,5 @@ async function checkOne(
   if (!captured && signedOut) {
     throw new Failure("session", `${signIn[0]!.toUpperCase()}${signIn.slice(1)} is signed out of ${site.origin}, so ${op.name} could not be checked.`);
   }
-  // It reached only what the plugin must never send, and nothing failed: a trigger to fix, not Drift
-  // (the warning says which). A trigger that failed, or a sign-out, is reported as before.
-  if (!captured && forbidden.size > 0 && triggerError === undefined) return "never";
-  return compareWrite(site, op, captured, triggerError);
+  return compareWrite(site, op, captured, triggerError, [...forbidden.keys()]);
 }
