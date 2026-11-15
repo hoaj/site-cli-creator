@@ -15,7 +15,7 @@ import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSyn
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { copyExpected, OPERATION_NAMES } from "../fixtures/expected/copy";
-import { ACCOUNT, INVOICES, newStore, SUBSCRIPTIONS, USER } from "../fixtures/site/data";
+import { ACCOUNT, INVOICES, newStore, NOTICES, SUBSCRIPTIONS, USER } from "../fixtures/site/data";
 import { startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
 import { findChrome } from "../starter/skill/cli/src/runtime/chrome";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
@@ -101,7 +101,7 @@ const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 /** Every string and number in the fixture's data, as patterns that match it as a whole word. */
 const FIXTURE_VALUES: { value: string; re: RegExp }[] = [
-  ...new Set(leafValues([USER, ACCOUNT, SUBSCRIPTIONS, INVOICES, newStore().notes, NOTE_TEXT])),
+  ...new Set(leafValues([USER, ACCOUNT, SUBSCRIPTIONS, INVOICES, NOTICES, newStore().notes, NOTE_TEXT])),
 ]
   .filter((v) => (typeof v === "number" ? Math.abs(v) >= 100 : v.length >= 3))
   .map((v) => {
@@ -253,7 +253,7 @@ for (const auth of ["none", "login"] as const) {
 
       const copied = copyExpected(auth, join(cliDir, "src"), { plugin: PLUGIN, skill, repo: REPO, generatorVersion: generatorVersion(), origin: site.url });
       expect(copied).toContain("site.ts");
-      expect(copied.filter((f) => f.startsWith("commands/")).length).toBe(4);
+      expect(copied.filter((f) => f.startsWith("commands/")).length).toBe(5);
 
       const install = await spawn([BUN, "install"], { cwd: cliDir, env: cleanEnv(), timeout: 240_000 });
       expect(install.code, install.stderr).toBe(0);
@@ -265,6 +265,7 @@ for (const auth of ["none", "login"] as const) {
         { name: "invoice list", write: false },
         { name: "invoice show", write: false },
         { name: "note add", write: true },
+        { name: "notice list", write: false },
         { name: "subscription show", write: false },
       ]);
       expect(readFileSync(join(cliDir, "src", "site.ts"), "utf8")).toMatch(/needsChrome:\s*true\b/);
@@ -274,10 +275,11 @@ for (const auth of ["none", "login"] as const) {
       const skillMd = readFileSync(join(skillDir, "SKILL.md"), "utf8");
       const table = skillMd.slice(skillMd.indexOf("<!-- commands:start -->"), skillMd.indexOf("<!-- commands:end -->"));
       const rows = table.split("\n").filter((l) => l.startsWith(`| \`${skill} `));
-      expect(rows.map((r) => /^\| `[^`]+? ([a-z]+ [a-z]+)`/.exec(r)?.[1])).toEqual(["invoice list", "invoice show", "note add", "subscription show"]);
+      expect(rows.map((r) => /^\| `[^`]+? ([a-z]+ [a-z]+)`/.exec(r)?.[1])).toEqual(["invoice list", "invoice show", "note add", "notice list", "subscription show"]);
       for (const row of rows) expect(row.includes("**Write.**")).toBe(row.includes(" note add`"));
       expect(rows.find((r) => r.includes(" invoice show`"))).toContain("`--id <id>`");
       expect(rows.find((r) => r.includes(" subscription show`"))).toContain("`[--all]`");
+      expect(rows.find((r) => r.includes(" notice list`"))).toContain("`[--area <area>]`");
 
       mkdirSync(join(work, "dist"), { recursive: true });
       const build = await spawn([BUN, "build.ts", HOST.bunTarget, binary], { cwd: cliDir, env: cleanEnv(), timeout: 240_000 });
@@ -515,6 +517,13 @@ for (const auth of ["none", "login"] as const) {
       expect(one.code, one.stderr).toBe(0);
       expect(one.out).toMatchObject({ id: invoice.id, number: invoice.number, issued: invoice.issuedAt, due: null, amountDKK: invoice.amountDKK, status: invoice.status });
       expect(one.out.lines.map((l: { text: string; amountDKK: number }) => [l.text, l.amountDKK])).toEqual(invoice.lines.map((l) => [l.text, l.amountDKK]));
+
+      // An HTML Operation (#102): the notices come only as a server-rendered page, read by the compiled binary.
+      const notices = await cli(["notice", "list"]);
+      expect(notices.code, notices.stderr).toBe(0);
+      expect(notices.out).toEqual({ notices: NOTICES.map((n) => ({ id: n.id, title: n.title, area: n.area, startsAt: n.startsAt, when: n.startsText })) });
+      const aarhus = await cli(["notice", "list", "--area", "Aarhus C"]);
+      expect(aarhus.out.notices.map((n: { id: string }) => n.id)).toEqual(NOTICES.filter((n) => n.area === "Aarhus C").map((n) => n.id));
     }, 120_000);
 
     test("a write is a dry run without --confirm, and writes once with it", async () => {
@@ -567,6 +576,8 @@ for (const auth of ["none", "login"] as const) {
       // The first call with variables is rejected: getAccount (login) or listSubscriptions (none: getAccount takes none).
       ["input-rejected", ["subscription", "show"], `${prefix}${auth === "login" ? "getAccount" : "listSubscriptions"}:input-rejected::BAD_USER_INPUT`],
       ["auth", ["subscription", "show"], `${prefix}getAccount:auth::401`],
+      // A new layout of a server-rendered page: Drift at the list's container, never an empty list (#102).
+      ["html-layout", ["notice", "list"], `${prefix}GET /notices:html:notices:no_match`],
     ];
 
     for (const [drift, argv, fingerprint] of DRIFTS) {
@@ -599,7 +610,7 @@ for (const auth of ["none", "login"] as const) {
 
     // 7. check ---------------------------------------------------------------------------------
 
-    const readOps = [OPS.getAccount, OPS.listSubscriptions, OPS.listInvoices, OPS.getInvoice];
+    const readOps = [OPS.getAccount, OPS.listSubscriptions, OPS.listInvoices, OPS.getInvoice, OPS.listNotices];
 
     test("check: every read Operation is ok, the write is skipped", async () => {
       const r = await cli(["check"]);
@@ -665,6 +676,7 @@ for (const auth of ["none", "login"] as const) {
         ["invoice list", false],
         ["invoice show", false],
         ["note add", true],
+        ["notice list", false],
         ["subscription show", false],
       ]);
       expect(help.out.exitCodes.map((e: { code: number; kind: string }) => `${e.code}:${e.kind}`)).toEqual(["0:ok", "1:bug", "2:input", "3:drift", "4:session", "5:network"]);
@@ -703,6 +715,7 @@ for (const auth of ["none", "login"] as const) {
         "invoice_list",
         "invoice_show",
         "note_add",
+        "notice_list",
         "subscription_show",
         ...(auth === "login" ? ["login"] : []),
         "check",
@@ -790,7 +803,7 @@ for (const auth of ["none", "login"] as const) {
           return { ...r.json.result, raw: r.text };
         };
         const names = (await call("tools/list")).tools.map((t: { name: string }) => t.name);
-        expect(names).toEqual(["invoice_list", "invoice_show", "note_add", "subscription_show", "check"]);
+        expect(names).toEqual(["invoice_list", "invoice_show", "note_add", "notice_list", "subscription_show", "check"]);
 
         const setup = await (await fetch(`${base}/setup`)).text();
         bodies.push(setup);
@@ -866,7 +879,7 @@ export default defineCommand({
         rmSync(crash, { force: true });
         const restored = await tool("regen.ts", ["--skill-dir", skillDir]);
         expect(restored.code, restored.stderr).toBe(0);
-        expect(restored.out.commands.length).toBe(4);
+        expect(restored.out.commands.length).toBe(5);
       }
 
       const r = await cli(["crash", "now"], { bin: bugBinary });

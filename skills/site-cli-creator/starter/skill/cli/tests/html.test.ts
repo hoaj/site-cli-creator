@@ -70,6 +70,19 @@ describe("extractHtml", () => {
     });
   });
 
+  test("the page is parsed as a browser builds it: an open <p> ends at the next <li>, a fragment's <tr> stays a row", () => {
+    const page = `<ul class="n"><li class="i"><h3>A</h3><p class="when">x<li class="i"><h3>B</h3><p class="when">y</ul>`;
+    expect(extractHtml(page, { items: { each: "li.i", in: "ul.n", fields: { t: "h3", when: "p.when" } } })).toEqual({
+      ok: true,
+      value: { items: [{ t: "A", when: "x" }, { t: "B", when: "y" }] },
+    });
+    // An HTML fragment (the HTML inside a JSON answer) is parsed as a fragment, so table rows survive.
+    expect(extractHtml(`<tr class="r"><td>1<td>2<tr class="r"><td>3`, { rows: { each: "tr.r", fields: { cells: { css: "td", all: true } } } })).toEqual({
+      ok: true,
+      value: { rows: [{ cells: ["1", "2"] }, { cells: ["3"] }] },
+    });
+  });
+
   test("an empty list in a container that is there is an empty list, not Drift", () => {
     expect(extractHtml(PAGE, { items: { each: "li", in: "ul.empty-list", fields: { t: "a" } } })).toEqual({ ok: true, value: { items: [] } });
   });

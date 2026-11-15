@@ -15,9 +15,9 @@
 // change keeps its users' sessions): curl -X POST "http://127.0.0.1:<port>/__drift?name=type-change"
 
 import { checkVariables, execute, GraphQLFailure, parse, validate, type GraphQLError } from "./graphql";
-import { ACCOUNT, buildSchema, INVOICES, newStore, SUBSCRIPTIONS, USER, type Note } from "./data";
+import { ACCOUNT, buildSchema, INVOICES, newStore, NOTICES, SUBSCRIPTIONS, USER, type Note } from "./data";
 import { loginOriginFor } from "./hosts";
-import { accountPage, loginPage, NOTE_FORM, OAUTH_CLIENT_ID, type Auth, type NoteForm } from "./pages";
+import { accountPage, loginPage, NOTE_FORM, noticesPage, OAUTH_CLIENT_ID, type Auth, type NoteForm } from "./pages";
 
 export const DRIFTS = [
   "rename-field", // listSubscriptions[].status is returned as `state`
@@ -31,6 +31,7 @@ export const DRIFTS = [
   "rate-limit", // data APIs answer 429
   "input-rejected", // calls with variables are rejected with 400 BAD_USER_INPUT
   "bot-wall", // data APIs answer 403 with an HTML challenge page unless the request comes from a browser (Sec-Fetch-Mode) and carries the cookie the front page sets in JavaScript
+  "html-layout", // GET /notices renders the same notices in a new layout, with no ul.notices (#102)
 ] as const;
 
 export type Drift = (typeof DRIFTS)[number];
@@ -284,6 +285,15 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
     if (route === "GET /favicon.ico") return new Response(null, { status: 204 });
     if (route === "POST /graphql") return graphql(req, entry);
     if (req.method === "GET" && /^\/api\/invoices(\/[^/]+)?$/.test(url.pathname)) return invoices(req, url);
+    if (route === "GET /notices") {
+      // A server-rendered page: a browser's page load sends the session cookie and no bearer, so that is
+      // all it asks for (login); without a login it is public. Outages and the auth switch apply as to the APIs.
+      if (drift === "auth") return html(401, "<!doctype html><title>Log ind</title><p>Log ind for at se siden.");
+      if (drift === "server-error") return html(500, "<!doctype html><title>Fejl</title><p>Noget gik galt.");
+      if (drift === "rate-limit") return html(429, "<!doctype html><title>For mange</title><p>Prøv igen om lidt.");
+      if (auth === "login" && !sessionOf(req)) return redirect(302, `${loginUrl}/login`);
+      return html(200, noticesPage(NOTICES, url.searchParams.get("area"), drift === "html-layout" ? "moved" : "list"));
+    }
 
     if (auth === "login") {
       // Who is signed in, as a frontend asks on load: 401 without a session, also under serveAnonymous.
