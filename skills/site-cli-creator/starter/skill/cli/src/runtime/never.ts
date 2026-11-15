@@ -22,6 +22,7 @@ export function neverListProblems(list: unknown): string[] {
     if (typeof r.why !== "string" || r.why.trim() === "") out.push(`${at} needs a why: what the request does and why the CLI never sends it`);
     const hasPath = r.path !== undefined;
     const hasGraphql = r.graphql !== undefined;
+    if (!hasPath && !hasGraphql) return out.push(`${at} needs a path or a graphql name`);
     if (hasPath === hasGraphql || (hasGraphql && r.method !== undefined)) return out.push(`${at} takes a path or a graphql name, not both`);
     if (hasPath && !(typeof r.path === "string" && r.path.startsWith("/"))) out.push(`${at}.path must start with /`);
     if (r.method !== undefined && !(typeof r.method === "string" && METHODS.includes(r.method))) out.push(`${at}.method must be GET, POST, PUT, PATCH or DELETE`);
@@ -38,10 +39,16 @@ export function neverRuleLabel(rule: NeverRule): string {
 
 const escape = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-/** A path glob as a RegExp over a whole path: `*` is any run of characters, `/` included; case-insensitive. */
+const globs = new Map<string, RegExp>();
+
+/** A path glob as a RegExp over a whole path: `*` is any run of characters, `/` included; case-insensitive. Compiled once. */
 function globRe(path: string): RegExp {
-  const src = path.replace(/\/+$/, "").split("*").map(escape).join(".*");
-  return new RegExp(`^${src}/?$`, "i");
+  let re = globs.get(path);
+  if (!re) {
+    re = new RegExp(`^${path.replace(/\/+$/, "").split("*").map(escape).join(".*")}/?$`, "i");
+    globs.set(path, re);
+  }
+  return re;
 }
 
 /** A request path as the site would read it: percent-escapes decoded, repeated slashes collapsed. */
@@ -68,9 +75,21 @@ function graphqlNames(doc: unknown): string[] {
 
 const rules = (site: Site): NeverRule[] => (Array.isArray(site.never) ? site.never : []);
 
+/** The operation names a request body carries: JSON (a document or a batch), else a form's fields or a raw GraphQL document. */
+function bodyNames(body: string): string[] {
+  try {
+    const parsed = JSON.parse(body);
+    return (Array.isArray(parsed) ? parsed : [parsed]).flatMap(graphqlNames);
+  } catch {
+    const form = new URLSearchParams(body);
+    return [...graphqlNames({ operationName: form.get("operationName") ?? undefined, query: form.get("query") ?? undefined }), ...graphqlNames({ query: body })];
+  }
+}
+
 /**
  * The rule a request breaks, if any: a path rule by method and path (on any host), a GraphQL rule by
- * any operation name the request carries (a JSON body, a batch, or a GET's query string).
+ * any operation name the request carries (a JSON body or batch, a form body, a raw GraphQL body, or a
+ * GET's query string).
  */
 export function forbiddenRequest(site: Site, req: { method: string; url: string; body?: string }): NeverRule | undefined {
   const list = rules(site);
@@ -87,12 +106,7 @@ export function forbiddenRequest(site: Site, req: { method: string; url: string;
   if (op) names.push(op);
   const query = url.searchParams.get("query");
   if (query) names.push(...graphqlNames({ query }));
-  if (req.body) {
-    try {
-      const body = JSON.parse(req.body);
-      for (const doc of Array.isArray(body) ? body : [body]) names.push(...graphqlNames(doc));
-    } catch {}
-  }
+  if (req.body) names.push(...bodyNames(req.body));
   return list.find((r) => (r.path !== undefined ? methodMatches(r, req.method) && globRe(r.path).test(path) : nameMatches(r, names)));
 }
 
@@ -126,17 +140,25 @@ export function neverProblems(site: Site, operations: Operation[]): string[] {
   });
 }
 
+/** What may follow a path in source for it to be the whole path: an optional `/`, then a quote, space, `?`, `#` or the end. */
+const PATH_END = "(?=/?(?:[\\s\"'`?#),;]|$))";
+
 /**
- * One line per source file that names a request site.never forbids: a path glob (its `*` spans any
- * run of characters that is no space or quote, so `:id` and `${id}` match) not followed by more of a
- * path, or a GraphQL name as a whole word; case-insensitive, like the runtime's match. A rule with a
- * method counts only in a file that also holds that method as a quoted string ("DELETE"), so a read
- * of the same path (GET /api/cart beside DELETE /api/cart) is no match.
+ * One line per source file that names a request site.never forbids, as the runtime would match it:
+ * - a path glob (its `*` spans any run of characters that is no space or quote, so `:id` and `${id}`
+ *   match), case-insensitive, ending where the path ends (`/api/cart` is not `/api/cart/items`). A
+ *   rule with a method counts only in a file that also holds that method as a quoted string
+ *   ("DELETE"), so a read of the same path (GET /api/cart beside DELETE /api/cart) is no match;
+ * - a GraphQL name where GraphQL names one: after `query`, `mutation` or `subscription`, or quoted
+ *   (an operationName). A field or a path holding the same word is no match.
  */
 export function neverInSource(site: Site, files: { path: string; text: string }[]): string[] {
   const res = rules(site).map((rule) => {
-    const src =
-      rule.path !== undefined ? `${rule.path.replace(/\/+$/, "").split("*").map(escape).join("[^\\s\"'`]*")}(?![\\w-])` : `(?<![\\w$])${escape(rule.graphql!)}(?![\\w$])`;
+    if (rule.path === undefined) {
+      const name = escape(rule.graphql!);
+      return { rule, re: new RegExp(`\\b(?:query|mutation|subscription)\\s+${name}(?![\\w$])|["'\`]${name}["'\`]`), method: undefined };
+    }
+    const src = `${rule.path.replace(/\/+$/, "").split("*").map(escape).join("[^\\s\"'`]*")}${PATH_END}`;
     const method = rule.method ? new RegExp(`["'\`]${rule.method}["'\`]`, "i") : undefined;
     return { rule, re: new RegExp(src, "i"), method };
   });
@@ -164,19 +186,62 @@ export function refuseNever(site: Site, req: { method: string; url: string; body
   if (rule) throw new NeverSent(rule, what);
 }
 
-/** A fetch that refuses what site.never forbids before calling `fetch` (the hooks' ctx.fetch, login.refresh.renew). */
-export function guardFetch(site: Site, fetch: Fetch): Fetch {
+/** A request body as text, for matching: strings, forms, FormData's text fields, Blobs and buffers. A stream is not read. */
+async function bodyText(body: RequestInit["body"], request: Request | undefined): Promise<string | undefined> {
+  if (body === undefined || body === null) return request ? request.clone().text().catch(() => undefined) : undefined;
+  if (typeof body === "string") return body;
+  if (body instanceof URLSearchParams) return body.toString();
+  if (body instanceof FormData) {
+    const fields: [string, string][] = [];
+    body.forEach((v, k) => typeof v === "string" && fields.push([k, v]));
+    return new URLSearchParams(fields).toString();
+  }
+  if (body instanceof Blob) return body.text();
+  if (body instanceof ArrayBuffer || ArrayBuffer.isView(body)) return new TextDecoder().decode(body);
+  return undefined;
+}
+
+const MAX_HOPS = 20;
+
+/**
+ * A fetch that refuses what site.never forbids (the hooks' ctx.fetch, login.refresh.renew). Redirects
+ * are followed by hand, as fetch would follow them (303, and 301/302 after a non-GET, go on as a GET
+ * without a body), so every hop is checked before it is sent; a caller's own `redirect: "manual"` or
+ * "error" is kept. `onRefuse` hears of each refusal, even one the caller then catches.
+ */
+export function guardFetch(site: Site, fetch: Fetch, onRefuse?: (refused: NeverSent) => void): Fetch {
   if (rules(site).length === 0) return fetch;
-  return async (input, init) => {
+  const refuse = (req: { method: string; url: string; body?: string }) => {
+    const rule = forbiddenRequest(site, req);
+    if (!rule) return;
+    const refused = new NeverSent(rule);
+    onRefuse?.(refused);
+    throw refused;
+  };
+  return async (input, init = {}) => {
     const request = input instanceof Request ? input : undefined;
-    const method = init?.method ?? request?.method ?? "GET";
-    const url = request ? request.url : String(input);
-    let body: string | undefined;
-    if (typeof init?.body === "string") body = init.body;
-    else if (init?.body instanceof URLSearchParams) body = init.body.toString();
-    else if (request && init?.body === undefined) body = await request.clone().text().catch(() => undefined);
-    refuseNever(site, { method, url, body });
-    return fetch(input, init);
+    let method = (init.method ?? request?.method ?? "GET").toUpperCase();
+    let url = request ? request.url : String(input);
+    let text = await bodyText(init.body, request);
+    refuse({ method, url, body: text });
+    if (init.redirect === "manual" || init.redirect === "error") return fetch(input, init);
+    let body: RequestInit["body"] = init.body ?? text;
+    const headers = init.headers ?? request?.headers;
+    let res = await fetch(input, { ...init, redirect: "manual" });
+    for (let hop = 0; hop < MAX_HOPS; hop++) {
+      const location = res.headers.get("location");
+      if (res.status < 300 || res.status >= 400 || res.status === 304 || !location) return res;
+      const next = new URL(location, url).href;
+      if (res.status === 303 || ((res.status === 301 || res.status === 302) && method !== "GET" && method !== "HEAD")) {
+        if (method !== "HEAD") method = "GET";
+        body = undefined;
+        text = undefined;
+      }
+      refuse({ method, url: next, body: text });
+      url = next;
+      res = await fetch(url, { ...init, method, headers, body, redirect: "manual" });
+    }
+    return res;
   };
 }
 
@@ -186,6 +251,33 @@ export function neverNext(rule: NeverRule, site: { plugin: string; skill: string
   const workaround = surface === "mcp" ? "other tools, raw calls or the browser" : "raw calls, curl or the browser";
   const tried = surface === "mcp" ? "A tool that tries it" : "A command that tries it";
   return `Stop: the ${site.skill} ${kind} never sends this request (${rule.why}). Tell the user to do it on the site themselves. Do not work around it with ${workaround}. ${tried} is a bug: offer to file it through the ${site.plugin}-feedback skill, passing this whole envelope, and file it only if the user says yes.`;
+}
+
+/**
+ * site.ts's text without its `never: [ … ]` list (and the comma after it), so a scan of the hooks
+ * does not find the list itself. Brackets inside strings and comments are skipped.
+ */
+export function stripNeverList(text: string): string {
+  const start = /\bnever\s*:\s*\[/.exec(text);
+  if (!start) return text;
+  let depth = 0;
+  for (let i = start.index + start[0].length - 1; i < text.length; i++) {
+    const ch = text[i]!;
+    if (ch === '"' || ch === "'" || ch === "`") {
+      for (i++; i < text.length && text[i] !== ch; i++) if (text[i] === "\\") i++;
+    } else if (ch === "/" && text[i + 1] === "/") {
+      while (i < text.length && text[i] !== "\n") i++;
+    } else if (ch === "/" && text[i + 1] === "*") {
+      i = text.indexOf("*/", i + 2);
+      if (i === -1) return text;
+      i++;
+    } else if (ch === "[") depth++;
+    else if (ch === "]" && --depth === 0) {
+      const end = text[i + 1] === "," ? i + 2 : i + 1;
+      return text.slice(0, start.index) + text.slice(end);
+    }
+  }
+  return text;
 }
 
 /** site.never for `help` and the MCP instructions: each rule's label and reason. */

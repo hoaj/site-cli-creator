@@ -440,7 +440,7 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
     `A tool with a confirm argument writes: call it without confirm first, show the user the dry run it returns, and call it again with confirm: true only after the user's explicit yes.`,
     `A failed call returns {"error": {kind, message, next}}: do what next says. On kind drift, stop and do not work around it.`,
     ...(options.remote ? [`When a tool fails with kind session, the Owner must give this server a new Session on its Setup page; do what next says.`] : []),
-    ...(never.length ? [`These tools never do the following; the user does it on the site themselves: ${never.map((n) => n.why).join("; ")}.`] : []),
+    ...(never.length ? [`These tools never do the following; the user does it on the site themselves: ${never.map((n) => n.why.trim().replace(/[.!?]+$/, "")).join("; ")}.`] : []),
   ].join(" ");
   return { info: { name: site.skill === site.plugin ? site.plugin : `${site.plugin}-${site.skill}`, version: site.version, instructions }, tools };
 }

@@ -4,12 +4,15 @@ import { expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
 import { operations } from "../src/registry";
-import { neverInSource, neverProblems } from "../src/runtime/never";
+import { neverInSource, neverProblems, stripNeverList } from "../src/runtime/never";
 import site from "../src/site";
 
 const CLI = join(import.meta.dir, "..");
 
-/** Every .ts file under the folders that hold this CLI's Contracts and commands (site.ts states the list itself). */
+/**
+ * Every .ts file under the folders that hold this CLI's Contracts, commands and shared code, and
+ * site.ts (its hooks send requests too) without the never list itself.
+ */
 function sources(): { path: string; text: string }[] {
   const out: { path: string; text: string }[] = [];
   const walk = (dir: string) => {
@@ -21,6 +24,7 @@ function sources(): { path: string; text: string }[] {
     }
   };
   for (const dir of ["operations", "commands", "lib"]) walk(join(CLI, "src", dir));
+  out.push({ path: "src/site.ts", text: stripNeverList(readFileSync(join(CLI, "src", "site.ts"), "utf8")) });
   return out;
 }
 
@@ -28,6 +32,6 @@ test("no Operation in the registry is a request site.never forbids", () => {
   expect(neverProblems(site, operations)).toEqual([]);
 });
 
-test("no Contract, command or shared code names a request site.never forbids", () => {
+test("no Contract, command, shared code or site.ts hook names a request site.never forbids", () => {
   expect(neverInSource(site, sources())).toEqual([]);
 });

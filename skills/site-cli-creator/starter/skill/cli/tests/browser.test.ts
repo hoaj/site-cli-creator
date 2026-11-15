@@ -86,7 +86,7 @@ const server = Bun.serve({
         navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready)
           .then(() => (navigator.serviceWorker.controller ? ready() : navigator.serviceWorker.addEventListener("controllerchange", ready)));
         document.getElementById("save").onclick = () => fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});`);
-    // A form post (fetch with URLSearchParams sends application/x-www-form-urlencoded).
+    // A Save that first sends requests site.never forbids (#101), then the write.
     if (url.pathname === "/never-orders")
       return page(`
         document.getElementById("save").onclick = async () => {
@@ -94,6 +94,7 @@ const server = Bun.serve({
           await fetch("/graphql", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ operationName: "PlaceOrder", query: "query PlaceOrder { x }" }) }).catch(() => {});
           fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});
         };`);
+    // A form post (fetch with URLSearchParams sends application/x-www-form-urlencoded).
     if (url.pathname === "/form-orders")
       return page(`
         document.getElementById("save").onclick = () => fetch("/api/orders/5", { method: "PATCH", body: new URLSearchParams({ name: "New" }) }).catch(() => {});`);

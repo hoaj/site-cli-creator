@@ -223,7 +223,7 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
     - `regen` refuses an Operation that matches, naming the entry, and writes nothing.
     - The CLI refuses a matching request before it leaves (exit 1, `bug`, with its own `next`). That covers a command's `call` before any dry run, a redirect, and the `ctx.fetch` that `postLogin`, `bootstrap`, `accounts` and `refresh.renew` get.
     - `check` refuses a registry that holds one. `check --writes` aborts a trigger request that matches, even a GET or a `readOnlyRequests` entry, and lists it in `warnings`.
-    - The plugin's `tests/never-sent.test.ts` scans the registry and the source of `operations/`, `commands/` and `lib/`, so CI fails on a match. A comment that names a forbidden path counts too: say "the order request", not the path.
+    - The plugin's `tests/never-sent.test.ts` scans the registry and the source of `operations/`, `commands/`, `lib/` and `site.ts`'s hooks, so CI fails on a match. A comment that names a forbidden path counts too: say "the order request", not the path.
   - **Shown to agents:** `regen` writes one line per entry under the skill's `## When NOT to use`, and `help` and the MCP server's instructions list them.
 
   ```ts
