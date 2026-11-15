@@ -1,3 +1,4 @@
+import { draftHtml, fromSource } from "./draft-html";
 import type { OperationShape } from "./recorder";
 import { mergeBodies, type BodyShape, type Shape } from "./shape";
 import { propertyKey, zodSource } from "./zod-source";
@@ -69,6 +70,11 @@ function successBody(op: OperationShape): BodyShape | undefined {
     body = body ? mergeBodies(body, r.body) : r.body;
   }
   return body;
+}
+
+/** HTML strings inside the successful JSON answers, by path. */
+function successHtmlInJson(op: OperationShape) {
+  return op.responses.filter((r) => r.status >= 200 && r.status < 300).flatMap((r) => r.htmlInJson ?? []);
 }
 
 function indent(source: string, level: number): string {
@@ -144,6 +150,8 @@ export function draftOperation(
     const fieldKeys = bodyFields ? Object.keys(bodyFields.fields) : [];
     const optional = new Set(bodyFields?.optional ?? []);
     const urlKeys = [...params, ...queryKeys.filter((k) => !params.includes(k))];
+    // A query key some calls did not send: check can call the Operation without it.
+    const queryOptional = new Set(op.request.query?.type === "object" ? (op.request.query.optional ?? []) : []);
     const rest: string[] = [`method: ${JSON.stringify(op.method)}`, `path: ${JSON.stringify(path)}`];
     if (queryKeys.length) {
       const pairs = queryKeys.map((k) => `${propertyKey(k)}: v[${JSON.stringify(k)}]`).join(", ");
@@ -164,7 +172,7 @@ export function draftOperation(
     }
     lines.push(`  rest: { ${rest.join(", ")} },`);
     const varLines = [
-      ...urlKeys.filter((k) => !fieldKeys.includes(k)).map((k) => `    ${propertyKey(k)}: z.string(),`),
+      ...urlKeys.filter((k) => !fieldKeys.includes(k)).map((k) => `    ${propertyKey(k)}: z.string()${queryOptional.has(k) && !params.includes(k) ? ".optional()" : ""},`),
       ...fieldKeys.map((k) => `    ${propertyKey(k)}: ${indent(zodSource(bodyFields!.fields[k], 0), 2)}${optional.has(k) ? ".optional()" : ""},`),
       ...(bodyShape && !bodyFields && bodyShape.type !== "record" ? [`    body: ${indent(zodSource(bodyShape, 0), 2)},`] : []),
     ];
@@ -173,7 +181,23 @@ export function draftOperation(
   }
 
   const body = successBody(op);
-  if (body && (body.kind === "json" || body.kind === "form")) {
+  const embedded = successHtmlInJson(op);
+  if (body?.kind === "html" && body.outline?.length && op.html) {
+    if (body.truncated) lines.push("  // The page was too big to outline whole: the shape file's outline is cut short.");
+    lines.push(...draftHtml(body.outline));
+  } else if (embedded.length && op.html) {
+    // The richest HTML string holds the data (the listing, not a status message beside it).
+    const size = (nodes: { children?: unknown[] }[]): number => nodes.reduce((n, c) => n + 1 + size((c.children ?? []) as { children?: unknown[] }[]), 0);
+    const [first] = [...embedded].sort((a, b) => size(b.outline) - size(a.outline));
+    lines.push(`  // The JSON answer carries HTML at ${embedded.map((e) => e.path).join(", ")}: drafted as an HTML Operation`);
+    lines.push(`  // whose html.from returns the HTML at ${first!.path}. If the JSON's own fields hold the data, draw`);
+    lines.push("  // response from the shape file's JSON body instead and drop html.");
+    lines.push(...draftHtml(first!.outline, fromSource(first!.path)));
+  } else if (body && (body.kind === "json" || body.kind === "form")) {
+    if (embedded.length) {
+      lines.push(`  // HTML strings at ${embedded.map((e) => e.path).join(", ")} (htmlInJson in the shape file): the JSON's own fields are drafted.`);
+      lines.push("  // When the data is only in that HTML, read it with html.from (reference/contracts.md, HTML Operations).");
+    }
     lines.push(`  response: ${zodSource(body.shape, 1)},`);
   } else {
     const why = op.aborted >= op.seen ? "the request was aborted during the Capture" : `the response was ${body?.kind ?? "not seen"}`;
@@ -185,7 +209,8 @@ export function draftOperation(
     lines.push("  // calls (often /api/...) instead; see reference/add-task.md, Next.js sites.");
   }
   if (op.navigation) {
-    lines.push("  // A page load (a document request), not an API call: an Operation only if the page itself is the data.");
+    lines.push("  // A page load (a document request), not an API call: an HTML Operation only when the page itself carries");
+    lines.push("  // the data (a site with no JSON calls). Drop it when a JSON call carries the same data.");
   }
   if (op.loginFlow) {
     lines.push("  // The Capture let this through as a sign-in step: it usually belongs in site.ts (login.tokenRequest,");

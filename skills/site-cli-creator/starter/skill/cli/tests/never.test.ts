@@ -587,6 +587,24 @@ describe("review round 1", () => {
     expect(boots).toBe(1);
   });
 
+  test("merge with HTML Operations (#102): with a never list, the request built once keeps the HTML accept, over the session's", async () => {
+    const page = defineOperation({
+      name: "GET /events",
+      effect: "read",
+      rest: { method: "GET", path: "/events" },
+      html: { fields: { title: "h1" } },
+      variables: z.object({}),
+      response: z.object({ title: z.string() }),
+    });
+    const f = fakeFetch(() => new Response("<html><body><h1>Events</h1></body></html>", { headers: { "content-type": "text/html" } }));
+    const h = makeDeps(f.fetch, home());
+    const s = makeSite({ never: NEVER, bootstrap: async () => ({ headers: { accept: "application/json", "x-csrf": "t" } }) });
+    expect(await new Client(s, h.deps).call(page, {})).toEqual({ title: "Events" });
+    const sent = f.calls.find((r) => new URL(r.url).pathname === "/events")!;
+    expect(sent.headers.accept).toMatch(/^text\/html/);
+    expect(sent.headers["x-csrf"]).toBe("t");
+  });
+
   test("review 4: with a never list, a call builds its request once", async () => {
     let built = 0;
     const counted = defineOperation({

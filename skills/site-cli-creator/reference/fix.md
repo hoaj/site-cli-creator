@@ -56,6 +56,7 @@ The Fingerprint names the skill, the Operation, the break type and the field pat
    | `input-rejected` | `variables` and how the command builds them |
    | `auth` | `site.ts`: `login.tokenRequest`, `login.hosts`, `postLogin` or `bootstrap`; a 403 while the new Capture got JSON: `transport: "browser"` (step 2) |
    | `request` | `variables` and the command, from the new Capture of the write |
+   | `html` | an HTML Operation's `html.fields` selectors (a `no_match` list: its `each` and `in`), or `html.from`, rewritten from the new Capture's outline ([contracts.md](contracts.md#html-operations)); a missing field is `zod` Drift on the picked object, fixed in `html.fields` the same way |
    | `trigger` | the `trigger`'s locators; or, when the page now waits for a non-GET that changes no data (a token refresh, a post-login call) and `check` aborted it, `readOnlyRequests` in `site.ts` |
 
    **A field whose type changed** (`price` number → string): keep the command's output type when a lossless conversion exists. Accept the new form in the Contract with a format check, so an unexpected format is still Drift rather than wrong data, and convert in the command: `price: z.union([z.number(), z.string().regex(/^-?\d+(\.\d+)?$/)])` and `Number(s.price)`. The new Capture's shape notes a string's format (`"format": "numeric"`, `"date"`); when it gives none, look at what the site's page shows. When no lossless conversion exists, changing the output field's type is a major change, like a rename: the maintainer decides.
