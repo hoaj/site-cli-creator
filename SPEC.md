@@ -133,7 +133,7 @@ The Zod schema is both the runtime parser and the TypeScript type, so Drift show
 - **`regen`** refuses an Operation whose request matches an entry. It names the entry and its reason, and writes nothing.
 - **The runtime** refuses a matching request before it leaves. That covers a command's `call` (before any dry run), every redirect hop, and the `fetch` that `site.ts`'s hooks get, so hand-written code is covered too. It is a **bug** (exit 1) with its own `next`: the user does it on the site.
 - **`check`** refuses a registry that holds such an Operation. With `--writes`, a trigger request that matches is aborted, even when another rule would let it through, and it is reported in `warnings`.
-- **A Starter test** checks the plugin's registry and the source of its Contracts, commands and shared code, so the plugin's CI fails on a match.
+- **A Starter test** checks the plugin's registry and the source of its Contracts, commands, shared code and `site.ts` hooks, so the plugin's CI fails on a match.
 
 `regen` lists the entries under the CLI skill's `## When NOT to use`. `help` and the MCP server's instructions list them too.
 

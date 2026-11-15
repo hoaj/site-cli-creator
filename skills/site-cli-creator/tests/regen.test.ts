@@ -396,6 +396,14 @@ describe.skipIf(!realStarterReady)("against the real Starter code and the fixtur
       expect(caught.exitCode).toBe(1);
       expect(caught.stderr.toString()).toContain("src/lib/close.ts names DELETE /api/account* (Deleting the account)");
       rmSync(join(skill, "cli/src/lib/close.ts"));
+      // site.ts's hooks are scanned too, its never list left out (review round 1).
+      const siteText = readFileSync(site, "utf8");
+      writeFileSync(site, `${siteText}\nexport const closeHook = (o: string) => fetch(\`\${o}/api/account/close\`, { method: "DELETE" });\n`);
+      const inSite = neverSent();
+      expect(inSite.exitCode).toBe(1);
+      expect(inSite.stderr.toString()).toContain("src/site.ts names DELETE /api/account* (Deleting the account)");
+      writeFileSync(site, siteText);
+      expect(neverSent().exitCode).toBe(0);
       write(
         join(skill, "cli/src/operations/closeAccount.ts"),
         `import { z } from "zod";\nimport { defineOperation } from "../runtime/operation";\nexport default defineOperation({ name: "DELETE /api/account", effect: "write", rest: { method: "DELETE", path: "/api/account" }, variables: z.object({}), response: z.unknown() });\n`,

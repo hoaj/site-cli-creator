@@ -338,7 +338,9 @@ export class Client {
     if (refresh.from !== undefined && Object.keys(current.refresh ?? {}).length === 0) return false; // nothing kept to trade
     this.deps.note(`renewing the sign-in to ${this.site.origin} with its refresh token`);
     let renewed: Awaited<ReturnType<typeof refresh.renew>>;
-    const plain = guardFetch(this.site, this.deps.plainFetch ?? this.deps.fetch);
+    // A refusal is remembered even when renew catches it: nothing left, so the record stays.
+    let refused: NeverSent | undefined;
+    const plain = guardFetch(this.site, this.deps.plainFetch ?? this.deps.fetch, (e) => (refused ??= e));
     for (let attempt = 0; ; attempt++) {
       // Plain fetch, never transport "browser"'s Chrome; bounded, and cancelled when time runs out,
       // so no request is left open after the lock is released.
@@ -348,7 +350,7 @@ export class Client {
         renewed = await withTimeout(refresh.renew({ ...this.siteCtx(current, false), fetch }), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
-        if (e instanceof ContractError) throw e; // site.never refused it: nothing left, the record stays
+        if (refused || e instanceof NeverSent) throw refused ?? e; // site.never refused it: nothing left, the record stays
         // The error's name only: its message may carry what the site sent.
         const name = errorName(e);
         if (neverSent(e) && attempt < this.deps.retryDelays.length) {
@@ -367,6 +369,7 @@ export class Client {
         return false;
       }
     }
+    if (refused) throw refused;
     if (!renewed?.headers) {
       // Refused: perhaps because another run spent the token meanwhile. Its session wins, and a
       // session.json another run already changed is left as it is.
@@ -493,7 +496,7 @@ export class Client {
     try {
       res = await this.fetchFollowing({ method: "GET", url: url.toString(), headers });
     } catch (e) {
-      if (e instanceof ContractError) throw e; // site.never forbids the probe
+      if (e instanceof NeverSent) throw e; // site.never forbids the probe
       return undefined; // network trouble: the Operation itself reports it
     }
     if (res.status >= 200 && res.status < 300 && !res.loginRedirect && !res.offsite) return undefined;
@@ -616,7 +619,7 @@ export class Client {
       try {
         res = await this.fetchFollowing(req);
       } catch (e) {
-        if (e instanceof Failure || e instanceof ContractError) throw e; // no Chrome to send from (transport "browser"), or site.never
+        if (e instanceof Failure || e instanceof NeverSent) throw e; // no Chrome to send from (transport "browser"), or site.never
         transport = (e as { code?: string })?.code || (e as Error)?.name || "error";
       }
       const serverError = res && op.graphql !== undefined ? gqlServerError(res.body) : undefined;

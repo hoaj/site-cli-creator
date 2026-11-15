@@ -11,7 +11,7 @@ import { driftFingerprint, errorName, operationSegment, zodDiff } from "./finger
 import { stripNoise, topLevelDefinitions, type GraphqlType } from "./graphql";
 import { closeContext, launch, launchInMemory, profileState } from "./login";
 import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverCheckedWarning } from "./needs";
-import { forbiddenRequest, neverProblems, neverRuleLabel } from "./never";
+import { forbiddenRequest, neverProblems, neverRuleLabel, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { ensureProfileDir } from "./session";
 import { effectiveOrigin, isLoginHost, tokenMatches, type Site } from "./site";
@@ -97,6 +97,8 @@ export async function check(client: Client, operations: Operation[], options: Ch
   let account: Promise<string | undefined> | undefined;
   /** The first network, session or input failure: reported only when nothing drifted. */
   let stopped: Failure | undefined;
+  /** The first request site.never refused (a variable built a forbidden path): a bug, reported unless something drifted. */
+  let refused: NeverSent | undefined;
 
   for (const op of selected) {
     if (stopped?.kind === "session") {
@@ -149,6 +151,12 @@ export async function check(client: Client, operations: Operation[], options: Ch
       results.set(op.name, await client.call(op, vars));
       rows.push({ operation: op.name, effect: "read", status: "ok" });
     } catch (e) {
+      if (e instanceof NeverSent) {
+        unavailable.add(op.name);
+        rows.push({ operation: op.name, effect: "read", status: "failed", reason: "never" });
+        refused ??= e;
+        continue;
+      }
       if (!(e instanceof Failure)) throw e;
       unavailable.add(op.name);
       if (e.kind === "drift") drifts.push({ operation: op.name, fingerprint: e.fingerprint ?? "", diff: e.diff ?? [] });
@@ -186,6 +194,7 @@ export async function check(client: Client, operations: Operation[], options: Ch
     const also = others.length ? ` ${others.length} other Operation(s) could not be checked (${[...new Set(others.map((r) => r.reason))].join(", ")}).` : "";
     throw new Failure("drift", `check: ${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation).join(", ")}.${also}`, { drifts });
   }
+  if (refused) throw refused;
   if (stopped) throw stopped;
   return { ok: warnings.length === 0, operations: rows, ...(warnings.length ? { warnings } : {}) };
 }
@@ -468,12 +477,10 @@ async function checkOne(
     const req = route.request();
     const contentType = (await req.allHeaders())["content-type"];
     const c: Captured = { method: req.method(), url: new URL(req.url()), body: parseCaptured(req.postData(), contentType), contentType };
-    const verdict = triggerVerdict(site, op, writes, reads, origin, c);
+    const rule = forbiddenRequest(site, capturedRequest(c));
+    const verdict = rule ? "never" : triggerVerdict(site, op, writes, reads, origin, c);
     if (verdict === "target") captured ??= c;
-    if (verdict === "never") {
-      const rule = forbiddenRequest(site, capturedRequest(c))!;
-      forbidden.set(neverRuleLabel(rule), rule.why);
-    }
+    if (rule) forbidden.set(neverRuleLabel(rule), rule.why);
     return verdict === "pass" ? route.continue() : route.abort();
   };
   await context.route("**/*", handler);
