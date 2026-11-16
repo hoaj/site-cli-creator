@@ -83,7 +83,7 @@ Rewrite the `description` in `<skill>/SKILL.md` to name the site and the Tasks, 
 
 ## 7. Bump and PR
 
-Skip inside `new`.
+Skip inside `new`, and for every further skill added before the plugin's first push: they all ship as `0.1.0`.
 
 ```sh
 cd <plugin> && bun run bump minor && bun test

@@ -1,4 +1,4 @@
-# __PLUGIN__'s daily drift check (SPEC §10): every CLI skill's read-only `check` against its live
+# __PLUGIN__'s daily drift check (site-cli-creator's SPEC §10): every CLI skill's read-only `check` against its live
 # site, with the released binary (scripts/drift-check.ts). Drift opens an issue titled with its
 # Fingerprint and labelled drift, as the Feedback skill files it, so `fix` picks it up and a user's
 # report of the same Drift lands on the same issue; a failing check opens a bug, an expired CI
