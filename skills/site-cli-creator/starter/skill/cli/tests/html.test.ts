@@ -2,7 +2,7 @@
 // picks with CSS selectors, then parses with Zod like any other response.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { buildRequest } from "../src/runtime/call";
+import { buildRequest, decodeBody } from "../src/runtime/call";
 import { Failure } from "../src/runtime/envelope";
 import { extractHtml } from "../src/runtime/html";
 import { defineOperation } from "../src/runtime/operation";
@@ -213,6 +213,29 @@ describe("an HTML Operation through the Client", () => {
     expect(await names(answer(utf8, "text/html; charset=utf-8"))).toEqual(["Ærø"]);
     expect(await names(answer(new TextEncoder().encode("<ul><li>Ærø</li></ul>"), "text/html; charset=not-a-charset"))).toEqual(["Ærø"]);
     expect(await names(answer(new TextEncoder().encode("<ul><li>Ærø</li></ul>"), "text/html"))).toEqual(["Ærø"]);
+  });
+
+  test("decoding follows the browser's order: BOM, the content-type, the page's meta, else UTF-8 or windows-1252 (#108, review 1)", () => {
+    const l1 = (t: string) => latin1(t);
+    const utf8 = (t: string) => new TextEncoder().encode(t);
+    // JSON is UTF-8 by its standard, whatever its label says, as fetch's .json() reads it.
+    expect(decodeBody(utf8('{"by":"Ærø"}'), "application/json; charset=iso-8859-1")).toBe('{"by":"Ærø"}');
+    // A label the decoder does not know is ignored, and the page's meta decides.
+    expect(decodeBody(l1('<meta charset="iso-8859-1">Ærø'), "text/html; charset=bogus")).toBe('<meta charset="iso-8859-1">Ærø');
+    // A byte-order mark outranks the header and the meta, and is not part of the text.
+    expect(decodeBody(Uint8Array.from([0xef, 0xbb, 0xbf, ...utf8("Ærø")]), "text/html; charset=iso-8859-1")).toBe("Ærø");
+    expect(decodeBody(Uint8Array.from([0xff, 0xfe, ...[..."Ærø"].flatMap((c) => [c.charCodeAt(0), 0])]), "text/html")).toBe("Ærø");
+    expect(JSON.parse(decodeBody(Uint8Array.from([0xef, 0xbb, 0xbf, ...utf8('{"a":1}')]), "application/json"))).toEqual({ a: 1 });
+    // No declaration at all: UTF-8 when the bytes are UTF-8, else windows-1252, as Chrome settles on for a Western page.
+    expect(decodeBody(l1("<p>Ærø</p>"), "text/html")).toBe("<p>Ærø</p>");
+    expect(decodeBody(utf8("<p>Ærø</p>"), "text/html")).toBe("<p>Ærø</p>");
+    // A meta that names UTF-16 means UTF-8 (the page could not be read to find it otherwise); x-user-defined is windows-1252.
+    expect(decodeBody(utf8('<meta charset="utf-16"><p>Ærø</p>'), "text/html")).toBe('<meta charset="utf-16"><p>Ærø</p>');
+    // A charset inside a script or a comment is not the page's.
+    const page = '<!-- <meta charset=iso-8859-1> --><script>x="<meta charset=iso-8859-1>"</script><meta charset="utf-8">Ærø';
+    expect(decodeBody(utf8(page), "text/html")).toBe(page);
+    // A single-quoted charset in the header counts.
+    expect(decodeBody(l1("Ærø"), "text/html; charset='iso-8859-1'")).toBe("Ærø");
   });
 
   test("a page that now answers JSON is Drift (not_html), never a bug", async () => {
