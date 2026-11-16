@@ -212,6 +212,72 @@ describe.skipIf(skip)("transport browser", () => {
     expect(first!.id).not.toBe(second!.id);
   }, 60_000);
 
+  test("a bootstrap reads its CSRF cookie with ctx.cookies() although the tab's own page load already took it (#95, cold read)", async () => {
+    // Like many sites, the front page sets the cookie only when the browser lacks it.
+    const tokens = new Set<string>();
+    const mini = miniSite(
+      () => new Response("<!doctype html><title>front</title>", { headers: { "content-type": "text/html" } }),
+      (req) => {
+        const path = new URL(req.url).pathname;
+        if (path === "/start") {
+          if (cookieOf(req, "csrf")) return new Response("<!doctype html>", { headers: { "content-type": "text/html" } });
+          const t = `t${tokens.size + 1}`;
+          tokens.add(t);
+          return new Response("<!doctype html>", { headers: { "content-type": "text/html", "set-cookie": `csrf=${t}; Path=/` } });
+        }
+        const c = cookieOf(req, "csrf");
+        return c && tokens.has(c) && req.headers.get("x-csrf-token") === c ? Response.json({ id: "ok", total: 0 }) : new Response("csrf", { status: 403 });
+      },
+    );
+    const a = app({
+      origin: mini.url.origin,
+      transport: "browser",
+      bootstrap: async (ctx) => {
+        await ctx.fetch(`${ctx.origin}/start`); // the tab may have loaded it already
+        await ctx.fetch(`${ctx.origin}/start`); // now it surely has: no Set-Cookie this time
+        const token = (await ctx.cookies()).csrf;
+        if (!token) throw new Error("no csrf cookie");
+        return { headers: { cookie: `csrf=${token}`, "x-csrf-token": token } };
+      },
+    });
+    expect(await run(["ok", "show"], a)).toEqual({ output: { id: "ok", total: 0 }, code: 0 });
+  }, 60_000);
+
+  test("ctx.cookies() holds a cookie the page load set on a narrower Path, as an XSRF cookie on /api (review 3)", async () => {
+    const mini = miniSite(
+      () => new Response("<!doctype html><title>front</title>", { headers: { "content-type": "text/html", "set-cookie": "xsrf=x1; Path=/api" } }),
+      (req) => (cookieOf(req, "xsrf") === "x1" && req.headers.get("x-xsrf") === "x1" ? Response.json({ id: "ok", total: 0 }) : new Response("xsrf", { status: 403 })),
+    );
+    const a = app({
+      origin: mini.url.origin,
+      transport: "browser",
+      bootstrap: async (ctx) => {
+        const token = (await ctx.cookies()).xsrf;
+        if (!token) throw new Error("no xsrf cookie");
+        return { headers: { "x-xsrf": token } };
+      },
+    });
+    expect(await run(["ok", "show"], a)).toEqual({ output: { id: "ok", total: 0 }, code: 0 });
+  }, 60_000);
+
+  test("ctx.cookies() on a site Chrome cannot load is a network failure, not an empty jar the hook takes for a bug (#95, review)", async () => {
+    const gone = Bun.serve({ port: 0, fetch: () => new Response("") });
+    const origin = gone.url.origin;
+    gone.stop(true);
+    const a = app({
+      origin,
+      transport: "browser",
+      bootstrap: async (ctx) => {
+        const token = (await ctx.cookies()).csrf;
+        if (!token) throw new Error("no csrf cookie");
+        return { headers: { cookie: `csrf=${token}` } };
+      },
+    });
+    const r = await run(["ok", "show"], a);
+    expect(r.code).toBe(5);
+    expect((r.output as { error: { kind: string } }).error.kind).toBe("network");
+  }, 60_000);
+
   test("a front page that reloads itself once its script has run is waited for (review)", async () => {
     const mini = miniSite(
       () =>

@@ -402,6 +402,25 @@ describe("review round 1", () => {
     expect(await new Client(swallowing, h2.deps, { confirm: true }).call(getOrder, { orderId: "1" }).catch((x) => x)).toBeInstanceOf(NeverSent);
     expect(loadSession(stateDir(swallowing, h2.deps.env))?.refresh).toEqual({ token: "rt" });
     expect(h2.loginCalls).toEqual([]);
+
+    // It swallows the refusal, then its token request meets a bot wall (#95): the site never took
+    // the token, so the record stays, as for any blocked renew.
+    const walled = withRenew({
+      renew: async (ctx) => {
+        await ctx.fetch(`${ctx.origin}/oauth/revoke`, { method: "POST" }).catch(() => undefined);
+        await ctx.fetch(`${ctx.origin}/oauth/token`, { method: "POST" });
+        return { headers: {} };
+      },
+    });
+    const wall = fakeFetch((req) => {
+      const path = new URL(req.url).pathname;
+      if (path === "/oauth/token") return new Response("<html>blocked</html>", { status: 403, headers: { "content-type": "text/html", "cf-mitigated": "challenge" } });
+      return path === "/api/orders/1" && req.headers.authorization === "Bearer old" ? json({}, 401) : json({ id: "1", total: 1 });
+    });
+    const h3 = makeDeps(wall.fetch, home());
+    saveSession(stateDir(walled, h3.deps.env), { headers: { authorization: "Bearer old" }, ids: {}, refresh: { token: "rt" } });
+    expect(await new Client(walled, h3.deps, { confirm: true }).call(getOrder, { orderId: "1" }).catch((x) => x)).toBeInstanceOf(NeverSent);
+    expect(loadSession(stateDir(walled, h3.deps.env))?.refresh).toEqual({ token: "rt" });
   });
 
   test("review 2: a redirect off the site's domain drops the session's headers; a redirect to a GET drops the body's headers", async () => {

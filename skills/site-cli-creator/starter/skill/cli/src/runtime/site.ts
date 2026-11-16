@@ -20,6 +20,12 @@ export type SiteCtx = {
   ids: Record<string, string>;
   /** What login.refresh.keep kept (a refresh token, a client id); {} when nothing was. */
   refresh: Record<string, string>;
+  /**
+   * The cookies the site has set for this hook, by name: those ctx.fetch's answers set, and with
+   * transport "browser" every cookie Chrome holds for the origin (its tab's page load may have taken
+   * one already, so no answer sets it again). Read a CSRF cookie here, not from Set-Cookie.
+   */
+  cookies(): Promise<Record<string, string>>;
   decodeJwt(token: string): Record<string, unknown>;
   /** Performs one Operation with classification, like a command's ctx.call. */
   call: Call;

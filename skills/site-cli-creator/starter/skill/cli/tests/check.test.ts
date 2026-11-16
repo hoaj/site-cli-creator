@@ -49,6 +49,15 @@ describe("chain order", () => {
 });
 
 describe("check over reads", () => {
+  test("a bot wall stops check: no further request is sent into it (#95, review 3)", async () => {
+    const read = (path: string) => defineOperation({ name: `GET ${path}`, effect: "read", rest: { method: "GET", path }, variables: z.object({}), response: z.object({}) });
+    const { fetch, calls } = fakeFetch(() => new Response("<html>blocked</html>", { status: 403, headers: { "content-type": "text/html", "cf-mitigated": "challenge" } }));
+    const e = await check(client(makeSite(), makeDeps(fetch, home.dir).deps), [read("/a"), read("/b"), read("/c")], {}).catch((x) => x);
+    expect(e).toBeInstanceOf(Failure);
+    expect([e.kind, e.details.blocked]).toEqual(["network", "cloudflare"]);
+    expect(calls.length).toBe(1);
+  });
+
   test("calls reads in chain order, passing picked values and session ids", async () => {
     const { fetch, calls } = fakeFetch((r) =>
       r.body?.operationName === "getInvoice" ? json({ data: { getInvoice: { total: 1 } } }) : happySite(r),

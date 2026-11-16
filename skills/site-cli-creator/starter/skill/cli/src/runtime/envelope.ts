@@ -16,6 +16,11 @@ export type FailureDetails = {
   drifts?: DriftEntry[];
   stack?: string[];
   accounts?: Account[];
+  /**
+   * kind network only: the site refused the request as automated traffic, and the bot protection
+   * that did it (a vendor name such as "cloudflare", or "captcha"). Never a value the site sent.
+   */
+  blocked?: string;
   /** Replaces the kind's fixed `next`, when that sentence would be wrong here (the MCP login tool's own failures). */
   next?: string;
 };
@@ -66,8 +71,17 @@ export type EnvelopeSite = { plugin: string; skill: string; version: string; rep
 /** Who reads the envelope: an agent running the CLI, or an MCP client calling the `mcp` server's tools. */
 export type Surface = "cli" | "mcp";
 
-export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, surface: Surface = "cli"): string {
+export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, surface: Surface = "cli", blocked = false): string {
   const feedback = `${site.plugin}-feedback`;
+  if (blocked) {
+    // Not an outage and not Drift: the site may block the CLI every time, which the maintainer can
+    // only fix in the plugin (transport "browser"), so a block that keeps happening is worth a report.
+    const report =
+      surface === "mcp"
+        ? `Ask the user whether it happens every time; if so, the plugin cannot reach the site this way, which is a feature request ("the site blocks the CLI"). ${capitalized(feedbackOffer(site))}.`
+        : `Ask the user whether it happens every time; if so, offer to report it through the ${feedback} skill as a feature request (the site blocks the CLI), and file it only if the user says yes.`;
+    return `Tell the user the site refused the request as automated traffic (bot protection), and stop. Do not retry, not even to find out whether it keeps happening, and do not work around it with raw calls or the browser. ${report}`;
+  }
   if (surface === "mcp") return mcpNextStep(kind, site, hasAccounts);
   switch (kind) {
     case "bug":
@@ -85,13 +99,20 @@ export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, su
   }
 }
 
+/** How an MCP client offers a report: the Feedback skill when it has it, else the repo's new-issue page. */
+function feedbackOffer(site: EnvelopeSite): string {
+  return `if the ${site.plugin}-feedback skill is available, offer to file it through it, passing this whole error; otherwise offer the user ${site.repo ? `https://github.com/${site.repo}/issues/new` : "the plugin's repo"} to report it with this error. Do either only if the user says yes`;
+}
+
+const capitalized = (s: string) => `${s[0]!.toUpperCase()}${s.slice(1)}`;
+
 /**
  * The same steps for an MCP client: tools and arguments instead of commands and flags. An MCP
  * client may have no skills, so a report goes through the Feedback skill when it has one, else
  * through the repo's new-issue page.
  */
 function mcpNextStep(kind: Kind, site: EnvelopeSite, hasAccounts: boolean): string {
-  const report = `If the ${site.plugin}-feedback skill is available, offer to file it through it, passing this whole error; otherwise offer the user ${site.repo ? `https://github.com/${site.repo}/issues/new` : "the plugin's repo"} to report it with this error. Do either only if the user says yes.`;
+  const report = `${capitalized(feedbackOffer(site))}.`;
   switch (kind) {
     case "bug":
       return `Tell the user this is a bug in the ${site.skill} MCP server. ${report}`;
@@ -124,9 +145,10 @@ export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface =
       ...(d.drifts !== undefined && { drifts: d.drifts }),
       ...(d.stack !== undefined && { stack: d.stack }),
       ...(d.accounts !== undefined && { accounts: d.accounts }),
+      ...(d.blocked !== undefined && { blocked: d.blocked }),
       version: site.version,
       os: osName(),
-      next: d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface),
+      next: d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined),
     },
   };
 }

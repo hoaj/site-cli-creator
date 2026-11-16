@@ -23,6 +23,20 @@ describe("envelope helpers", () => {
     expect(nextStep("network", site)).toContain("isn't responding");
   });
 
+  test("a bot block is network with `blocked` and its own next: tell the user, stop, a feature request only if it keeps happening (#95)", () => {
+    const f = new Failure("network", "getAccount: the site refused the request as automated traffic (bot protection: cloudflare).", { blocked: "cloudflare" });
+    const cli = errorEnvelope(f, site).error;
+    expect(cli).toMatchObject({ kind: "network", blocked: "cloudflare" });
+    expect(cli.next).toMatch(/automated traffic.*stop.*not retry.*raw calls.*every time.*acme-feedback.*feature request.*only if the user says yes/s);
+    const mcp = errorEnvelope(f, { ...site, repo: "acme/acme-plugin" }, "mcp").error;
+    expect(mcp.next).toMatch(/automated traffic.*feature request/s);
+    // One sentence per step, the consent last: never "... says yes as a feature request" (review).
+    expect(mcp.next).toEndWith("Do either only if the user says yes.");
+    expect(mcp.next).not.toContain("says yes as");
+    expect(mcp.next).not.toContain("--");
+    expect(errorEnvelope(new Failure("network", "down"), site).error).not.toHaveProperty("blocked");
+  });
+
   test("os names follow the release targets", () => {
     expect(osName("win32", "x64")).toBe("windows-x64");
     expect(osName("darwin", "arm64")).toBe("darwin-arm64");
