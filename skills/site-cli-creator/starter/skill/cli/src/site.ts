@@ -13,7 +13,7 @@ export default defineSite({
   graphqlPath: "/graphql",
   auth: "__AUTH__" as Auth,
   needsChrome: false,
-  // Whether the plugin repo's daily drift check runs this skill's read-only `check` (SPEC §10). add-skill
+  // Whether the plugin repo's daily drift check (.github/workflows/drift-check.yml) runs this skill's read-only `check`. add-skill
   // asks; false keeps the skill out of it (a site that must not see traffic from CI, a short-lived sign-in).
   dailyCheck: true,
   // When the site refuses plain fetch but answers a browser (a 403 or a challenge page where the

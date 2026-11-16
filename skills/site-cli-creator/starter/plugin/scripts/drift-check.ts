@@ -1,6 +1,6 @@
 // bun scripts/drift-check.ts [--root .] [--repo <owner/name>] [--run-url <url>] [--dry-run]
 //
-// The daily drift check (.github/workflows/drift-check.yml, SPEC §10). For every CLI skill in
+// The daily drift check (.github/workflows/drift-check.yml, site-cli-creator's SPEC §10). For every CLI skill in
 // skills/*: install the released binary with the skill's own install.sh, run its read-only
 // `check` (never --writes: the check must not touch anyone's account), and open an issue the
 // maintainer can act on:
