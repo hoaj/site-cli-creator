@@ -102,6 +102,12 @@ export type SiteConfig = {
   auth: Auth;
   needsChrome: boolean;
   /**
+   * Whether the plugin repo's daily drift check (scripts/drift-check.ts, SPEC §10) runs this skill's read-only
+   * `check`. add-skill asks and writes it; absent (a skill made before generator 0.18.0) counts as true. The CLI
+   * itself never reads it.
+   */
+  dailyCheck?: boolean;
+  /**
    * "browser" sends every Operation from a tab of Chrome open on the origin, so the site sees
    * Chrome's own TLS, headers and cookies, including those its scripts set (a bot wall's). Slower:
    * Chrome starts once per run. Leave it out (or "fetch") unless plain fetch is refused.

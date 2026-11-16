@@ -67,6 +67,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   .claude-plugin/marketplace.json           GENERATED  the repo is its own marketplace, listing the plugin at "./";
   .cursor-plugin/marketplace.json                      also .github/plugin/ and .agents/plugins/ (Codex)
   .github/workflows/ci.yml                  STARTER    PR tests and "version above main" (§9)
+  .github/workflows/drift-check.yml         STARTER    the daily read-only check of every CLI skill (§10); own repo only
   .github/workflows/release.yml             STARTER    draft release vX.Y.Z → build every skill × target, uploading to the draft → publish
   generated.json                            GENERATED  {"generatedWith", "maintainer", "pluginDir", "tagPrefix"} (§5, §13)
   skills/<plugin>-feedback/SKILL.md         GENERATED  one per plugin, written once by `new`, then owned
@@ -342,7 +343,14 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 - A read Operation it can never call, because a required variable has no `needs` entry or its constant does not fit the variable's schema, is skipped and listed in the output's `warnings`. That is a Contract gap, not Drift, so it doesn't change the exit code; the output's `ok` is false whenever `warnings` is present. `regen` warns about it too, and the generator fixes it before `check` passes.
 - With `--writes` (or `--op <write>`), it also runs `trigger(page)` headless from the profile for each **write** Operation, intercepts the write request, compares its shape and aborts it. `check` never writes. A trigger request that `site.never` forbids (§6) is aborted, whatever else would let it through, and listed in `warnings`. A write that was then not sent is still trigger Drift (the site may have changed), and its diff names the rules the page hit. A registry holding an Operation the list forbids is a bug, found before anything is called.
 - If anything drifted, it exits 3 with one entry per drifted Operation, and each can be filed through the Feedback skill.
-- **Nothing runs `check` automatically.** Users run it on demand, to answer "is the site broken or is it me?". The generator runs it, with `--writes`, in `add-task` and `fix`. A Task command validates only the Operations it calls. After Drift, nobody sweeps the other Operations: `fix` runs the full `check` anyway. The maintainer schedules no proactive runs in v1, so users surface Drift. CI doesn't run `check`: login skills need a real account, and for `auth: "none"` skills the same no-automatic-runs rule keeps v1 simple.
+- **Nothing runs `check` on a user's machine by itself.** Users run it on demand, to answer "is the site broken or is it me?". The generator runs it, with `--writes`, in `add-task` and `fix`. A Task command validates only the Operations it calls. After Drift, nobody sweeps the other Operations: `fix` runs the full `check` anyway.
+- **The daily drift check** (decided in [a plugin in its own repo gets no daily drift check](https://github.com/hoaj/site-cli-creator/issues/110)): a plugin in its own repo (`new --dir`) runs every CLI skill's read-only `check` once a day in its own CI (`drift-check.yml`, also by hand), so Drift is found before a user hits it.
+  - **How:** each skill's released binary, installed with its own `install.sh`, with `SITE_CLI_NONINTERACTIVE`, never `--writes`, so it touches no account.
+  - **Per skill, by choice:** `add-skill` asks the maintainer whether the daily check runs the skill (`--daily-check on|off`, required, written as site.ts's `dailyCheck`). Off is for a site that must not see traffic from CI or whose sign-in cannot last there; its Drift is then found only by users. A skill made before the question is on.
+  - **Drift** opens one issue per Fingerprint, titled with it and labelled `drift`, exactly as the Feedback skill files it: `fix` picks it up, and a user's report of the same Drift lands on the same issue. Like the Feedback skill, a closed issue whose fix is not released at the checked version counts, and a Drift that comes back after its fix shipped gets a new issue that links the old one.
+  - **Other failures:** a failing `check` (bug, input) opens `check: <plugin>:<skill>: …` with `bug`; an expired CI session `ci-session: <plugin>:<skill>: …` with `ci-session`, saying how to renew it; a site that does not answer is only in the run's summary.
+  - **Login skills** are checked only with a session in the repo secret `SESSION_<PLUGIN>_<SKILL>`, made by a sign-in in a state dir of its own (as for a remote server, §7, so the CI copy and the maintainer's never spend each other's refresh token). Without it the skill is skipped with a notice and the run stays green.
+  - **A shared repo of plugins** (`new --into`) gets no such workflow: it schedules its own (hoaj/plugins' `drift-check.yml`), and two would file every Drift twice.
 
 **The Feedback skill** (`skills/<plugin>-feedback/`, one per plugin, covering every CLI skill in it):
 - **When:** exit 3 (Drift), exit 1 (bug), a Task the plugin can't do (a feature request for `add-task`), a bot block that keeps happening (exit 5 with `blocked`: a feature request, "the site blocks the CLI"), or the user saying "report this". Never for other session, network or input failures.
@@ -364,7 +372,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 
 - Building the generator. This spec is where the map ends.
 - Real writes during `check`.
-- Running `check` automatically on users' machines. A repo of plugins may schedule it itself, outside the generator: hoaj/plugins runs every CLI skill's read-only `check` daily and files Drift with the Feedback skill's titles.
+- Running `check` automatically on users' machines. The daily check runs in the plugin repo's own CI (§10); a shared repo of plugins schedules its own, outside the generator, as hoaj/plugins does.
 - Rub-style inspection of the site's JS bundle.
 - Values a page's scripts compute with no call and no inline JSON in the page, and XML feeds: HTML Operations read only what the HTML answer itself holds (§6).
 - Private plugins installed without `gh`: a private repo's releases need `gh`, logged in, with read access. Public is the default (§9), accepting that a public plugin publishes a site's internal API shapes, never its values ([Generated plugins: install binaries over HTTPS without gh](https://github.com/hoaj/site-cli-creator/issues/78)).

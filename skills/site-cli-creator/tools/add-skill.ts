@@ -1,9 +1,9 @@
 #!/usr/bin/env bun
-// bun tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none
+// bun tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none --daily-check on|off
 // Scaffolds skills/<skill>/ from starter/skill (SPEC §2 add-skill).
 // STARTER_DIR overrides the Starter code location (tests only).
 
-import { existsSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseFlags, requireKebab } from "./lib/args";
 import { addSkillToManifests, MANIFESTS, readJson } from "./lib/manifests";
@@ -19,7 +19,7 @@ import {
 } from "./lib/scaffold";
 import { assertNoTokens, copyTemplate, type Layout, type Tokens } from "./lib/template";
 
-const USAGE = "bun tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none";
+const USAGE = "bun tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none --daily-check on|off";
 
 type PluginManifest = { name?: unknown; version?: unknown; repository?: unknown; description?: unknown };
 
@@ -31,11 +31,18 @@ await runTool(async () => {
       skill: { type: "string", required: true, help: "CLI skill name, kebab-case" },
       origin: { type: "string", required: true, help: "scheme + host the frontend calls, no path (https://www.example.com)" },
       auth: { type: "string", required: true, help: "login (the Tasks need the user signed in) or none" },
+      "daily-check": {
+        type: "string",
+        required: true,
+        help: "on or off: whether the plugin repo's daily drift check runs this skill's read-only check (site.ts dailyCheck); ask the maintainer",
+      },
     },
     USAGE,
   );
   const skill = requireKebab("skill", values.skill);
   if (values.auth !== "login" && values.auth !== "none") fail(`--auth must be login or none, got "${values.auth}"`);
+  const dailyCheck = values["daily-check"];
+  if (dailyCheck !== "on" && dailyCheck !== "off") fail(`--daily-check must be on or off, got "${dailyCheck}"`);
   const origin = parseOrigin(values.origin);
   const pluginDir = requireDir(resolve(values.dir), "plugin dir");
 
@@ -88,6 +95,11 @@ await runTool(async () => {
     if (!existsSync(path)) fail(`starter/skill has no ${rel}`);
     set(path, version);
   }
+  // The maintainer's answer to the daily drift check question (SPEC §10): the Starter's line says true.
+  const sitePath = join(skillDir, "cli", "src", "site.ts");
+  const siteSource = readFileSync(sitePath, "utf8");
+  if (!/^\s*dailyCheck: true,$/m.test(siteSource)) fail("starter/skill's site.ts has no `dailyCheck: true,` line");
+  writeFileSync(sitePath, siteSource.replace(/^(\s*dailyCheck: )true,$/m, `$1${dailyCheck === "on"},`));
   if (!existsSync(join(skillDir, ".gitignore"))) {
     writeFileSync(join(skillDir, ".gitignore"), "bin/\n");
     files.push(".gitignore");
@@ -101,6 +113,7 @@ await runTool(async () => {
     skill,
     origin,
     auth: values.auth,
+    dailyCheck: dailyCheck === "on",
     version,
     files: files.sort(),
     manifests,

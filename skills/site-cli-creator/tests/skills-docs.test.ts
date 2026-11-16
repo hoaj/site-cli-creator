@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.17.0, both skills exist", () => {
+  test("version 0.18.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.17.0");
+      expect(m.version).toBe("0.18.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -420,7 +420,7 @@ describe("generated SKILL.md files", () => {
       };
       const plugin = join(dir, "p");
       run([join(GEN, "tools/new.ts"), "--dir", plugin, "--plugin", "shop", "--repo", "acme/shop-plugin", "--description", "Shop things.", "--maintainer", "acme", "--no-labels", "--skip-checks"]);
-      run([join(GEN, "tools/add-skill.ts"), "--dir", plugin, "--skill", "shop", "--origin", "http://127.0.0.1:4310", "--auth", "none"]);
+      run([join(GEN, "tools/add-skill.ts"), "--dir", plugin, "--skill", "shop", "--origin", "http://127.0.0.1:4310", "--auth", "none", "--daily-check", "on"]);
       const skill = join(plugin, "skills/shop");
       symlinkSync(join(PLUGIN, "node_modules"), join(skill, "cli/node_modules"));
       const { copyExpected } = require(join(GEN, "fixtures/expected/copy.ts"));
