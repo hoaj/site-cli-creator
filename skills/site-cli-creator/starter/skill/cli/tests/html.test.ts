@@ -183,8 +183,8 @@ describe("an HTML Operation through the Client", () => {
     expect(extractHtml(page, { items: { each: "li", in: "body.home ul.x", fields: { t: ":scope" } } })).toEqual({ ok: true, value: { items: [{ t: "A" }] } });
   });
 
-  // A page in a legacy encoding is decoded as a browser decodes it (#108): the content-type's charset, else a
-  // <meta charset> or <meta http-equiv="Content-Type"> in the page, else UTF-8.
+  // An HTML Operation's page in a legacy encoding is decoded as a browser decodes it (#108): a BOM, the content-type's
+  // charset, else a <meta charset> or <meta http-equiv="Content-Type"> in the page, else UTF-8 or windows-1252.
   const city = defineOperation({
     name: "GET /by",
     effect: "read",
@@ -205,7 +205,7 @@ describe("an HTML Operation through the Client", () => {
     expect(await names(answer(latin1(page), "text/html"))).toEqual(["København", "Århus"]);
   });
 
-  test("the content-type's charset decides, then <meta charset>; an unknown label is UTF-8 (#108)", async () => {
+  test("the content-type's charset decides, then <meta charset>; an unknown label leaves it to the page (#108)", async () => {
     expect(await names(answer(latin1("<ul><li>Ærø</li></ul>"), "text/html; charset=windows-1252"))).toEqual(["Ærø"]);
     expect(await names(answer(latin1('<meta charset="ISO-8859-1"><ul><li>Ærø</li></ul>'), "text/html"))).toEqual(["Ærø"]);
     // The header wins over a page that says something else, as in a browser.
@@ -236,6 +236,27 @@ describe("an HTML Operation through the Client", () => {
     expect(decodeBody(utf8(page), "text/html")).toBe(page);
     // A single-quoted charset in the header counts.
     expect(decodeBody(l1("Ærø"), "text/html; charset='iso-8859-1'")).toBe("Ærø");
+  });
+
+  test("a JSON Operation is read as UTF-8 whatever its label says, as the frontend's fetch().json() reads it (#108, review 2)", async () => {
+    const getBy = defineOperation({ name: "GET /api/by", effect: "read", rest: { method: "GET", path: "/api/by" }, variables: z.object({}), response: z.object({ by: z.string() }) });
+    for (const type of ["text/html; charset=ISO-8859-1", "text/plain;charset=ISO-8859-1", "application/json; charset=iso-8859-1"]) {
+      const { fetch } = fakeFetch(() => new Response(new TextEncoder().encode('{"by":"Ærø"}'), { headers: { "content-type": type } }));
+      expect(await client(makeSite(), makeDeps(fetch, home.dir).deps).call(getBy, {})).toEqual({ by: "Ærø" });
+    }
+  });
+
+  test("a UTF-8 page with one stray byte stays UTF-8; only a page whose non-ASCII bytes are mostly invalid UTF-8 is windows-1252 (#108, review 2)", () => {
+    const utf8 = new TextEncoder().encode("<p>København, Århus, Ærø og Ølstykke</p>");
+    const stray = Uint8Array.from([...utf8.subarray(0, 3), 0xff, ...utf8.subarray(3)]);
+    expect(decodeBody(stray, "text/html")).toContain("København, Århus, Ærø og Ølstykke");
+  });
+
+  test("only a meta's charset attribute, or an http-equiv Content-Type's content, names the page's charset (#108, review 2)", () => {
+    const page = '<meta name="description" content="Notes on charset=iso-8859-1 pages"><meta charset="utf-8"><p>Ærø</p>';
+    expect(decodeBody(new TextEncoder().encode(page), "text/html")).toBe(page);
+    const latin = '<meta content="text/html; charset=iso-8859-1" http-equiv="Content-Type"><p>Ærø</p>';
+    expect(decodeBody(latin1(latin), "text/html")).toBe(latin);
   });
 
   test("a page that now answers JSON is Drift (not_html), never a bug", async () => {

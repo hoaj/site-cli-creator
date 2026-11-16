@@ -93,8 +93,11 @@ export type ClientOptions = {
 type Refusals = { count: number; last?: NeverSent };
 
 export type Request = { method: string; url: string; headers: Record<string, string>; body?: string };
-/** `text` and `contentType`: the raw answer, for an HTML Operation (an HTML text that happens to parse as JSON stays HTML). */
-type Response_ = { status: number; body: unknown; text?: string; contentType?: string; loginRedirect?: boolean; offsite?: boolean };
+/**
+ * `text` (UTF-8, as fetch reads it), `bytes` and `contentType`: the raw answer, for an HTML Operation, which decodes
+ * its page by the page's own charset (`decodeBody`) and reads an HTML text that happens to parse as JSON as HTML.
+ */
+type Response_ = { status: number; body: unknown; text?: string; bytes?: Uint8Array; contentType?: string; loginRedirect?: boolean; offsite?: boolean };
 
 /** What a browser asks for when it loads a page. */
 const HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
@@ -196,7 +199,18 @@ function metaCharset(bytes: Uint8Array): string | undefined {
     .decode(bytes.subarray(0, 2048))
     .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
     .replace(/<script\b[\s\S]*?(?:<\/script\s*>|$)/gi, "");
-  const label = /<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1]?.toLowerCase();
+  // Only a meta's charset attribute, or the content of an http-equiv="Content-Type" meta, names it (a description
+  // that mentions "charset=" does not); the first meta that names one wins, as in a browser's prescan.
+  let label: string | undefined;
+  for (const tag of head.match(/<meta\b[^>]*>/gi) ?? []) {
+    const attrs = new Map<string, string>();
+    for (const m of tag.matchAll(/([\w-]+)\s*=\s*("[^"]*"|'[^']*'|[^\s"'>]+)/g)) attrs.set(m[1]!.toLowerCase(), m[2]!.replace(/^["']|["']$/g, ""));
+    const named = attrs.get("charset") ?? (attrs.get("http-equiv")?.toLowerCase() === "content-type" ? /charset\s*=\s*["']?\s*([\w.:-]+)/i.exec(attrs.get("content") ?? "")?.[1] : undefined);
+    if (named) {
+      label = named.trim().toLowerCase();
+      break;
+    }
+  }
   if (!label) return undefined;
   if (/^utf-16(?:be|le)?$/.test(label)) return "utf-8";
   if (label === "x-user-defined") return "windows-1252";
@@ -204,7 +218,7 @@ function metaCharset(bytes: Uint8Array): string | undefined {
 }
 
 /**
- * An answer's text, decoded in the order a browser uses (#108):
+ * An HTML Operation's page, decoded in the order a browser uses (#108); other answers are read as UTF-8, as fetch does:
  * 1. a byte-order mark (UTF-8, UTF-16), which also is not part of the text;
  * 2. JSON is UTF-8 by its standard, whatever its label says, as fetch's .json() reads it;
  * 3. the content-type's `charset`, when TextDecoder knows it;
@@ -222,20 +236,46 @@ export function decodeBody(bytes: Uint8Array, contentType: string | null | undef
   if (!/html/.test(type) && type !== "") return new TextDecoder("utf-8").decode(bytes);
   const fromMeta = decoderFor(metaCharset(bytes));
   if (fromMeta) return fromMeta.decode(bytes);
-  try {
-    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return new TextDecoder("windows-1252").decode(bytes);
-  }
+  return new TextDecoder(mostlyUtf8(bytes) ? "utf-8" : "windows-1252").decode(bytes);
 }
 
-async function readBody(r: Response): Promise<{ body: unknown; text: string }> {
-  const text = decodeBody(new Uint8Array(await r.arrayBuffer()), r.headers.get("content-type"));
-  if (!text.trim()) return { body: undefined, text };
+/**
+ * Whether bytes with no declared charset are UTF-8: no byte beyond ASCII, or at least as many valid multi-byte
+ * sequences as invalid bytes. One stray byte in a UTF-8 page keeps it UTF-8; a Latin-1 page, whose `æ` and `ø` are
+ * single bytes no valid sequence starts with, is windows-1252.
+ */
+function mostlyUtf8(bytes: Uint8Array): boolean {
+  let valid = 0;
+  let invalid = 0;
+  for (let i = 0; i < bytes.length; ) {
+    const b = bytes[i]!;
+    if (b < 0x80) {
+      i++;
+      continue;
+    }
+    const length = b >= 0xc2 && b <= 0xdf ? 2 : b >= 0xe0 && b <= 0xef ? 3 : b >= 0xf0 && b <= 0xf4 ? 4 : 0;
+    let ok = length > 0 && i + length <= bytes.length;
+    for (let k = 1; ok && k < length; k++) ok = (bytes[i + k]! & 0xc0) === 0x80;
+    if (ok) {
+      valid++;
+      i += length;
+    } else {
+      invalid++;
+      i++;
+    }
+  }
+  return invalid === 0 || valid >= invalid;
+}
+
+/** The answer as fetch reads it (UTF-8, so a JSON API reads as its frontend's fetch().json() does), and its bytes. */
+async function readBody(r: Response): Promise<{ body: unknown; text: string; bytes: Uint8Array }> {
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  const text = new TextDecoder("utf-8").decode(bytes);
+  if (!text.trim()) return { body: undefined, text, bytes };
   try {
-    return { body: JSON.parse(text), text };
+    return { body: JSON.parse(text), text, bytes };
   } catch {
-    return { body: text, text };
+    return { body: text, text, bytes };
   }
 }
 
@@ -782,8 +822,8 @@ export class Client {
       const r = await this.deps.fetch(url, { method, headers: req.headers, body, redirect: "manual" });
       const location = r.headers.get("location");
       if (r.status < 300 || r.status >= 400 || !location) {
-        const { body, text } = await readBody(r);
-        return { status: r.status, body, text, contentType: r.headers.get("content-type") ?? undefined };
+        const { body, text, bytes } = await readBody(r);
+        return { status: r.status, body, text, bytes, contentType: r.headers.get("content-type") ?? undefined };
       }
       const next = new URL(location, url);
       if (this.site.auth === "login" && isLoginHost(this.site, next.toString())) return { status: r.status, body: undefined, loginRedirect: true };
@@ -845,11 +885,13 @@ export class Client {
       if (typeof found !== "string") return this.fail(op, "html", "from", "not_html", "the answer no longer carries HTML where html.from looks");
       return found;
     }
-    // An answer that is not JSON by its content-type is the text it is (`3` is a fragment, not a number).
+    // An answer that is not JSON by its content-type is the text it is (`3` is a fragment, not a number), decoded by the
+    // page's own charset (#108).
     const jsonType = /json/i.test(res.contentType ?? "");
-    if (res.text !== undefined && !jsonType && (res.contentType !== undefined || typeof res.body === "string")) return res.text;
+    const page = () => (res.bytes ? decodeBody(res.bytes, res.contentType) : (res.text ?? ""));
+    if (res.text !== undefined && !jsonType && (res.contentType !== undefined || typeof res.body === "string")) return page();
     if (res.body === undefined) return ""; // an empty answer (a fragment endpoint with no results): an empty fragment
-    if (typeof res.body === "string") return res.body;
+    if (typeof res.body === "string") return page();
     return this.fail(op, "html", "", "not_html", "the site no longer answers this request with HTML (JSON)");
   }
 
