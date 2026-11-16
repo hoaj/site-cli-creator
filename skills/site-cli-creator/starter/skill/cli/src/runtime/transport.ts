@@ -8,9 +8,10 @@
 import type { BrowserContext, Page, Response as PlaywrightResponse } from "playwright-core";
 import { Failure } from "./envelope";
 import { closeContext, launchInMemory } from "./login";
-import { effectiveOrigin, isTest, type Env, type Fetch, type Site } from "./site";
+import { effectiveOrigin, isTest, onSiteDomain, siteDomain, type Env, type Fetch, type Site } from "./site";
 
-export type BrowserTransport = { fetch: Fetch; close(): Promise<void> };
+/** `cookies()`: what Chrome holds for the origin, by name, the tab opened first (SiteCtx.cookies). */
+export type BrowserTransport = { fetch: Fetch; cookies(cookieHeader?: string): Promise<Record<string, string>>; close(): Promise<void> };
 
 const PAGE_TIMEOUT_MS = 30_000;
 /** How long the front page may keep loading after `load` (a challenge that reloads, late scripts). */
@@ -148,7 +149,26 @@ export function browserTransport(site: Site, options: { env: Env; note(message: 
     }
   };
 
-  return { fetch, close };
+  const cookies = async (cookieHeader?: string): Promise<Record<string, string>> => {
+    try {
+      opening ??= open(cookieHeader); // with the session's cookies, as an Operation's first request would
+      await opening;
+    } catch (e) {
+      await close();
+      if (e instanceof Failure) throw e; // Chrome is missing
+      // The site did not load in Chrome: the hook cannot read its cookies, so it stops as a fetch would.
+      throw new Failure("network", `${origin} isn't responding (${transportError("page").message}).`);
+    }
+    if (!context) return {};
+    // Every cookie on the site's domain, whatever its Path (an XSRF cookie on /api) or host; on a
+    // name two share, the one the origin's root is sent wins.
+    const domain = siteDomain(origin);
+    const all = (await context.cookies().catch(() => [])).filter((c) => onSiteDomain(domain, c.domain.replace(/^\./, "")));
+    const root = await context.cookies(`${origin}/`).catch(() => []);
+    return Object.fromEntries([...all, ...root].map((c) => [c.name, c.value]));
+  };
+
+  return { fetch, cookies, close };
 }
 
 /** A body the page can send: text, or a form (URLSearchParams, typed as fetch would). */

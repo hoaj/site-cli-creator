@@ -1,6 +1,6 @@
 ---
 name: __PLUGIN__-feedback
-description: Files a problem with the __PLUGIN__ plugin as a GitHub issue on __REPO__, after the user approves the text. Use when a __PLUGIN__ CLI exits 3 (drift) or 1 (bug), when the plugin cannot do a Task the user needs (a feature request), or when the user says "report this" about it. Not for exit 2 (input), 4 (session) or 5 (network).
+description: Files a problem with the __PLUGIN__ plugin as a GitHub issue on __REPO__, after the user approves the text. Use when a __PLUGIN__ CLI exits 3 (drift) or 1 (bug), when the plugin cannot do a Task the user needs or keeps being refused as automated traffic (exit 5 with `blocked`; a feature request), or when the user says "report this" about it. Not for exit 2 (input), 4 (session) or other exit 5 (network).
 ---
 <!-- version: 0.1.0 -->
 
@@ -16,9 +16,10 @@ A CLI skill in this plugin hit Drift or a bug, or it lacks a Task the user needs
 | exit 3, `kind: "drift"` | drift | the envelope's `fingerprint` (one per entry in `drifts` for `check`) |
 | exit 1, `kind: "bug"` | bug | the envelope's `fingerprint` (the bug key) |
 | the plugin has no command for what the user asked | feature | none |
+| exit 5 with `blocked`, every time the user tries (the site refuses the CLI as automated traffic) | feature | none; the Task is "the site blocks the CLI", and the body names the envelope's `blocked` and the command |
 | the user says "report this" about the plugin | whichever fits | as above |
 
-Exit 2 (input), 4 (session) and 5 (network) never come here: the CLI skill's own table handles them.
+Exit 2 (input), 4 (session) and 5 (network) without `blocked` never come here: the CLI skill's own table handles them.
 
 ## Input
 
