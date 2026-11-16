@@ -170,25 +170,63 @@ function formBody(name: string, value: unknown): string {
   return form.toString();
 }
 
+const BOMS: [number[], string][] = [
+  [[0xef, 0xbb, 0xbf], "utf-8"],
+  [[0xfe, 0xff], "utf-16be"],
+  [[0xff, 0xfe], "utf-16le"],
+];
+
+/** A decoder for `label`, or null when TextDecoder does not know it. */
+function decoderFor(label: string | undefined): TextDecoder | null {
+  if (!label) return null;
+  try {
+    return new TextDecoder(label);
+  } catch {
+    return null;
+  }
+}
+
 /**
- * The charset a browser decodes an answer with (#108): the content-type's `charset`, else, for HTML, a
- * `<meta charset>` or `<meta http-equiv="Content-Type" content="…charset=…">` in its first 2 KB; else UTF-8
- * (JSON is UTF-8 by its standard). A label TextDecoder does not know is UTF-8 too.
+ * The charset an HTML page's own `<meta charset>` or `<meta http-equiv="Content-Type">` names in its first 2 KB,
+ * leaving out comments and scripts (a `charset=` there is not the page's). A meta naming UTF-16 means UTF-8 (a page
+ * in UTF-16 could not have been read this far as ASCII), and x-user-defined means windows-1252, as the HTML standard says.
+ */
+function metaCharset(bytes: Uint8Array): string | undefined {
+  const head = new TextDecoder("windows-1252")
+    .decode(bytes.subarray(0, 2048))
+    .replace(/<!--[\s\S]*?(?:-->|$)/g, "")
+    .replace(/<script\b[\s\S]*?(?:<\/script\s*>|$)/gi, "");
+  const label = /<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1]?.toLowerCase();
+  if (!label) return undefined;
+  if (/^utf-16(?:be|le)?$/.test(label)) return "utf-8";
+  if (label === "x-user-defined") return "windows-1252";
+  return label;
+}
+
+/**
+ * An answer's text, decoded in the order a browser uses (#108):
+ * 1. a byte-order mark (UTF-8, UTF-16), which also is not part of the text;
+ * 2. JSON is UTF-8 by its standard, whatever its label says, as fetch's .json() reads it;
+ * 3. the content-type's `charset`, when TextDecoder knows it;
+ * 4. for HTML (or no content-type), the page's own meta (`metaCharset`);
+ * 5. for HTML with no declaration at all, UTF-8 when the bytes are valid UTF-8, else windows-1252, as Chrome
+ *    settles on for a Western page; anything else is UTF-8.
  */
 export function decodeBody(bytes: Uint8Array, contentType: string | null | undefined): string {
-  const declared = /charset\s*=\s*"?([\w.:-]+)/i.exec(contentType ?? "")?.[1];
-  const html = /html/i.test(contentType ?? "") || !contentType;
-  const head = !declared && html ? new TextDecoder("latin1").decode(bytes.subarray(0, 2048)) : "";
-  const meta = /<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1];
-  for (const label of [declared, meta]) {
-    if (!label) continue;
-    try {
-      return new TextDecoder(label).decode(bytes);
-    } catch {
-      break; // an unknown label: UTF-8, as below
-    }
+  for (const [bom, encoding] of BOMS) if (bom.every((b, i) => bytes[i] === b)) return new TextDecoder(encoding).decode(bytes);
+  const type = (contentType ?? "").toLowerCase();
+  if (/json/.test(type)) return new TextDecoder("utf-8").decode(bytes);
+  const declared = /charset\s*=\s*["']?\s*([\w.:-]+)/.exec(type)?.[1];
+  const fromHeader = decoderFor(declared);
+  if (fromHeader) return fromHeader.decode(bytes);
+  if (!/html/.test(type) && type !== "") return new TextDecoder("utf-8").decode(bytes);
+  const fromMeta = decoderFor(metaCharset(bytes));
+  if (fromMeta) return fromMeta.decode(bytes);
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return new TextDecoder("windows-1252").decode(bytes);
   }
-  return new TextDecoder("utf-8").decode(bytes);
 }
 
 async function readBody(r: Response): Promise<{ body: unknown; text: string }> {
