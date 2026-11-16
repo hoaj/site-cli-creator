@@ -1,8 +1,10 @@
 #!/usr/bin/env bun
 // bun tools/regen.ts --skill-dir <dir>
 // Rewrites cli/src/registry.ts, sets needsChrome in site.ts, and rewrites the
-// SKILL.md command table from the CLI's own `help` (SPEC §3 step 5). Only
-// commands/ files that default-export a command are registered.
+// SKILL.md command table from the CLI's own `help` (SPEC §3 step 5) and its
+// site.never list under "When NOT to use". Only commands/ files that
+// default-export a command are registered. A Contract whose request site.never
+// forbids is refused before anything is written (SPEC §6).
 
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -19,11 +21,15 @@ import {
   moduleFiles,
   registrySource,
   replaceCommandsBlock,
+  replaceNeverBlock,
   setNeedsChrome,
   SHARED_CODE_HOME,
 } from "./lib/regen";
 import { listsWithoutContainer, noContainerWarning } from "../starter/skill/cli/src/runtime/html";
 import { neverCheckable, neverCheckedWarning } from "../starter/skill/cli/src/runtime/needs";
+import { neverList, neverListProblems, neverProblems } from "../starter/skill/cli/src/runtime/never";
+import type { Operation } from "../starter/skill/cli/src/runtime/operation";
+import type { Site } from "../starter/skill/cli/src/runtime/site";
 import { parseJson } from "./lib/shape";
 
 const USAGE = "bun tools/regen.ts --skill-dir <dir>";
@@ -100,16 +106,19 @@ await runTool(async () => {
   const warnings: string[] = [];
   const operationFiles = moduleFiles(paths.operations);
   const commandFiles = await commandModules(paths.commands, moduleFiles(paths.commands), warnings);
-  writeFileSync(paths.registry, registrySource(operationFiles, commandFiles));
-  progress(`registry.ts: ${operationFiles.length} operations, ${commandFiles.length} commands`);
 
   const site = await defaultExport(paths.site);
   if (site.auth !== "login" && site.auth !== "none") fail(`site.ts auth must be "login" or "none"`);
+  // The never list is the generator's rule as well as the runtime's: a malformed one stops regen.
+  const neverBad = neverListProblems(site.never);
+  if (neverBad.length) fail(`site.ts: ${neverBad.join("; ")}`);
   const operations: { name: string; effect: string }[] = [];
+  const forbidden: string[] = [];
   for (const file of operationFiles) {
     const op = await defaultExport(join(paths.operations, file));
     if (op.effect !== "read" && op.effect !== "write") fail(`operations/${file}: effect must be "read" or "write"`);
     operations.push({ name: String(op.name), effect: op.effect });
+    for (const problem of neverProblems(site as unknown as Site, [op as unknown as Operation])) forbidden.push(`operations/${file}: ${problem}`);
     // The same rule and text as the Starter's `check` (runtime/needs.ts).
     const never = op.effect === "read" ? neverCheckable(op) : undefined;
     if (never) warnings.push(neverCheckedWarning(String(op.name), never));
@@ -118,6 +127,21 @@ await runTool(async () => {
       for (const path of listsWithoutContainer(html.fields as Parameters<typeof listsWithoutContainer>[0])) warnings.push(noContainerWarning(String(op.name), path));
     }
   }
+  if (forbidden.length) {
+    fail(
+      `site.ts's never list forbids these Operations: ${forbidden.join("; ")}. Delete each such Operation and the commands that use it (the CLI never sends these requests), then run regen again. Nothing was written.`,
+    );
+  }
+  writeFileSync(paths.registry, registrySource(operationFiles, commandFiles));
+  progress(`registry.ts: ${operationFiles.length} operations, ${commandFiles.length} commands`);
+  const never = neverList(site as unknown as Site);
+  const skillMd = readFileSync(paths.skillMd, "utf8");
+  const withNever = replaceNeverBlock(skillMd, never);
+  if (withNever === undefined && never.length > 0) {
+    warnings.push(
+      "SKILL.md has no <!-- never:start --> and <!-- never:end --> markers, so site.never is not listed under ## When NOT to use: add the two lines at the end of that section and run regen again.",
+    );
+  }
   for (const w of warnings) progress(`warning: ${w}`);
   const needsChrome = site.auth === "login" || site.transport === "browser" || operations.some((o) => o.effect === "write");
   writeFileSync(paths.site, setNeedsChrome(readFileSync(paths.site, "utf8"), needsChrome));
@@ -125,7 +149,7 @@ await runTool(async () => {
   const commands = helpCommands(runHelp(paths.cli, paths.main));
   const skill = typeof site.skill === "string" ? site.skill : basename(skillDir);
   const table = commandsTable(skill, commands);
-  writeFileSync(paths.skillMd, replaceCommandsBlock(readFileSync(paths.skillMd, "utf8"), table));
+  writeFileSync(paths.skillMd, replaceCommandsBlock(withNever ?? skillMd, table));
 
   return {
     skillDir,
@@ -133,6 +157,7 @@ await runTool(async () => {
     operations,
     commands: commands.map((c) => ({ name: c.name, write: c.write })),
     needsChrome,
+    ...(never.length ? { never: never.map((n) => n.request) } : {}),
     skillMd: paths.skillMd,
     ...(warnings.length ? { warnings } : {}),
   };

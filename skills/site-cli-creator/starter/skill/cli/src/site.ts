@@ -35,5 +35,9 @@ export default defineSite({
   // Non-GET requests the pages send that change no data (token refresh, post-login), so
   // check --writes lets them through; every other non-GET is aborted while a trigger runs.
   readOnlyRequests: [],
+  // Requests this CLI never sends, whatever a command or --confirm says: what the maintainer decided
+  // it must never do (place an order, pay, delete the account). { method?, path, why } or
+  // { graphql, why }; see the generator's reference/contracts.md.
+  never: [],
   accounts: async () => [],
 });
