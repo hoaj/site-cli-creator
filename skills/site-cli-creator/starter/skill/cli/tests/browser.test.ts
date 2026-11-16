@@ -5,6 +5,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { z } from "zod";
 import { chromeWriteChecker } from "../src/runtime/check";
+import type { DriftEntry } from "../src/runtime/envelope";
 import { chromeLaunchOptions, findChrome } from "../src/runtime/chrome";
 import { chromeLogin } from "../src/runtime/login";
 import { defineOperation } from "../src/runtime/operation";
@@ -86,6 +87,21 @@ const server = Bun.serve({
         navigator.serviceWorker.register("/sw.js").then(() => navigator.serviceWorker.ready)
           .then(() => (navigator.serviceWorker.controller ? ready() : navigator.serviceWorker.addEventListener("controllerchange", ready)));
         document.getElementById("save").onclick = () => fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});`);
+    // A Save that first sends requests site.never forbids (#101), then the write.
+    if (url.pathname === "/never-orders")
+      return page(`
+        document.getElementById("save").onclick = async () => {
+          await fetch("/api/order/place", { method: "POST", headers: { "content-type": "application/json" }, body: "{}" }).catch(() => {});
+          await fetch("/graphql", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ operationName: "PlaceOrder", query: "query PlaceOrder { x }" }) }).catch(() => {});
+          fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});
+        };`);
+    // A Save that sends the write only after a request site.never forbids answers.
+    if (url.pathname === "/never-gate")
+      return page(`
+        document.getElementById("save").onclick = () =>
+          fetch("/api/order/place", { method: "POST", body: "{}" })
+            .then(() => fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }))
+            .catch(() => {});`);
     // A form post (fetch with URLSearchParams sends application/x-www-form-urlencoded).
     if (url.pathname === "/form-orders")
       return page(`
@@ -206,11 +222,11 @@ describe.skipIf(skip)("Chrome", () => {
     const checker = chromeWriteChecker(s, { SITE_CLI_HOME: home.dir });
 
     expect((await checker([ok], [])).get(ok.name)).toBeNull();
-    const drift = (await checker([changed], [])).get(ok.name)!;
+    const drift = (await checker([changed], [])).get(ok.name) as DriftEntry;
     expect(drift.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:request:name:invalid_type");
     expect(JSON.stringify(drift)).not.toContain("New");
     // The trigger Drift names the step that failed: the locator it waited for (Contract code, no user data).
-    const gone = (await checker([missing], [])).get(ok.name)!;
+    const gone = (await checker([missing], [])).get(ok.name) as DriftEntry;
     expect(gone.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#gone'):TimeoutError");
     expect(gone.diff).toEqual([{ path: "locator('#gone')", code: "TimeoutError" }]);
 
@@ -236,7 +252,7 @@ describe.skipIf(skip)("Chrome", () => {
     expect((await checker([op], [orderList])).get(op.name)).toBeNull();
     expect(received).toContain("POST /graphql");
     // Without the read declared, the persisted query might write, so it is aborted and the page never renders.
-    expect((await checker([op], [])).get(op.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#save'):TimeoutError");
+    expect(((await checker([op], [])).get(op.name) as DriftEntry).fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#save'):TimeoutError");
     expect(received.filter((r) => r.startsWith("PATCH"))).toEqual([]);
   }, 90_000);
 
@@ -257,9 +273,75 @@ describe.skipIf(skip)("Chrome", () => {
     // Without readOnlyRequests the post-login POST is aborted, the page never shows the button: trigger drift.
     received.length = 0;
     const undeclared = makeSite({ origin: server.url.origin, auth: "login", needsChrome: true, login });
-    expect((await chromeWriteChecker(undeclared, env)([op], [])).get(op.name)!.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#save'):TimeoutError");
+    expect(((await chromeWriteChecker(undeclared, env)([op], [])).get(op.name) as DriftEntry).fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#save'):TimeoutError");
     expect(received).not.toContain("POST /api/session/post-login");
     expect(received.filter((r) => r.startsWith("PATCH") || r === "POST /api/track")).toEqual([]);
+  }, 90_000);
+
+  test("check --writes aborts and reports a trigger's request site.never forbids, although readOnlyRequests and a query would let it through (#101)", async () => {
+    received.length = 0;
+    graphqlReceived.length = 0;
+    const s = makeSite({
+      origin: server.url.origin,
+      readOnlyRequests: ["/api/order/place"],
+      never: [
+        { method: "POST", path: "/api/order/place*", why: "Placing an order: the user always pays" },
+        { graphql: "PlaceOrder", why: "Placing an order: the user always pays" },
+      ],
+    });
+    const op = rename(async (p) => {
+      await p.goto("/never-orders");
+      await p.click("#save");
+    });
+    const warnings: string[] = [];
+    const out = await chromeWriteChecker(s, { SITE_CLI_HOME: home.dir })([op], [], [op], (m) => warnings.push(m));
+    expect(out.get(op.name)).toBeNull();
+    expect(warnings).toEqual([
+      "PATCH /api/orders/:orderId's trigger sent a request site.never forbids (POST /api/order/place*: Placing an order: the user always pays); it was aborted. Change the trigger so it stops before that request.",
+      "PATCH /api/orders/:orderId's trigger sent a request site.never forbids (GraphQL PlaceOrder: Placing an order: the user always pays); it was aborted. Change the trigger so it stops before that request.",
+    ]);
+    expect(received).not.toContain("POST /api/order/place");
+    expect(graphqlReceived).not.toContain("PlaceOrder");
+    expect(received.filter((r) => r.startsWith("PATCH"))).toEqual([]);
+  }, 90_000);
+
+  test("check --writes: a trigger that reaches only a site.never request is trigger Drift naming the rule, with its warning (review 2, review 4)", async () => {
+    received.length = 0;
+    const s = makeSite({ origin: server.url.origin, never: [{ method: "POST", path: "/api/order/place*", why: "Placing an order" }] });
+    const op = rename(async (p) => {
+      await p.goto("/never-gate");
+      await p.click("#save");
+    });
+    const warnings: string[] = [];
+    const out = await chromeWriteChecker(s, { SITE_CLI_HOME: home.dir })([op], [], [op], (m) => warnings.push(m));
+    const drift = out.get(op.name) as DriftEntry;
+    expect(drift.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger::no_request");
+    expect(drift.diff).toEqual([
+      { path: "", code: "no_request" },
+      { path: "POST /api/order/place*", code: "site_never" },
+    ]);
+    expect(warnings).toEqual([
+      "PATCH /api/orders/:orderId's trigger sent a request site.never forbids (POST /api/order/place*: Placing an order); it was aborted. Change the trigger so it stops before that request.",
+    ]);
+    expect(received.filter((r) => r === "POST /api/order/place" || r.startsWith("PATCH"))).toEqual([]);
+  }, 90_000);
+
+  test("check --writes: a forbidden request on load does not hide trigger Drift (review 3)", async () => {
+    const s = makeSite({ origin: server.url.origin, never: [{ method: "POST", path: "/api/order/place*", why: "Placing an order" }] });
+    const op = rename(async (p) => {
+      await p.goto("/never-gate");
+      await p.evaluate(() => fetch("/api/order/place", { method: "POST", body: "{}" }).catch(() => {}));
+      await p.click("#gone", { timeout: 500 });
+    });
+    const warnings: string[] = [];
+    const out = await chromeWriteChecker(s, { SITE_CLI_HOME: home.dir })([op], [], [op], (m) => warnings.push(m));
+    const drift = out.get(op.name) as DriftEntry;
+    expect(drift.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:trigger:locator('#gone'):TimeoutError");
+    expect(drift.diff).toEqual([
+      { path: "locator('#gone')", code: "TimeoutError" },
+      { path: "POST /api/order/place*", code: "site_never" },
+    ]);
+    expect(warnings).toHaveLength(1);
   }, 90_000);
 
   test("check --writes reads a form post by its content-type: a form Contract passes, a JSON one drifts", async () => {
@@ -272,7 +354,7 @@ describe.skipIf(skip)("Chrome", () => {
     const form = defineOperation({ ...rename(trigger), rest: { method: "PATCH", path: "/api/orders/:orderId", bodyType: "form", body: (v) => ({ name: v.name }) } });
     const checker = chromeWriteChecker(s, { SITE_CLI_HOME: home.dir });
     expect((await checker([form], [])).get(form.name)).toBeNull();
-    const asJson = (await checker([rename(trigger)], [])).get(form.name)!;
+    const asJson = (await checker([rename(trigger)], [])).get(form.name) as DriftEntry;
     expect(asJson.fingerprint).toBe("acme:shop:PATCH /api/orders/{orderId}:request::body_type");
     expect(asJson.diff).toEqual([{ path: "", code: "body_type", expected: "json", received: "form" }]);
     expect(received.filter((r) => r.startsWith("PATCH"))).toEqual([]);

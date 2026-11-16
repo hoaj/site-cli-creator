@@ -2,6 +2,7 @@
 //
 // | condition                                              | kind                                 |
 // | variables fail Zod                                     | input, nothing sent                  |
+// | site.never forbids the request (any hop, any hook)     | bug (NeverSent), nothing sent        |
 // | transport error, 5xx, 429 (after retries)              | network                              |
 // | GraphQL data null + server error code (after retries)  | network (INTERNAL*, SERVICE_UNAVAILABLE) |
 // | login: 401/403/redirect to a login host                | renew (login.refresh), else sign in again; retry; still → drift auth |
@@ -23,9 +24,10 @@ import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
 import { extractHtml, type HtmlContract } from "./html";
 import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
+import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
-import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, onSiteDomain, siteDomain, type Env, type Fetch, type RefreshConfig, type Site, type SiteCtx } from "./site";
+import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, onSiteDomain, siteDomain, type Env, type Fetch, type NeverRule, type RefreshConfig, type Site, type SiteCtx } from "./site";
 
 /** `fromProfile`: seed the sign-in from another Chrome profile's cookies (`login --from-profile`). */
 export type SignInOptions = {
@@ -85,7 +87,12 @@ export type ClientOptions = {
    * arguments instead of CLI flags.
    */
   surface?: Surface;
+  /** The refusals site.never made, shared with the Clients siteCtx makes for hooks (internal). */
+  refusals?: Refusals;
 };
+
+/** How many requests site.never refused in this run, and the last one: a hook that catches one still fails with it. */
+type Refusals = { count: number; last?: NeverSent };
 
 export type Request = { method: string; url: string; headers: Record<string, string>; body?: string };
 /**
@@ -97,11 +104,18 @@ type Response_ = { status: number; body: unknown; text?: string; contentType?: s
 /** What a browser asks for when it loads a page. */
 const HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
-export function buildRequest(op: Operation, vars: unknown, base: { origin: string; graphqlPath?: string; headers: Record<string, string> }): Request {
+/** The headers an Operation's request goes with: accept, then the session's, then what the Operation fixes. */
+function requestHeaders(op: Operation, session: Record<string, string>, contentType?: string): Record<string, string> {
   const headers: Record<string, string> = { accept: "application/json" };
-  for (const [k, v] of Object.entries(base.headers)) headers[k.toLowerCase()] = v;
+  for (const [k, v] of Object.entries(session)) headers[k.toLowerCase()] = v;
   // An HTML Operation asks for the page; one whose HTML comes inside JSON (html.from) asks for JSON.
   if (op.html && !op.html.from) headers.accept = HTML_ACCEPT;
+  if (contentType !== undefined) headers["content-type"] = contentType;
+  return headers;
+}
+
+export function buildRequest(op: Operation, vars: unknown, base: { origin: string; graphqlPath?: string; headers: Record<string, string> }): Request {
+  const headers = requestHeaders(op, base.headers);
   if (op.graphql !== undefined) {
     if (!base.graphqlPath) throw new ContractError(`site.graphqlPath is not set, but ${op.name} is a GraphQL Operation`);
     headers["content-type"] = "application/json";
@@ -137,6 +151,11 @@ export function buildRequest(op: Operation, vars: unknown, base: { origin: strin
     }
   }
   return { method: op.rest.method, url: url.toString(), headers, body };
+}
+
+/** A request built without the session's headers, with them added as buildRequest adds them (requestHeaders). */
+function withSessionHeaders(op: Operation, req: Request, session: Record<string, string>): Request {
+  return { ...req, headers: requestHeaders(op, session, req.headers["content-type"]) };
 }
 
 /** A form-urlencoded body from a flat object: arrays repeat their key, undefined and null are left out. */
@@ -245,10 +264,16 @@ export class Client {
   private persisted: boolean;
   /** The account list fetched in this run, labels included. Only the ids are saved (SPEC §7). */
   private fetchedAccounts?: Account[];
+  private readonly refusals: Refusals;
 
   constructor(site: Site, deps: Deps, options: ClientOptions = {}) {
     this.site = site;
-    this.deps = deps;
+    this.refusals = options.refusals ?? { count: 0 };
+    // Every request this Client makes goes through one site.never guard: Operations (each redirect
+    // hop of fetchFollowing), the hooks' ctx.fetch and login.refresh.renew's plain fetch.
+    const note = (e: NeverSent) => this.noteRefusal(e);
+    const origin = effectiveOrigin(site, deps.env);
+    this.deps = { ...deps, fetch: guardFetch(site, deps.fetch, note, origin), plainFetch: guardFetch(site, deps.plainFetch ?? deps.fetch, note, origin) };
     this.confirm = options.confirm ?? false;
     this.session = options.session ?? null;
     this.persisted = !options.session;
@@ -280,9 +305,30 @@ export class Client {
     return this.session;
   }
 
+  private noteRefusal(e: NeverSent): void {
+    this.refusals.count++;
+    this.refusals.last = e;
+  }
+
+  /**
+   * Runs a site hook or a command's run: a request site.never refused while it ran fails it, even
+   * when the code caught that refusal (a fallback must never hide what the user has to do).
+   */
+  async withRefusals<T>(run: () => Promise<T>): Promise<T> {
+    const before = this.refusals.count;
+    let out: T;
+    try {
+      out = await run();
+    } catch (e) {
+      throw this.refusals.count > before ? this.refusals.last! : e;
+    }
+    if (this.refusals.count > before) throw this.refusals.last!;
+    return out;
+  }
+
   /** A context for site hooks. `live`: calls go through this client (with reauth); otherwise through a fixed session. */
   siteCtx(session: Session, live: boolean, base?: Fetch): SiteCtx {
-    const caller = live ? this : new Client(this.site, this.deps, { session, reauth: false, confirm: true });
+    const caller = live ? this : new Client(this.site, this.deps, { session, reauth: false, confirm: true, refusals: this.refusals });
     // ctx.cookies(): what this hook's ctx.fetch answers set, over Chrome's jar under transport
     // "browser" (asked only when the hook uses the Operations' fetch, never for renew's plain one).
     const set = new Map<string, string>();
@@ -327,7 +373,8 @@ export class Client {
     const draft: Session = { headers, ids: {}, ...(signedIn.refresh && { refresh: signedIn.refresh }), savedAt: new Date().toISOString() };
     let raw: Record<string, unknown> | undefined;
     try {
-      raw = this.site.login?.postLogin ? await this.site.login.postLogin(this.siteCtx(draft, false)) : {};
+      const postLogin = this.site.login?.postLogin;
+      raw = postLogin ? await this.withRefusals(() => postLogin(this.siteCtx(draft, false))) : {};
     } finally {
       await this.deps.release?.();
     }
@@ -391,6 +438,9 @@ export class Client {
     if (refresh.from !== undefined && Object.keys(current.refresh ?? {}).length === 0) return false; // nothing kept to trade
     this.deps.note(`renewing the sign-in to ${this.site.origin} with its refresh token`);
     let renewed: Awaited<ReturnType<typeof refresh.renew>>;
+    // A refusal is remembered even when renew catches it: nothing left, so the record stays.
+    const before = this.refusals.count;
+    const refused = () => (this.refusals.count > before ? this.refusals.last : undefined);
     const plain = this.deps.plainFetch ?? this.deps.fetch;
     for (let attempt = 0; ; attempt++) {
       // Plain fetch, never transport "browser"'s Chrome; bounded, and cancelled when time runs out,
@@ -401,6 +451,14 @@ export class Client {
         renewed = await withTimeout(refresh.renew(this.siteCtx(current, false, fetch)), RENEW_TIMEOUT_MS, () => abort.abort());
         break;
       } catch (e) {
+        if (e instanceof NeverSent) throw e; // refused, uncaught: nothing left, the record stays
+        const caught = refused();
+        if (caught) {
+          // renew caught a refusal, then failed otherwise: what else it sent may have rotated the token.
+          // A bot wall's refusal never took the token either, so it stays then too.
+          if (!neverSent(e) && !(e instanceof Failure && e.details.blocked)) this.dropRefresh(current);
+          throw caught;
+        }
         // A bot wall refused the token request: the site never took the token, which stays, and
         // Chrome signs in instead (a real browser may pass where a plain request was refused).
         if (e instanceof Failure && e.details.blocked) {
@@ -425,6 +483,12 @@ export class Client {
         this.dropRefresh(current);
         return false;
       }
+    }
+    const refusal = refused();
+    if (refusal) {
+      // renew caught a refusal: a renewal it still made is kept (the old token may be spent), then the bug is reported.
+      if (renewed?.headers) await this.adopt({ ...current, headers: renewed.headers, ...(renewed.refresh && { refresh: renewed.refresh }), savedAt: new Date().toISOString() });
+      throw refusal;
     }
     if (!renewed?.headers) {
       // Refused: perhaps because another run spent the token meanwhile. Its session wins, and a
@@ -517,7 +581,7 @@ export class Client {
     // transport "browser": a fresh tab, so ctx.cookies() is what the site sets now, not the old jar.
     await this.deps.release?.();
     const empty: Session = { headers: {}, ids: {}, savedAt: new Date().toISOString() };
-    const r = await this.site.bootstrap!(this.siteCtx(empty, false));
+    const r = await this.withRefusals(() => this.site.bootstrap!(this.siteCtx(empty, false)));
     this.session = saveSession(this.dir, { headers: r.headers ?? {}, ids: r.ids ?? {} });
     this.persisted = true;
     this.fresh = true;
@@ -568,7 +632,8 @@ export class Client {
     let res: Response_;
     try {
       res = await this.fetchFollowing({ method: "GET", url: url.toString(), headers });
-    } catch {
+    } catch (e) {
+      if (e instanceof NeverSent) throw e; // site.never forbids the probe
       return undefined; // network trouble: the Operation itself reports it
     }
     if (res.blocked) return undefined; // a bot wall, not a sign-out: the Operation reports it
@@ -612,13 +677,21 @@ export class Client {
       const issues = v.error.issues.map((i) => `${fieldPath(i.path, op.variables) || "(variables)"}: ${i.message}`).join("; ");
       throw new Failure("input", `${op.name}: ${issues}`);
     }
+    // Before the dry run too: a request the CLI never sends is no dry run to confirm.
+    const built = this.prebuild(op, v.data);
+    const never = forbiddenOperation(this.site, op) ?? built?.rule;
+    if (never) {
+      const refused = new NeverSent(never, op.name);
+      this.noteRefusal(refused);
+      throw refused;
+    }
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
     await this.ensureSession();
     await this.probeSession();
-    let res = await this.send(op, v.data);
+    let res = await this.send(op, v.data, built?.req);
     // Renew, then sign in (or rerun bootstrap): each at most once a run, so this ends. A bot wall
     // is no sign-out: no sign-in gets past it, so none is spent on it.
-    while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data);
+    while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data, built?.req);
     if (res.blocked) throw this.blockedFailure(op, res.blocked);
     if (this.isAuthFailure(op, res)) {
       // Renew met a bot wall and no Chrome sign-in followed (the Setup page's check): the wall, not Drift.
@@ -636,6 +709,21 @@ export class Client {
   }) as Call;
 
   /**
+   * With a never list: the request this Operation sends with these variables (built once, the
+   * session's headers added by send) and the rule it breaks, if any. Undefined without a list, or
+   * when it cannot be built: its dry run or send() reports that, as without a list.
+   */
+  private prebuild(op: Operation, vars: unknown): { req: Request; rule?: NeverRule } | undefined {
+    if (!Array.isArray(this.site.never) || this.site.never.length === 0) return undefined;
+    try {
+      const req = buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: {} });
+      return { req, rule: forbiddenRequest(this.site, req) };
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
    * The accounts under this login. A list fetched earlier is reused from session.json, ids only:
    * labels come from the site and may name a person, so they live only in this run's memory.
    * `refresh` fetches it again (an --account the cached list lacks, or labels to show the user).
@@ -645,7 +733,8 @@ export class Client {
     const s = await this.ensureSession();
     if (this.fetchedAccounts) return this.fetchedAccounts;
     if (!refresh && s.accounts) return s.accounts.map((a) => ({ id: String(a.id) }));
-    const raw = await this.site.accounts(this.siteCtx(s, true));
+    const accounts = this.site.accounts;
+    const raw = await this.withRefusals(() => accounts(this.siteCtx(s, true)));
     const list: Account[] = raw.map((a) => (typeof a === "string" ? { id: a } : { id: String(a.id), ...(a.label ? { label: String(a.label) } : {}) }));
     this.fetchedAccounts = list;
     // The accounts go onto session.json as it is now when it is the same login: another run may have
@@ -686,9 +775,9 @@ export class Client {
     return op.graphql !== undefined && gqlErrors(res.body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
   }
 
-  private async send(op: Operation, vars: unknown): Promise<Response_> {
+  private async send(op: Operation, vars: unknown, prebuilt?: Request): Promise<Response_> {
     const session = this.session ?? (await this.ensureSession());
-    const req = buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: session.headers });
+    const req = prebuilt ? withSessionHeaders(op, prebuilt, session.headers) : buildRequest(op, vars, { origin: this.origin, graphqlPath: this.site.graphqlPath, headers: session.headers });
     const delays = this.deps.retryDelays;
     for (let attempt = 0; ; attempt++) {
       let res: Response_ | undefined;
@@ -696,7 +785,7 @@ export class Client {
       try {
         res = await this.fetchFollowing(req);
       } catch (e) {
-        if (e instanceof Failure) throw e; // transport "browser" with no Chrome to send from
+        if (e instanceof Failure || e instanceof NeverSent) throw e; // no Chrome to send from (transport "browser"), or site.never
         transport = (e as { code?: string })?.code || (e as Error)?.name || "error";
       }
       if (res?.blocked) return res; // a bot wall answers the same way again: call() reports it
@@ -719,6 +808,7 @@ export class Client {
   private async fetchFollowing(req: Request): Promise<Response_> {
     let { url, method, body } = req;
     for (let hop = 0; hop < 6; hop++) {
+      // deps.fetch is site.never's guard: every hop is checked, a redirect may lead to a forbidden path.
       const r = await this.deps.fetch(url, { method, headers: req.headers, body, redirect: "manual" });
       const location = r.headers.get("location");
       if (r.status < 300 || r.status >= 400 || !location) {

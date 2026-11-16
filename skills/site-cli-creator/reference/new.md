@@ -46,7 +46,7 @@ One error is not a stop: when the files were written but a label could not be cr
 
 ## 4. First CLI skill
 
-Run [add-skill.md](add-skill.md) without its version bump and PR steps: everything ships as `0.1.0`.
+Run [add-skill.md](add-skill.md) without its version bump and PR steps: everything ships as `0.1.0`. Its step 1 asks the maintainer what the plugin must never do (its `never` list).
 
 ## 5. Push
 

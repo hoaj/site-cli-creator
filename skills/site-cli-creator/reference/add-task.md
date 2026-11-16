@@ -14,6 +14,8 @@ When the user can't name the Tasks yet, or wants several read Tasks from one wal
 
 **"The site blocks the CLI"** (a feature request filed after exit 5 with `blocked` in the envelope) asks for no new Task: the site refuses the CLI's requests as automated traffic. Reproduce it with `SITE_CLI_NONINTERACTIVE=1 bun src/main.ts check` (the same exit 5 and `blocked`), set `transport: "browser"` ([contracts.md](contracts.md#sitets)), run `check` again until it exits 0, then bump and open the PR with `Fixes #<n>` as in step 6. Still blocked: the wall is out of scope; close the issue saying so.
 
+If the Task is something `site.ts`'s `never` list forbids (placing an order, paying: [contracts.md](contracts.md#sitets)), it can never be a command, however it is asked for. Tell the user. For an issue, close it with a comment that names the entry's `why` and says the user does it on the site; neither `--confirm` nor a new Contract changes that. Only the maintainer may change the list itself.
+
 If the issue asks for a Task the maintainer's account cannot perform (a product they lack, a role they don't hold), there can be no Capture and no Contract. Close the issue:
 
 ```sh
@@ -70,6 +72,8 @@ Drop everything else: analytics, feature flags, page chrome, prefetches, page lo
 
 **A site whose data arrives in no JSON call** (a server-rendered page, HTML fragments, HTML inside JSON): keep the Operation marked `html: true` whose HTML holds the Task's output, often the page load itself. It becomes an HTML Operation that picks its values with CSS selectors ([contracts.md](contracts.md#html-operations)). When a JSON call carries the same data, keep that call and drop the page load.
 
+Drop every Operation that `site.ts`'s `never` list matches, as a side effect or not. If the Task cannot be done without one, it is no Task (step 1). `regen` refuses such a Contract anyway.
+
 Operations marked `loginFlow: true` in `index.json` are sign-in steps (a token request, a post-login call, a login host's pages). They are never Operations: they belong in `site.ts`, as `login.tokenRequest` or inside `postLogin` ([contracts.md](contracts.md#sitets)). When the page sends such a POST (or any other non-GET that changes no data) before the Task's data appears, list it in `readOnlyRequests` so `check --writes` lets it through. An Operation marked `effectUnknown: true` is a persisted query: decide its `effect` from what it does. Reuse an existing `operations/<file>.ts` when the Operation is already there; widen its `response` only by the fields this Task reads.
 
 ### Next.js sites
@@ -119,7 +123,7 @@ cd <skill>/cli && bun src/main.ts check --writes
 
 Show the user each read command's output shape against the card, not its values. Run a write with `--confirm` only when the user asks for it and agrees to the change on the site. For a command that takes a user-supplied id, also run it with a made-up id: it must exit 2 (input), not 3.
 
-`check` passes when it exits 0 with `"ok": true`: every Operation `ok` and no `warnings`. `"ok": false` with exit 0 means `warnings` lists an Operation `check` could not cover (a read Operation `regen.ts` or `check` calls never checked needs a `needs` entry for each required variable that fits its schema, a constant `{ value }` included: [contracts.md](contracts.md#needs-the-chain)). On exit 3, the Contract is wrong for this account: fix the field (usually nullability) and rerun.
+`check` passes when it exits 0 with `"ok": true`: every Operation `ok` and no `warnings`. A warning that a `trigger` sent a request `site.never` forbids means the trigger goes too far (a click past the Task's own write): end it before that request. When the write was then never sent, `check` reports trigger Drift with that rule in its diff (`site_never`): fix the trigger if it is what went too far, else treat it as Drift. `"ok": false` with exit 0 means `warnings` lists an Operation `check` could not cover (a read Operation `regen.ts` or `check` calls never checked needs a `needs` entry for each required variable that fits its schema, a constant `{ value }` included: [contracts.md](contracts.md#needs-the-chain)). On exit 3, the Contract is wrong for this account: fix the field (usually nullability) and rerun.
 
 ## 6. Bump and PR
 

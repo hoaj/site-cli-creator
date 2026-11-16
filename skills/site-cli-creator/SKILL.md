@@ -57,6 +57,7 @@ Every mode that adds or changes a Task runs this loop. Steps are in [reference/a
 - Keep only the Operations whose fields feed the output, plus the chain that supplies their variables. Drop writes that fire as a side effect of a read Task (YouSee's `createQuote`). The full Capture stays archived in `captures/`.
 - A Contract's `response` covers only the fields the command reads. Decide for each field whether it may be `null` or missing: one Capture is too narrow to tell, so ask yourself whether another customer could lack it.
 - `effect` is declared from what the Operation does to the user's data, never from its method. A GraphQL mutation that only reads is `read`.
+- `site.ts`'s `never` list holds what the maintainer decided the plugin must never send (placing an order, paying). No Task, Contract or command may match it, and `regen` refuses one that does ([reference/contracts.md](reference/contracts.md#sitets)).
 - GraphQL Operations carry a trimmed query: only the fields the Contract reads, under the frontend's `operationName`.
 - Personal data is never stored or logged: `postLogin` returns chain-root ids only, and nothing writes values into captures, issues, PR text or commit messages. Shapes and type names only.
 - Command names are `<noun> <verb>` in English (`subscription show`, `bill list`), one per Task; the file is `commands/<noun>-<verb>.ts`.
