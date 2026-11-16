@@ -52,7 +52,7 @@ The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator'
 | `__OWNER__` | GitHub owner of the plugin repo | `hoaj` |
 | `__DESCRIPTION__` | one-line plugin description | |
 | `__MAINTAINER__` | GitHub login of the maintainer | `hoaj` |
-| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.16.0` |
+| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.16.1` |
 | `__ORIGIN__` | the site origin | `https://www.yousee.dk` |
 | `__AUTH__` | `login` or `none` | |
 | `__PREFIX__` | what release tags, workflow names and workflow files start with: empty in a plugin's own repo, `<plugin>-` in a shared repo | `yousee-` |
@@ -196,6 +196,7 @@ REST `path` params are written `:name` and filled from variables. `body(vars)` i
 - `HtmlFields`: `Record<name, HtmlField>`; `HtmlField` is a CSS selector string (the first match's text: whitespace collapsed, `<br>` and block boundaries a space, nested scripts and styles left out; null when none), `{ css, attr?, all?, json? }` (an attribute, every match, or the text parsed as JSON), or `{ each, in?, fields }` (a list; `in` is its container). `css: ":scope"` is the list item itself.
 - `parseHtml(html)`: parse5 with the htmlparser2 tree adapter (domhandler nodes, which css-select and domutils read), so the tree is the one a browser builds (an open `<p>` ends at the next `<li>`); a text with `<!doctype html` or `<html` in its first 4 KB (after output a server printed first, a PHP notice) is a document, anything else a fragment, so a fragment's `<tr>` stays a row. `<template>` elements are removed (their content is inert), and text leaves out `<noscript>`; block elements (`p`, `li`, `section`, `article`, `td`, `header`, … `BREAKS`) are a space between texts. `tools/lib/html-outline.ts` uses it too.
 - `extractHtml(html, fields)` → `{ok: true, value}` or `{ok: false, path, code: "no_match" | "invalid_json"}`; a selector css-select cannot parse is a `ContractError` (a bug).
+- **Decoding** (`decodeBody()`, call.ts `readBody`, #108): every answer is read as bytes and decoded by the content-type's `charset`, else, for HTML (or no content-type), a `<meta charset>` or `<meta http-equiv="Content-Type">` in its first 2 KB, else UTF-8; a label `TextDecoder` does not know is UTF-8. So an ISO-8859-1 page keeps æ, ø and å.
 - `Client.classify()` runs it after the status checks (`pickHtml()`): without `from` the answer is read as its text unless its content-type is JSON (so an HTML `3` is a fragment; `Response_` keeps `text` and `contentType`), else the body must be a string; an empty answer is the empty fragment `""`, with `from` the parsed JSON goes through `from`; the picked object is what `response` parses, so a missing field is `zod` Drift at its path (`notices[].title`). `buildRequest` sends `accept: text/html,…` for an `html` Operation without `from`, over the session's own `accept`.
 - `listsWithoutContainer(fields)` / `noContainerWarning(op, path)`: the lists with no `in`, which `regen.ts` warns about.
 
@@ -314,7 +315,7 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
   - **Headers:** those Chrome owns (`cookie`, `user-agent`, `origin`, `referer`, `host`, `content-length`, `sec-*`, `proxy-*` …) are dropped.
   - **Responses:** Playwright's `response` events (resource type `fetch`) are kept by URL while the request runs, waiting up to 2 s for a late one.
     - An `opaqueredirect` answer becomes a `Response` with that 3xx response's status and `Location`.
-    - Any other answer becomes a `Response` with the page's status and text body (no body for 101/204/205/304) and Chrome's headers for its final URL (`headersArray()`, `Set-Cookie` included), or the page's when Chrome reported none.
+    - Any other answer becomes a `Response` with the page's status and its bytes (base64 from the page, since its `Response.text()` is always UTF-8; no body for 101/204/205/304) and Chrome's headers for its final URL (`headersArray()`, `Set-Cookie` included), or the page's when Chrome reported none.
 - **Errors:** each throws an error with `code: "browser-<reason>"`, which the Client treats as a transport error (retries, then network).
   - **The request fails in the page, or a redirect comes with no event:** that error, nothing more.
   - **The front page does not load, or the tab is gone:** also close Chrome, so the next request opens it again.

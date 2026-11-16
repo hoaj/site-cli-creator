@@ -41,6 +41,11 @@ const server = Bun.serve({
       return new Response(`<!doctype html><script>document.cookie = "js_ok=1; path=/";</script>`, { headers: { "content-type": "text/html", "set-cookie": `csrf=${token}; Path=/` } });
     }
     if (url.pathname === "/account") return Response.redirect(`${loginHost.url.origin}/login`, 302);
+    // An ISO-8859-1 page whose only charset is in the page (#108): its bytes, not UTF-8 text.
+    if (url.pathname === "/latin1") {
+      const page = '<html><head><meta http-equiv="Content-Type" content="text/html;charset=iso-8859-1"/></head><body><ul><li>København</li><li>Århus</li></ul></body></html>';
+      return new Response(Uint8Array.from([...page].map((c) => c.charCodeAt(0))), { headers: { "content-type": "text/html" } });
+    }
     if (!jsCookie) return new Response("blocked", { status: 403 });
     if (url.pathname === "/api/csrf") {
       const cookie = /(?:^|;\s*)csrf=([^;]+)/.exec(req.headers.get("cookie") ?? "")?.[1];
@@ -82,6 +87,15 @@ const renameOrder = defineOperation({
 const getMe = defineOperation({ name: "GET /api/me", effect: "read", rest: { method: "GET", path: "/api/me" }, variables: z.object({}), response: z.object({ id: z.string() }) });
 const getPrivate = defineOperation({ name: "GET /api/private", effect: "read", rest: { method: "GET", path: "/api/private" }, variables: z.object({}), response: z.object({ id: z.string() }) });
 
+const getTowns = defineOperation({
+  name: "GET /latin1",
+  effect: "read",
+  rest: { method: "GET", path: "/latin1" },
+  html: { fields: { towns: { css: "li", all: true } } },
+  variables: z.object({}),
+  response: z.object({ towns: z.array(z.string()) }),
+});
+
 const show = (name: string, op: ReturnType<typeof getOrder>) =>
   defineCommand({ name, summary: name, args: z.object({}), uses: [op], run: async (_a, ctx) => ctx.call(op, {}) });
 const ops = { current: getOrder("/api/orders/7"), old: getOrder("/api/old-orders/7"), csrf: getOrder("/api/csrf"), counter: getOrder("/api/counter"), sid: getOrder("/api/sid"), ok: getOrder("/api/ok") };
@@ -95,6 +109,7 @@ const commands = [
   defineCommand({ name: "order rename", summary: "rename", args: z.object({ name: z.string() }), uses: [renameOrder], run: async ({ name }, ctx) => ctx.call(renameOrder, { name }) }),
   defineCommand({ name: "me show", summary: "me", args: z.object({}), uses: [getMe], run: async (_a, ctx) => ctx.call(getMe, {}) }),
   defineCommand({ name: "private show", summary: "private", args: z.object({}), uses: [getPrivate], run: async (_a, ctx) => ctx.call(getPrivate, {}) }),
+  defineCommand({ name: "town list", summary: "towns", args: z.object({}), uses: [getTowns], run: async (_a, ctx) => ctx.call(getTowns, {}) }),
 ];
 
 let n = 0;
@@ -102,7 +117,7 @@ function app(overrides: Parameters<typeof makeSite>[0]): App {
   const site = makeSite({ skill: `shop${++n}`, origin: server.url.origin, needsChrome: true, ...overrides });
   return {
     site,
-    operations: [...Object.values(ops), renameOrder, getMe, getPrivate],
+    operations: [...Object.values(ops), renameOrder, getMe, getPrivate, getTowns],
     commands,
     deps: { env: { SITE_CLI_HOME: `${home.dir}/${site.skill}`, SITE_CLI_TEST: "1", SITE_CLI_NONINTERACTIVE: "1" }, retryDelays: [], note: () => {} },
   };
@@ -120,6 +135,14 @@ describe.skipIf(skip)("transport browser", () => {
     const { output, code } = await run(["order", "show"], app({ transport: "browser" }));
     expect({ output, code }).toEqual({ output: { id: "7", total: 5 }, code: 0 });
     expect(received.find((r) => r.path === "/api/orders/7")).toMatchObject({ method: "GET", jsCookie: true });
+  }, 60_000);
+
+  test("an ISO-8859-1 page read from the tab keeps æ, ø and å: its bytes are decoded by its charset (#108)", async () => {
+    // The page's Response.text() is always UTF-8, so the tab hands over the bytes instead.
+    for (const transport of [undefined, "browser"] as const) {
+      const { output, code } = await run(["town", "list"], app(transport ? { transport } : {}));
+      expect({ output, code, transport }).toEqual({ output: { towns: ["København", "Århus"] }, code: 0, transport });
+    }
   }, 60_000);
 
   test("a same-origin redirect is followed, as with fetch", async () => {

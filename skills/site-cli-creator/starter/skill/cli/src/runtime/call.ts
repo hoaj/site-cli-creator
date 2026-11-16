@@ -170,8 +170,29 @@ function formBody(name: string, value: unknown): string {
   return form.toString();
 }
 
+/**
+ * The charset a browser decodes an answer with (#108): the content-type's `charset`, else, for HTML, a
+ * `<meta charset>` or `<meta http-equiv="Content-Type" content="…charset=…">` in its first 2 KB; else UTF-8
+ * (JSON is UTF-8 by its standard). A label TextDecoder does not know is UTF-8 too.
+ */
+export function decodeBody(bytes: Uint8Array, contentType: string | null | undefined): string {
+  const declared = /charset\s*=\s*"?([\w.:-]+)/i.exec(contentType ?? "")?.[1];
+  const html = /html/i.test(contentType ?? "") || !contentType;
+  const head = !declared && html ? new TextDecoder("latin1").decode(bytes.subarray(0, 2048)) : "";
+  const meta = /<meta\b[^>]*?\bcharset\s*=\s*["']?\s*([\w.:-]+)/i.exec(head)?.[1];
+  for (const label of [declared, meta]) {
+    if (!label) continue;
+    try {
+      return new TextDecoder(label).decode(bytes);
+    } catch {
+      break; // an unknown label: UTF-8, as below
+    }
+  }
+  return new TextDecoder("utf-8").decode(bytes);
+}
+
 async function readBody(r: Response): Promise<{ body: unknown; text: string }> {
-  const text = await r.text();
+  const text = decodeBody(new Uint8Array(await r.arrayBuffer()), r.headers.get("content-type"));
   if (!text.trim()) return { body: undefined, text };
   try {
     return { body: JSON.parse(text), text };
