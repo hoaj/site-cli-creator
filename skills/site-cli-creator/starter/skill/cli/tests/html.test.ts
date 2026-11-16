@@ -183,6 +183,38 @@ describe("an HTML Operation through the Client", () => {
     expect(extractHtml(page, { items: { each: "li", in: "body.home ul.x", fields: { t: ":scope" } } })).toEqual({ ok: true, value: { items: [{ t: "A" }] } });
   });
 
+  // A page in a legacy encoding is decoded as a browser decodes it (#108): the content-type's charset, else a
+  // <meta charset> or <meta http-equiv="Content-Type"> in the page, else UTF-8.
+  const city = defineOperation({
+    name: "GET /by",
+    effect: "read",
+    rest: { method: "GET", path: "/by" },
+    html: { fields: { names: { css: "li", all: true } } },
+    variables: z.object({}),
+    response: z.object({ names: z.array(z.string()) }),
+  });
+  const latin1 = (text: string) => Uint8Array.from([...text].map((c) => c.charCodeAt(0)));
+  const answer = (bytes: Uint8Array<ArrayBuffer>, type: string) => () => new Response(bytes, { headers: { "content-type": type } });
+  const names = async (handler: () => Response) => {
+    const { fetch } = fakeFetch(handler);
+    return ((await client(makeSite(), makeDeps(fetch, home.dir).deps).call(city, {})) as { names: string[] }).names;
+  };
+
+  test("an ISO-8859-1 page whose only charset is a <meta http-equiv> keeps æ, ø and å (#108)", async () => {
+    const page = '<html><head><meta http-equiv="Content-Type" content="text/html;charset=iso-8859-1"/></head><body><ul><li>København</li><li>Århus</li></ul></body></html>';
+    expect(await names(answer(latin1(page), "text/html"))).toEqual(["København", "Århus"]);
+  });
+
+  test("the content-type's charset decides, then <meta charset>; an unknown label is UTF-8 (#108)", async () => {
+    expect(await names(answer(latin1("<ul><li>Ærø</li></ul>"), "text/html; charset=windows-1252"))).toEqual(["Ærø"]);
+    expect(await names(answer(latin1('<meta charset="ISO-8859-1"><ul><li>Ærø</li></ul>'), "text/html"))).toEqual(["Ærø"]);
+    // The header wins over a page that says something else, as in a browser.
+    const utf8 = new TextEncoder().encode('<meta charset="iso-8859-1"><ul><li>Ærø</li></ul>');
+    expect(await names(answer(utf8, "text/html; charset=utf-8"))).toEqual(["Ærø"]);
+    expect(await names(answer(new TextEncoder().encode("<ul><li>Ærø</li></ul>"), "text/html; charset=not-a-charset"))).toEqual(["Ærø"]);
+    expect(await names(answer(new TextEncoder().encode("<ul><li>Ærø</li></ul>"), "text/html"))).toEqual(["Ærø"]);
+  });
+
   test("a page that now answers JSON is Drift (not_html), never a bug", async () => {
     const { fetch } = fakeFetch(() => new Response(JSON.stringify({ events: [] }), { headers: { "content-type": "application/json" } }));
     const f = await failure(client(makeSite(), makeDeps(fetch, home.dir).deps).call(listEvents, { categories: [] }));
