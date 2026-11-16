@@ -45,7 +45,7 @@ function makeFakeStarter(root: string) {
   write(join(root, "skill", "cli", "package.json"), JSON.stringify({ name: "__PLUGIN__-__SKILL__-cli", version: "9.9.9" }, null, 2));
   write(
     join(root, "skill", "cli", "src", "site.ts"),
-    'export default {\n  plugin: "__PLUGIN__",\n  skill: "__SKILL__",\n  repo: "__REPO__",\n  version: "9.9.9",\n  generatedWith: "__GENERATOR_VERSION__",\n  origin: "__ORIGIN__",\n  auth: "__AUTH__",\n  needsChrome: false,\n};\n',
+    'export default {\n  plugin: "__PLUGIN__",\n  skill: "__SKILL__",\n  repo: "__REPO__",\n  version: "9.9.9",\n  generatedWith: "__GENERATOR_VERSION__",\n  origin: "__ORIGIN__",\n  auth: "__AUTH__",\n  needsChrome: false,\n  dailyCheck: true,\n};\n',
   );
   write(join(root, "skill", "cli", "src", "main.ts"), "// __SKILL__ main\n");
   write(join(root, "skill", "cli", "src", "operations", ".gitkeep"), "");
@@ -294,9 +294,9 @@ describe("add-skill.ts", () => {
   }, HOOK_TIMEOUT_MS);
 
   test("copies starter/skill, fills placeholders and version pins, lists the skill", () => {
-    const r = run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-web", "--origin", "https://www.shop.example/some/page", "--auth", "login"]);
+    const r = run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-web", "--origin", "https://www.shop.example/some/page", "--auth", "login", "--daily-check", "on"]);
     expect(r.code).toBe(0);
-    expect(r.out).toMatchObject({ plugin: "shop", skill: "shop-web", origin: "https://www.shop.example", auth: "login", version: "0.1.0" });
+    expect(r.out).toMatchObject({ plugin: "shop", skill: "shop-web", origin: "https://www.shop.example", auth: "login", dailyCheck: true, version: "0.1.0" });
     expect(r.out.manifests.sort()).toEqual([".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"]);
 
     const skill = join(plugin, "skills", "shop-web");
@@ -308,6 +308,7 @@ describe("add-skill.ts", () => {
     expect(site).toContain(`generatedWith: "${generatorVersion()}"`);
     expect(site).toContain('origin: "https://www.shop.example"');
     expect(site).toContain('auth: "login"');
+    expect(site).toContain("dailyCheck: true,");
     expect(readFileSync(join(skill, "SKILL.md"), "utf8")).toContain("<!-- version: 0.1.0 -->");
     expect(readJson(join(skill, "cli/package.json"))).toEqual({ name: "shop-shop-web-cli", version: "0.1.0" });
     expect(statSync(join(skill, "install.sh")).mode & 0o111).not.toBe(0);
@@ -325,7 +326,7 @@ describe("add-skill.ts", () => {
     const before = readFileSync(generated, "utf8");
     writeFileSync(generated, JSON.stringify({ generatedWith: "0.0.9", maintainer: "alice" }));
     try {
-      const r = run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-old", "--origin", "https://old.shop.example", "--auth", "none"]);
+      const r = run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-old", "--origin", "https://old.shop.example", "--auth", "none", "--daily-check", "on"]);
       expect(r.code).toBe(0);
       expect(readFileSync(join(plugin, "skills/shop-old/cli/src/site.ts"), "utf8")).toContain('generatedWith: "0.0.9"');
       expect(r.out.next).toStartWith(`bun ${join(SKILL_ROOT, "tools", "capture.ts")} --skill-dir `);
@@ -335,8 +336,15 @@ describe("add-skill.ts", () => {
     }
   });
 
+  test("--daily-check off keeps the skill out of the daily drift check: site.ts says dailyCheck: false (#110)", () => {
+    const off = run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-quiet", "--origin", "https://www.shop.example", "--auth", "none", "--daily-check", "off"]);
+    expect(off.code).toBe(0);
+    expect(off.out.dailyCheck).toBe(false);
+    expect(readFileSync(join(plugin, "skills/shop-quiet/cli/src/site.ts"), "utf8")).toContain("dailyCheck: false,");
+  });
+
   test("--help prints usage and every flag's meaning, exit 0", () => {
-    for (const [tool, flags] of [[NEW, ["--dir", "--into", "--plugin", "--repo", "--description", "--maintainer", "--no-labels", "--skip-checks"]], [ADD_SKILL, ["--dir", "--skill", "--origin", "--auth"]]] as const) {
+    for (const [tool, flags] of [[NEW, ["--dir", "--into", "--plugin", "--repo", "--description", "--maintainer", "--no-labels", "--skip-checks"]], [ADD_SKILL, ["--dir", "--skill", "--origin", "--auth", "--daily-check"]]] as const) {
       const r = run(tool, ["--help"]);
       expect(r.code).toBe(0);
       expect(Object.keys(r.out.flags)).toEqual([...flags]);
@@ -347,7 +355,7 @@ describe("add-skill.ts", () => {
   test("takes the version from the plugin manifest", () => {
     const manifest = join(plugin, ".claude-plugin/plugin.json");
     writeFileSync(manifest, JSON.stringify({ ...readJson(manifest), version: "0.4.2" }));
-    expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-api", "--origin", "http://127.0.0.1:8080", "--auth", "none"]).code).toBe(0);
+    expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "shop-api", "--origin", "http://127.0.0.1:8080", "--auth", "none", "--daily-check", "on"]).code).toBe(0);
     const site = readFileSync(join(plugin, "skills/shop-api/cli/src/site.ts"), "utf8");
     expect(site).toContain('version: "0.4.2"');
     expect(site).toContain('origin: "http://127.0.0.1:8080"');
@@ -355,13 +363,15 @@ describe("add-skill.ts", () => {
   });
 
   test("refuses bad input and existing skills", () => {
-    const base = ["--dir", plugin, "--origin", "https://www.shop.example", "--auth", "none"];
+    const base = ["--dir", plugin, "--origin", "https://www.shop.example", "--auth", "none", "--daily-check", "on"];
     expect(run(ADD_SKILL, [...base, "--skill", "shop-web"]).out.error.message).toContain("already exists");
     expect(run(ADD_SKILL, [...base, "--skill", "shop-feedback"]).out.error.message).toContain("Feedback skill");
     expect(run(ADD_SKILL, [...base, "--skill", "shop-deploy"]).out.error.message).toContain("Deploy skill");
-    expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "https://a.example", "--auth", "maybe"]).out.error.message).toContain("login or none");
-    expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "not a url", "--auth", "none"]).out.error.message).toContain("--origin");
-    expect(run(ADD_SKILL, ["--dir", join(work, "nowhere"), "--skill", "x", "--origin", "https://a.example", "--auth", "none"]).code).toBe(1);
+    expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "https://a.example", "--auth", "none", "--daily-check", "maybe"]).out.error.message).toContain("--daily-check must be on or off");
+    expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "https://a.example", "--auth", "none"]).code).not.toBe(0);
+    expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "https://a.example", "--auth", "maybe", "--daily-check", "on"]).out.error.message).toContain("login or none");
+    expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "not a url", "--auth", "none", "--daily-check", "on"]).out.error.message).toContain("--origin");
+    expect(run(ADD_SKILL, ["--dir", join(work, "nowhere"), "--skill", "x", "--origin", "https://a.example", "--auth", "none", "--daily-check", "on"]).code).toBe(1);
   });
 });
 
@@ -375,7 +385,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     const env = { STARTER_DIR: REAL_STARTER };
     const created = run(NEW, newArgs(dir, ["--no-labels"]), env);
     expect(created.code).toBe(0);
-    const added = run(ADD_SKILL, ["--dir", dir, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "login"], env);
+    const added = run(ADD_SKILL, ["--dir", dir, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "login", "--daily-check", "on"], env);
     expect(added.code).toBe(0);
     for (const f of [
       ".claude-plugin/plugin.json",
@@ -384,6 +394,9 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
       ".github/plugin/plugin.json",
       ".github/workflows/release.yml",
       ".github/workflows/ci.yml",
+      ".github/workflows/drift-check.yml",
+      "scripts/drift-check.ts",
+      "tests/drift-check.test.ts",
       "package.json",
       "scripts/bump.ts",
       "scripts/version-check.ts",
@@ -409,6 +422,16 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
       expect(existsSync(join(dir, f)), f).toBe(true);
     }
     expect(existsSync(join(dir, "skills/shop/railway.json"))).toBe(false);
+    // The daily drift check (#110): scheduled, runs the script, and gives drift and bug new.ts's own colours and texts.
+    const driftCheck = readFileSync(join(dir, ".github/workflows/drift-check.yml"), "utf8");
+    expect(driftCheck).toMatch(/schedule:\n\s+- cron: "17 5 \* \* \*"/);
+    expect(driftCheck).toContain("run: bun scripts/drift-check.ts --repo \"$GITHUB_REPOSITORY\"");
+    const newSource = readFileSync(NEW, "utf8");
+    for (const name of ["drift", "bug"]) {
+      const label = new RegExp(`\\{ name: "${name}", color: "(\\w+)", description: "([^"]+)" \\}`).exec(newSource)!;
+      expect(driftCheck, name).toContain(`gh label create ${name} --force --color ${label[1]} --description "${label[2]}"`);
+    }
+    expect(readFileSync(join(dir, "README.md"), "utf8")).toContain("gh secret set SESSION_<PLUGIN>_<SKILL> --repo acme/shop-plugin");
     expect(findTokens(dir)).toEqual([]);
     expect(readFileSync(join(dir, "skills/shop/Dockerfile"), "utf8")).toContain("/out/shop");
     const deploy = readFileSync(join(dir, "skills/shop-deploy/SKILL.md"), "utf8");
@@ -447,7 +470,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     for (const auth of ["none", "login"] as const) {
       const skill = `shop-${auth}`;
       const origin = "http://127.0.0.1:9";
-      expect(run(ADD_SKILL, ["--dir", dir, "--skill", skill, "--origin", origin, "--auth", auth], env).code).toBe(0);
+      expect(run(ADD_SKILL, ["--dir", dir, "--skill", skill, "--origin", origin, "--auth", auth, "--daily-check", "on"], env).code).toBe(0);
       const cli = join(dir, "skills", skill, "cli");
       copyExpected(auth, join(cli, "src"), { plugin: "shop", skill, repo: "acme/shop-plugin", generatorVersion: generatorVersion(), origin });
       const install = sh([process.execPath, "install"], cli);
@@ -524,6 +547,11 @@ describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", ()
     expect(claude.repository).toBe("https://github.com/acme/plugins");
     expect(created.out.files).toContain(".github/workflows/shop-ci.yml");
     expect(created.out.files).toContain("plugins/shop/generated.json");
+    // A shared repo keeps its own schedule (hoaj/plugins' drift-check.yml): no daily check of the plugin's own (#110).
+    for (const f of [".github/workflows/shop-drift-check.yml", "plugins/shop/scripts/drift-check.ts", "plugins/shop/tests/drift-check.test.ts"]) {
+      expect(created.out.files, f).not.toContain(f);
+      expect(existsSync(join(root, f)), f).toBe(false);
+    }
     expect(findTokens(root)).toEqual([]);
   });
 
@@ -593,14 +621,14 @@ describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", ()
 
   test("add-skill reads the layout from generated.json: install.sh downloads from <plugin>-v<version>", () => {
     const dir = join(root, "plugins/shop");
-    const added = run(ADD_SKILL, ["--dir", dir, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "none"], env);
+    const added = run(ADD_SKILL, ["--dir", dir, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "none", "--daily-check", "on"], env);
     expect(added.code, JSON.stringify(added.out)).toBe(0);
     expect(readFileSync(join(dir, "skills/shop/install.sh"), "utf8")).toContain('TAG_PREFIX="shop-v"');
     expect(findTokens(root)).toEqual([]);
     // A plugin in its own repo keeps v<version>.
     const own = join(work, "own-prefix");
     expect(run(NEW, newArgs(own, ["--no-labels"]), env).code).toBe(0);
-    expect(run(ADD_SKILL, ["--dir", own, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "none"], env).code).toBe(0);
+    expect(run(ADD_SKILL, ["--dir", own, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "none", "--daily-check", "on"], env).code).toBe(0);
     expect(readFileSync(join(own, "skills/shop/install.sh"), "utf8")).toContain('TAG_PREFIX="v"');
     expect(readJson(join(own, "generated.json"))).toMatchObject({ pluginDir: ".", tagPrefix: "v" });
   });

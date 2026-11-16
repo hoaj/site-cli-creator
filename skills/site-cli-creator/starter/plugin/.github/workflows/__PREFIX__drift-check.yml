@@ -1,0 +1,47 @@
+# __PLUGIN__'s daily drift check (SPEC §10): every CLI skill's read-only `check` against its live
+# site, with the released binary (scripts/drift-check.ts). Drift opens an issue titled with its
+# Fingerprint and labelled drift, as the Feedback skill files it, so `fix` picks it up and a user's
+# report of the same Drift lands on the same issue; a failing check opens a bug, an expired CI
+# session a ci-session issue. A login skill is checked only with its session in the secret
+# SESSION_<PLUGIN>_<SKILL> (README: Daily drift check); without it the skill is skipped with a notice.
+# Only for a plugin in its own repo: a shared repo of plugins schedules its own check.
+name: __PREFIX__drift-check
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - name: Labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Every label the check files with must exist, or gh issue create fails (the same colours and
+        # descriptions new.ts gave drift and bug, so nothing it made changes).
+        run: |
+          gh label create drift --force --color d93f0b --description "The site changed away from a Contract (filed by the Feedback skill; fixed by fix)"
+          gh label create bug --force --color b60205 --description "A bug in the plugin's own code (filed by the Feedback skill; fixed by fix)"
+          gh label create ci-session --force --color c5def5 --description "The daily drift check needs a new session for a login skill"
+      - name: Check every CLI skill
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+          SITE_CLI_CHROME: /usr/bin/google-chrome
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: bun scripts/drift-check.ts --repo "$GITHUB_REPOSITORY" --run-url "$RUN_URL"

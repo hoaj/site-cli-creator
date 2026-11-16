@@ -32,6 +32,11 @@ const USAGE =
   'bun tools/new.ts --dir <path> | --into <repo root> --plugin <name> --repo <owner/name> --description "<text>" --maintainer <login> [--no-labels] [--skip-checks]';
 
 const WORKFLOWS = ".github/workflows";
+/**
+ * The daily drift check (SPEC §10), as Starter paths: only a plugin in its own repo gets it, since a shared repo
+ * of plugins schedules its own (hoaj/plugins' drift-check.yml) and two would file every Drift twice.
+ */
+const DRIFT_CHECK = { workflow: "__PREFIX__drift-check.yml", files: ["scripts/drift-check.ts", "tests/drift-check.test.ts"] };
 
 type Label = { name: string; color: string; description: string };
 
@@ -169,10 +174,12 @@ await runTool(async () => {
   };
   // Every path below is relative to the repo root, which is the plugin's root when it has its own repo.
   const inPlugin = (rel: string) => relative(root, join(dir, rel));
-  const files = copyTemplate(pluginStarter, dir, tokens, { layout, skip: (rel) => rel === WORKFLOWS }).map(inPlugin);
+  const ownSchedule = layout === "shared";
+  const files = copyTemplate(pluginStarter, dir, tokens, { layout, skip: (rel) => rel === WORKFLOWS || (ownSchedule && DRIFT_CHECK.files.includes(rel)) }).map(inPlugin);
   const workflowStarter = join(pluginStarter, WORKFLOWS);
   if (existsSync(workflowStarter)) {
-    files.push(...copyTemplate(workflowStarter, join(root, WORKFLOWS), tokens, { layout }).map((f) => join(WORKFLOWS, f)));
+    const skip = (rel: string) => ownSchedule && rel === DRIFT_CHECK.workflow;
+    files.push(...copyTemplate(workflowStarter, join(root, WORKFLOWS), tokens, { layout, skip }).map((f) => join(WORKFLOWS, f)));
   }
   for (const [starterSkill, suffix] of [[feedbackStarter, "feedback"], [deployStarter, "deploy"]] as const) {
     const rel = join("skills", `${plugin}-${suffix}`);
@@ -210,7 +217,7 @@ await runTool(async () => {
   }
   assertNoTokens(root, files);
 
-  const next = `${toolCommand("add-skill")} --dir ${dir} --skill <name> --origin <url> --auth login|none`;
+  const next = `${toolCommand("add-skill")} --dir ${dir} --skill <name> --origin <url> --auth login|none --daily-check on|off`;
   const labelSet = shared ? [...LABELS, pluginLabel(plugin)] : LABELS;
   let labels: { created: string[]; failed?: string } | "skipped" = "skipped";
   if (!values["no-labels"]) {

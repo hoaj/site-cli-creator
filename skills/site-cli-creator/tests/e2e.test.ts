@@ -247,7 +247,7 @@ for (const auth of ["none", "login"] as const) {
       expect(created.code, created.stderr).toBe(0);
       expect(created.out).toMatchObject({ plugin: PLUGIN, repo: REPO, version: "0.1.0", labels: "skipped" });
 
-      const added = await tool("add-skill.ts", ["--dir", pluginDir, "--skill", skill, "--origin", site.url, "--auth", auth]);
+      const added = await tool("add-skill.ts", ["--dir", pluginDir, "--skill", skill, "--origin", site.url, "--auth", auth, "--daily-check", "on"]);
       expect(added.code, added.stderr).toBe(0);
       expect(added.out).toMatchObject({ plugin: PLUGIN, skill, auth, version: "0.1.0" });
 
