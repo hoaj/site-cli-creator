@@ -167,17 +167,17 @@ describe("new.ts", () => {
     expect(run(NEW, newArgs(join(work, "x"), ["--no-labels"]), { STARTER_DIR: join(work, "missing") }).out.error.message).toContain("starter/plugin");
   });
 
-  test("creates the five labels with gh (feature, drift, bug, unverified, needs-account); a gh failure is an error that keeps the files and says how to retry", () => {
+  test("creates the six labels with gh (feature, drift, bug, unverified, needs-account, ci-session); a gh failure is an error that keeps the files and says how to retry", () => {
     const bin = join(work, "gh-bin");
     const log = join(work, "gh.log");
     write(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${log}"\n[ -n "$GH_FAIL" ] && { echo "HTTP 403" >&2; exit 1; }\nexit 0\n`, 0o755);
     const env = { PATH: `${bin}:${process.env.PATH}` };
     const ok = run(NEW, newArgs(join(work, "plugin-labels")), env);
     expect(ok.code).toBe(0);
-    expect(ok.out.labels).toEqual({ created: ["feature", "drift", "bug", "unverified", "needs-account"] });
+    expect(ok.out.labels).toEqual({ created: ["feature", "drift", "bug", "unverified", "needs-account", "ci-session"] });
     const calls = readFileSync(log, "utf8").trim().split("\n");
-    expect(calls).toHaveLength(5);
-    for (const [i, name] of ["feature", "drift", "bug", "unverified", "needs-account"].entries()) {
+    expect(calls).toHaveLength(6);
+    for (const [i, name] of ["feature", "drift", "bug", "unverified", "needs-account", "ci-session"].entries()) {
       expect(calls[i]).toStartWith(`label create ${name} --repo acme/shop-plugin --force`);
     }
     const failed = run(NEW, newArgs(join(work, "plugin-labels-fail")), { ...env, GH_FAIL: "1" });
@@ -185,7 +185,7 @@ describe("new.ts", () => {
     expect(failed.out.error.labels.created).toEqual([]);
     expect(failed.out.error.labels.failed).toContain("HTTP 403");
     expect(failed.out.error.message).toContain("files were written");
-    expect(failed.out.error.retry).toHaveLength(5);
+    expect(failed.out.error.retry).toHaveLength(6);
     expect(failed.out.error.retry[0]).toStartWith("gh label create feature --repo acme/shop-plugin --force");
     expect(failed.out.error.retry[0]).toContain("--description 'A Task the plugin");
     expect(failed.out.error.next).toContain("add-skill.ts --dir");
@@ -198,7 +198,7 @@ describe("new.ts", () => {
     expect(missing.code).toBe(1);
     expect(missing.out.error.labels.created).toEqual([]);
     expect(missing.out.error.labels.failed).toContain("gh label create feature");
-    expect(missing.out.error.retry.map((c: string) => c.split(" ")[3])).toEqual(["feature", "drift", "bug", "unverified", "needs-account"]);
+    expect(missing.out.error.retry.map((c: string) => c.split(" ")[3])).toEqual(["feature", "drift", "bug", "unverified", "needs-account", "ci-session"]);
     expect(existsSync(join(work, "plugin-no-gh", "generated.json"))).toBe(true);
   });
 });
@@ -427,10 +427,11 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     expect(driftCheck).toMatch(/schedule:\n\s+- cron: "17 5 \* \* \*"/);
     expect(driftCheck).toContain("run: bun scripts/drift-check.ts --repo \"$GITHUB_REPOSITORY\"");
     const newSource = readFileSync(NEW, "utf8");
-    for (const name of ["drift", "bug"]) {
+    for (const name of ["drift", "bug", "ci-session"]) {
       const label = new RegExp(`\\{ name: "${name}", color: "(\\w+)", description: "([^"]+)" \\}`).exec(newSource)!;
-      expect(driftCheck, name).toContain(`gh label create ${name} --force --color ${label[1]} --description "${label[2]}"`);
+      expect(driftCheck, name).toContain(`add ${name} ${label[1]} "${label[2]}"`);
     }
+    expect(driftCheck).not.toMatch(/gh label create[^\n]*--force/);
     expect(readFileSync(join(dir, "README.md"), "utf8")).toContain("gh secret set SESSION_<PLUGIN>_<SKILL> --repo acme/shop-plugin");
     expect(findTokens(dir)).toEqual([]);
     expect(readFileSync(join(dir, "skills/shop/Dockerfile"), "utf8")).toContain("/out/shop");
@@ -646,7 +647,7 @@ describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", ()
     write(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`, 0o755);
     const r = run(NEW, intoArgs(monorepo("mono-labels")), { ...env, PATH: `${bin}:${process.env.PATH}` });
     expect(r.code, JSON.stringify(r.out)).toBe(0);
-    const names = ["feature", "drift", "bug", "unverified", "needs-account", "shop"];
+    const names = ["feature", "drift", "bug", "unverified", "needs-account", "ci-session", "shop"];
     expect(r.out.labels).toEqual({ created: names });
     const calls = readFileSync(log, "utf8").trim().split("\n");
     for (const [i, name] of names.entries()) expect(calls[i]).toStartWith(`label create ${name} --repo acme/plugins --force`);

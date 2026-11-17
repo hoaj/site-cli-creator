@@ -32,12 +32,14 @@ jobs:
       - name: Labels
         env:
           GH_TOKEN: ${{ github.token }}
-        # Every label the check files with must exist, or gh issue create fails (the same colours and
-        # descriptions new.ts gave drift and bug, so nothing it made changes).
+        # Every label the check files with must exist, or gh issue create fails. new.ts creates them; this only
+        # adds one that is missing (never --force, so a colour or text the maintainer changed stays).
         run: |
-          gh label create drift --force --color d93f0b --description "The site changed away from a Contract (filed by the Feedback skill; fixed by fix)"
-          gh label create bug --force --color b60205 --description "A bug in the plugin's own code (filed by the Feedback skill; fixed by fix)"
-          gh label create ci-session --force --color c5def5 --description "The daily drift check needs a new session for a login skill"
+          have="$(gh label list --limit 500 --json name --jq '.[].name')"
+          add() { grep -qxF "$1" <<<"$have" || gh label create "$1" --color "$2" --description "$3"; }
+          add drift d93f0b "The site changed away from a Contract (filed by the Feedback skill; fixed by fix)"
+          add bug b60205 "A bug in the plugin's own code (filed by the Feedback skill; fixed by fix)"
+          add ci-session c5def5 "The daily drift check needs a new CI session for a login skill (see the README)"
       - name: Check every CLI skill
         env:
           GH_TOKEN: ${{ github.token }}

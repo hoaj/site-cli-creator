@@ -49,6 +49,11 @@ describe("classify", () => {
     expect(o.drifts.map((d) => d.fingerprint)).toEqual([FP]);
   });
 
+  test("a check killed by its time limit is network (the site hung), and Drift with no Fingerprint is an error (review 1)", () => {
+    expect(classify(124, "")).toMatchObject({ result: "network", detail: "check timed out" });
+    expect(classify(3, "not json")).toMatchObject({ result: "error", kind: "drift" });
+  });
+
   test.each([
     [4, "session", "session"],
     [5, "network", "network"],
@@ -87,6 +92,20 @@ describe("planIssues", () => {
   test("a closed one whose fix is merged but not released (no fixed-in), or released above this version, stands for it", () => {
     expect(planIssues(SKILL, drift, [], undefined, [{ number: 3, title: FP, state: "CLOSED", labels: [] }], "acme/shop-plugin")[0]!.existing).toBe(3);
     expect(planIssues(SKILL, drift, [], undefined, [{ number: 4, title: FP, state: "CLOSED", labels: [{ name: "fixed-in:v1.3.0" }] }], "acme/shop-plugin")[0]!.existing).toBe(4);
+  });
+
+  test("several closed ones are judged as the Feedback skill does: by the most recently closed, against the highest fixed-in (review 1)", () => {
+    // #3 was closed long ago without a fix (a duplicate); #7, closed last, shipped the fix in 1.2.0, the version checked: it came back.
+    const closed = [
+      { number: 3, title: FP, state: "CLOSED" as const, closedAt: "2026-01-01T00:00:00Z", labels: [] },
+      { number: 7, title: FP, state: "CLOSED" as const, closedAt: "2026-06-01T00:00:00Z", labels: [{ name: "fixed-in:v1.2.0" }] },
+    ];
+    const [p] = planIssues(SKILL, drift, [], undefined, closed, "acme/shop-plugin");
+    expect(p!.existing).toBeUndefined();
+    expect(p!.body).toContain("reported before in #7");
+    // The most recently closed one has no fixed-in yet: its fix is on the way, nothing new.
+    const pending = [{ ...closed[1]!, labels: [] }, { ...closed[0]!, labels: [{ name: "fixed-in:v1.0.0" }] }];
+    expect(planIssues(SKILL, drift, [], undefined, pending, "acme/shop-plugin")[0]!.existing).toBe(7);
   });
 
   test("fixedIn reads a fixed-in:vX.Y.Z label", () => {
@@ -131,6 +150,17 @@ describe("checkSkill", () => {
     expect(calls).toEqual([]);
   });
 
+  test("install.sh gets the job's read-only GH_TOKEN (a private repo's release needs gh); the check never does (review 1)", () => {
+    const seen: { cmd: string[]; env?: Record<string, string> }[] = [];
+    const tokenExec: Exec = (cmd, opts) => {
+      seen.push({ cmd, env: opts?.env });
+      return cmd[0] === "bash" ? { code: 0, stdout: "", stderr: "" } : { code: 0, stdout: '{"ok":true,"operations":[]}', stderr: "" };
+    };
+    checkSkill({ ...SKILL, auth: "none" }, {}, tokenExec, { GH_TOKEN: "ghs_job" });
+    expect(seen[0]!.env?.GH_TOKEN).toBe("ghs_job");
+    expect(seen[1]!.env?.GH_TOKEN).toBeUndefined();
+  });
+
   test("a failed install is recorded as install", () => {
     expect(checkSkill(SKILL, { SESSION_SHOP_SHOP: '{"headers":{}}' }, exec({ install: { code: 1 } }))).toMatchObject({ result: "install", detail: "install.sh: release v9 still being built" });
   });
@@ -157,6 +187,32 @@ test("fileIssues opens only what is not open yet and returns every number", () =
   expect(n).toEqual([7, 42]);
   expect(opened).toEqual([["gh", "issue", "create", "--repo", "acme/shop-plugin", "--title", "c", "--body-file", "-", "--label", "drift"]]);
 });
+
+test("main: a failed install, or a skill whose check crashes, turns the run red; the other skills are still checked (review 1)", () => {
+    const root = pluginRoot("main-red", "none");
+    mkdirSync(join(root, "skills", "shop2", "cli", "src"), { recursive: true });
+    writeFileSync(join(root, "skills", "shop2", "install.sh"), "");
+    writeFileSync(join(root, "skills", "shop2", "cli", "src", "site.ts"), 'export default defineSite({\n  plugin: "shop",\n  skill: "shop2",\n  version: "1.2.3",\n  auth: "none" as Auth,\n});\n');
+    const err = spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const checked: string[] = [];
+      const crashing: Exec = (cmd) => {
+        if (cmd[0] === "bash") return { code: 0, stdout: "", stderr: "" };
+        checked.push(cmd[0]!);
+        if (cmd[0]!.endsWith("/shop")) throw new Error("ENOENT: no binary");
+        return { code: 0, stdout: '{"ok":true,"operations":[]}', stderr: "" };
+      };
+      const summary = join(tmp, "summary-red.md");
+      expect(main(["--root", root, "--repo", "acme/shop-plugin", "--dry-run"], crashing, { GITHUB_STEP_SUMMARY: summary })).toBe(1);
+      expect(checked).toHaveLength(2);
+      expect(readFileSync(summary, "utf8")).toContain("| shop | 1.2.3 | error |");
+      expect(readFileSync(summary, "utf8")).toContain("| shop2 | 1.2.3 | ok |");
+      const noInstall: Exec = (cmd) => (cmd[0] === "bash" ? { code: 1, stdout: "", stderr: "no release" } : { code: 0, stdout: '{"ok":true,"operations":[]}', stderr: "" });
+      expect(main(["--root", root, "--repo", "acme/shop-plugin", "--dry-run"], noInstall, {})).toBe(1);
+    } finally {
+      err.mockRestore();
+    }
+  });
 
 test("main: a login skill without its secret is a notice and the run stays green; Drift opens its issue and the summary lists both", () => {
   const login = pluginRoot("main-login", "login");

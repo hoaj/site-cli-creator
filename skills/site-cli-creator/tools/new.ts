@@ -46,6 +46,7 @@ const LABELS: Label[] = [
   { name: "bug", color: "b60205", description: "A bug in the plugin's own code (filed by the Feedback skill; fixed by fix)" },
   { name: "unverified", color: "fbca04", description: "Fix made from the issue's diff; the maintainer's account can't reach the Task" },
   { name: "needs-account", color: "d4c5f9", description: "The maintainer's account can't perform this Task" },
+  { name: "ci-session", color: "c5def5", description: "The daily drift check needs a new CI session for a login skill (see the README)" },
 ];
 
 /** In a shared repo the Feedback skill also files every issue with a label named after the plugin. */
@@ -174,11 +175,11 @@ await runTool(async () => {
   };
   // Every path below is relative to the repo root, which is the plugin's root when it has its own repo.
   const inPlugin = (rel: string) => relative(root, join(dir, rel));
-  const ownSchedule = layout === "shared";
-  const files = copyTemplate(pluginStarter, dir, tokens, { layout, skip: (rel) => rel === WORKFLOWS || (ownSchedule && DRIFT_CHECK.files.includes(rel)) }).map(inPlugin);
+  const repoSchedulesItsOwn = layout === "shared"; // a shared repo runs its own daily check: no drift-check here
+  const files = copyTemplate(pluginStarter, dir, tokens, { layout, skip: (rel) => rel === WORKFLOWS || (repoSchedulesItsOwn && DRIFT_CHECK.files.includes(rel)) }).map(inPlugin);
   const workflowStarter = join(pluginStarter, WORKFLOWS);
   if (existsSync(workflowStarter)) {
-    const skip = (rel: string) => ownSchedule && rel === DRIFT_CHECK.workflow;
+    const skip = (rel: string) => repoSchedulesItsOwn && rel === DRIFT_CHECK.workflow;
     files.push(...copyTemplate(workflowStarter, join(root, WORKFLOWS), tokens, { layout, skip }).map((f) => join(WORKFLOWS, f)));
   }
   for (const [starterSkill, suffix] of [[feedbackStarter, "feedback"], [deployStarter, "deploy"]] as const) {
