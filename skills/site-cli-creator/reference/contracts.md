@@ -218,7 +218,7 @@ export const toDeal = (d: { id: string; name: string }) => ({ id: d.id, name: d.
 
 ## site.ts
 
-`add-skill.ts` writes `plugin`, `skill`, `repo`, `version`, `generatedWith`, `origin` and `auth`; `regen.ts` sets `needsChrome`. Write the rest from the Capture.
+`add-skill.ts` writes `plugin`, `skill`, `repo`, `version`, `generatedWith`, `origin`, `auth` and `dailyCheck` (the maintainer's answer to the daily-check question; the CLI never reads it, but the daily drift check does: keep the line as it is when you rewrite site.ts); `regen.ts` sets `needsChrome`. Write the rest from the Capture.
 
 | Hook | When | Returns |
 |---|---|---|

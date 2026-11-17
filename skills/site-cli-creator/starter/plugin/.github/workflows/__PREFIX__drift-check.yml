@@ -1,0 +1,51 @@
+# __PLUGIN__'s daily drift check (site-cli-creator's SPEC §10): every CLI skill's read-only `check` against its live
+# site, with the released binary (scripts/drift-check.ts). Drift opens an issue titled with its
+# Fingerprint and labelled drift, as the Feedback skill files it, so `fix` picks it up and a user's
+# report of the same Drift lands on the same issue; a failing check opens a bug, an expired CI
+# session a ci-session issue. A login skill is checked only with its session in the secret
+# SESSION_<PLUGIN>_<SKILL> (README: Daily drift check); without it the skill is skipped with a notice.
+# Only for a plugin in its own repo: a shared repo of plugins schedules its own check.
+name: __PREFIX__drift-check
+
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    # Each skill may take up to 10 minutes (a 5-minute install, a 5-minute check); rows are written as they finish.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.3"
+      - name: Labels
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # Every label the check files with must exist, or gh issue create fails. new.ts creates them; this only
+        # adds one that is missing (never --force, so a colour or text the maintainer changed stays).
+        run: |
+          have="$(gh label list --limit 500 --json name --jq '.[].name')"
+          add() { grep -qxF "$1" <<<"$have" || gh label create "$1" --color "$2" --description "$3"; }
+          add drift d93f0b "The site changed away from a Contract (filed by the Feedback skill; fixed by fix)"
+          add bug b60205 "A bug in the plugin's own code (filed by the Feedback skill; fixed by fix)"
+          add ci-session c5def5 "The daily drift check needs a new CI session for a login skill (see the README)"
+      - name: Check every CLI skill
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SECRETS_JSON: ${{ toJSON(secrets) }}
+          SITE_CLI_CHROME: /usr/bin/google-chrome
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # xvfb-run: a skill with browserWindow: true opens a Chrome window, which needs a display.
+        run: xvfb-run -a bun scripts/drift-check.ts --repo "$GITHUB_REPOSITORY" --run-url "$RUN_URL"

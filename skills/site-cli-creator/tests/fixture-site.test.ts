@@ -723,6 +723,10 @@ for (const auth of ["none", "login"] as const) {
       expect(x.site).toMatchObject({ plugin: "shop", skill: `shop-${auth}`, repo: "acme/shop-plugin", origin: site.url, auth });
     });
 
+    test("site.ts keeps add-skill's dailyCheck line, as the agent's own site.ts must (review 3)", () => {
+      expect(readFileSync(join(x.src, "site.ts"), "utf8")).toMatch(/^\s*dailyCheck: true,/m);
+    });
+
     test("site.ts sets up the session the mode needs", () => {
       if (auth === "login") {
         expect(x.site.login.startUrl).toBe(`${site.loginUrl}/login?autologin=1`);
