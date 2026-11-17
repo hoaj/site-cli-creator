@@ -932,6 +932,14 @@ export default defineCommand({
       expect((await cli(["doctor"], { bin: browserBinary })).out.transport).toBe("browser");
     }, 600_000);
 
+    test("ua-wall: plain fetch sends a browser user-agent by default, so a wall that refuses Bun/ lets the compiled CLI through (#111)", async () => {
+      const plain = await cli(["subscription", "show"]);
+      expect(plain.code, plain.stderr).toBe(0);
+      const walled = await withDrift("ua-wall", () => cli(["subscription", "show"]));
+      expect(walled.code, walled.stderr).toBe(0);
+      expect(walled.out).toEqual(plain.out);
+    }, 120_000);
+
     // 9. Capture + draft-contract -----------------------------------------------------------------
 
     test("capture records a read Task and a write Task as shapes without values; draft-contract drafts from one", async () => {

@@ -11,6 +11,7 @@ import { doctor, type Exec } from "./runtime/doctor";
 import { ContractError, DryRun, EXIT, Failure, emit, errorEnvelope, note, type Surface } from "./runtime/envelope";
 import { bugFrame, bugKey, errorName, redactStack } from "./runtime/fingerprint";
 import { BUILTIN_FLAGS, commandHelp, flagDescription, flagSpecs, GLOBAL_FLAGS, help, isWriteCommand, type FlagSpec } from "./runtime/help";
+import { defaultSources, withBrowserHeaders } from "./runtime/browser-headers";
 import { findChrome } from "./runtime/chrome";
 import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
@@ -122,10 +123,12 @@ function defaultDeps(app: App): Deps {
   const env = app.deps?.env ?? process.env;
   // transport "browser": requests leave from a Chrome tab on the site; release() closes that Chrome.
   const tab = app.site.transport === "browser" && !app.deps?.fetch ? browserTransport(app.site, { env, note: app.deps?.note ?? note }) : undefined;
+  // Plain fetch sends the user's Chrome's user-agent and an accept-language unless the request names its own (#111).
+  const browserLike = withBrowserHeaders((input, init) => fetch(input, init), defaultSources(env));
   return {
-    fetch: tab?.fetch ?? ((input, init) => fetch(input, init)),
+    fetch: tab?.fetch ?? browserLike,
     // login.refresh.renew: never through transport "browser"'s Chrome; a test's fake fetch when it gave one.
-    plainFetch: app.deps?.fetch ?? ((input, init) => fetch(input, init)),
+    plainFetch: app.deps?.fetch ?? browserLike,
     ...(tab && { cookies: (cookie?: string) => tab.cookies(cookie) }), // hooks' ctx.cookies() under transport "browser"
     env,
     login: (headless, options) => chromeLogin(app.site, { headless, note, env, fromProfile: options?.fromProfile }),

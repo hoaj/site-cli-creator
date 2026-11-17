@@ -19,6 +19,7 @@ export default defineSite({
   // When the site refuses plain fetch but answers a browser (a 403 or a challenge page where the
   // Capture saw JSON), send every request from a Chrome tab on the site instead. Slower: Chrome
   // starts once per run. browserWindow: true when it also refuses headless Chrome.
+  // headers: { "x-requested-with": "XMLHttpRequest" }, // sent with every request to the origin, for a site that refuses plain fetch without them
   // transport: "browser",
   login: {
     startUrl: "__ORIGIN__/",
