@@ -9,7 +9,7 @@ description: Use when the user wants to read or change their own data on __ORIGI
 - `bin/__SKILL__` (`bin/__SKILL__.exe` on Windows) in this skill's folder is a CLI for __ORIGIN__; below, `__SKILL__` means that path. Every command prints exactly one JSON document on stdout; progress goes to stderr.
 - Write commands (marked in the table) print a dry run without `--confirm`. Show the user the dry run and get an explicit yes before rerunning with `--confirm`.
 - A Task that spans several logins or sites is never one command: chain commands from each CLI skill.
-- Session, network and input failures are handled here. Only Drift, bugs, missing Tasks and a bot block that keeps happening go to the `__PLUGIN__-feedback` skill.
+- Session, network and input failures are handled here. Only Drift, bugs (a bot block that keeps happening is one), and missing Tasks go to the `__PLUGIN__-feedback` skill.
 
 ## Commands
 
@@ -35,7 +35,7 @@ A failure is `{"error": {"kind", "message", "next", ...}}` with a fixed exit cod
 | 3 | drift | Stop. Offer to file it with `__PLUGIN__-feedback`, passing the envelope. File only on a yes |
 | 4 | session | Run `__SKILL__ login`; the user signs in in the Chrome window; rerun the command (only skills with `login` exit 4) |
 | 5 | network | Tell the user the site isn't responding, and stop |
-| 5, error has `blocked` | network | Tell the user the site refused the request as automated traffic, and stop; do not retry to find out. Ask the user whether it happens every time; if so, offer a feature request with `__PLUGIN__-feedback` (the site blocks the CLI). File only on a yes |
+| 5, error has `blocked` | network | Tell the user the site refused the request as automated traffic, and stop; do not retry to find out. Ask the user whether it happens every time; if so, offer a bug report with `__PLUGIN__-feedback` (the site blocks the CLI). File only on a yes |
 | The CLI can't do what the user asked | | Offer a feature request with `__PLUGIN__-feedback` |
 | The user asks whether it works, or a failure looks odd | | Run `__SKILL__ check` and report what it prints |
 

@@ -31,6 +31,7 @@ export const DRIFTS = [
   "rate-limit", // data APIs answer 429
   "input-rejected", // calls with variables are rejected with 400 BAD_USER_INPUT
   "bot-wall", // data APIs answer 403 with an HTML challenge page unless the request comes from a browser (Sec-Fetch-Mode) and carries the cookie the front page sets in JavaScript
+  "ua-wall", // data APIs answer 403 with an HTML challenge page to a request whose user-agent is not a Chrome one (`Mozilla/5.0 … Chrome/<version>`): Bun/…, missing, or any other; #111
   "html-layout", // GET /notices renders the same notices in a new layout, with no ul.notices (#102)
 ] as const;
 
@@ -159,6 +160,7 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
     // Like a real wall, the cookie alone is not enough (copied into a plain request it would be): the
     // request must also come from a browser, which sends Sec-Fetch-* headers a page cannot set.
     if (drift === "bot-wall" && (readCookies(req)[BOT_COOKIE] !== "1" || !req.headers.get("sec-fetch-mode"))) return html(403, CHALLENGE_PAGE);
+    if (drift === "ua-wall" && !/^Mozilla\/5\.0 .*Chrome\/\d+/.test(req.headers.get("user-agent") ?? "")) return html(403, CHALLENGE_PAGE);
     if (drift === "server-error") return failure(500, "INTERNAL_SERVER_ERROR", "Something went wrong.");
     if (drift === "rate-limit") return failure(429, "RATE_LIMITED", "Too many requests.");
     if (asAnonymous) return null;

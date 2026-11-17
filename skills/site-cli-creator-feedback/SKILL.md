@@ -21,7 +21,7 @@ Something in the generator got in the way while building or maintaining a plugin
 Route these elsewhere:
 
 - A generated plugin's Drift, bug or missing Task: the plugin's `<plugin>-feedback` skill, on the plugin's repo.
-- A site behind a bot wall (exit 5 with `blocked`, a challenge page, a 403 the Capture's Chrome did not get): set `transport: "browser"` in its `site.ts` ([contracts.md](../site-cli-creator/reference/contracts.md#sitets)). A captcha, or a wall Chrome does not pass even with `browserWindow: true`, is out of scope; tell the user.
+- A site that blocks a plugin's CLI (exit 5 with `blocked`, a challenge page, a 403 the Capture's Chrome did not get): a bug in that plugin, filed with its `<plugin>-feedback` skill and fixed with the generator's `fix` mode, which climbs a ladder from browser headers to `browserWindow: true` ([fix.md](../site-cli-creator/reference/fix.md#2c-a-bot-block)). Report it here only when that ladder is wrong or fails on a wall it should pass. Only a captcha a person must solve is out of scope; tell the user.
 - The maintainer's own setup (no Chrome, `gh` logged out, Bun too old): fix it with the generator's prerequisites check.
 
 ## 1. Gather the facts

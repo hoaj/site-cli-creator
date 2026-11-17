@@ -52,7 +52,7 @@ The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator'
 | `__OWNER__` | GitHub owner of the plugin repo | `hoaj` |
 | `__DESCRIPTION__` | one-line plugin description | |
 | `__MAINTAINER__` | GitHub login of the maintainer | `hoaj` |
-| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.18.0` |
+| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.19.0` |
 | `__ORIGIN__` | the site origin | `https://www.yousee.dk` |
 | `__AUTH__` | `login` or `none` | |
 | `__PREFIX__` | what release tags, workflow names and workflow files start with: empty in a plugin's own repo, `<plugin>-` in a shared repo | `yousee-` |
@@ -145,6 +145,7 @@ export default defineSite({
   needsChrome: false,               // regen sets true if auth is login, transport is "browser", or any Operation is a write
   dailyCheck: true,                 // add-skill's --daily-check: whether scripts/drift-check.ts checks this skill (SPEC §10); absent is true; the CLI never reads it
   transport: "browser",             // optional, default "fetch": send every request from a Chrome tab on the origin (transport.ts, SPEC §7); siteProblems refuses another value
+  headers: { "x-requested-with": "XMLHttpRequest" },  // optional: sent to every request to the origin under the session's and the Operation's own (runtime/browser-headers.ts `withSiteHeaders`, wired in the Client; SPEC §7); siteProblems refuses non-string values and cookie/authorization
   browserWindow: true,              // optional, transport "browser" only (siteProblems refuses it otherwise): that Chrome runs as a window, not headless
   login: {                          // auth: "login" only
     startUrl: "https://…",          // page that leads to the site's login
@@ -235,7 +236,7 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
 { "error": { "kind", "message", "fingerprint"?, "diff"?, "drifts"?, "stack"?, "blocked"?, "version", "os", "next" } }
 ```
 
-- `blocked` (network only): the bot protection that refused the request (`"cloudflare"`, `"datadome"`, `"perimeterx"`, `"imperva"`, `"akamai"`, `"captcha"`). With it, `nextStep(…, blocked: true)` gives its own sentence for the CLI and for MCP: the site refused the request as automated traffic; tell the user and stop, work around nothing; if it keeps happening, offer a feature request through the Feedback skill (MCP: or the repo's new-issue page), only on a yes.
+- `blocked` (network only): the bot protection that refused the request (`"cloudflare"`, `"datadome"`, `"perimeterx"`, `"imperva"`, `"akamai"`, `"captcha"`). With it, `nextStep(…, blocked: true)` gives its own sentence for the CLI and for MCP: the site refused the request as automated traffic; tell the user and stop, work around nothing; if it keeps happening, offer a bug report through the Feedback skill (MCP: or the repo's new-issue page), only on a yes. The Feedback skill files it as `bug: <plugin>:<skill>:blocked:<blocked>` and `fix` climbs the ladder of SPEC §10 (#111).
 
 - `next` is a fixed sentence per kind, matching SPEC §8's exit-code table (exit 1 and 3 name the Feedback skill `<plugin>-feedback` and say it files only after the user's yes; exit 3 also says stop and don't work around it with raw calls; exit 2 mentions `--account` when accounts are listed).
 - `os` is `<platform>-<arch>`. `version` is `site.version`.
@@ -317,6 +318,11 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
 - The silent refresh (`Client.signInOrFail()`): when `session.json` names a `fromProfile` that still exists (`Client.fromProfile()`), it first signs in headless from that profile the same way (in memory; a profile Chrome can't open counts as not signed in), then headless from the skill's own `profile/`, then headed (unless `SITE_CLI_NONINTERACTIVE=1`). So after `login --from-profile` the maintainer never signs in a second time while the Capture's sign-in lasts.
 - Tests set `SITE_CLI_TEST=1`. Only then does env `SITE_CLI_ORIGIN` override `site.origin` (the fixture site runs on localhost), env `SITE_CLI_LOGIN_TIMEOUT_MS` replace `site.login.timeoutMs` (`loginTimeoutMs()`: the headed sign-in waits that long, the headless refresh at most 30 s; tests of a sign-in that never completes), and `login` and `transport: "browser"` (despite `browserWindow`) run headless.
 - `launchInMemory()` takes `{blockServiceWorkers}` (Playwright's `serviceWorkers: "block"`), which transport.ts sets so every request a page sends reaches the network where Playwright sees it.
+
+### Browser-like plain fetch (runtime/browser-headers.ts) — SPEC §7, #111
+
+- `defaultDeps()` (main.ts) wraps plain fetch with `withBrowserHeaders(fetch, defaultSources(env))` for `Deps.fetch` (without transport "browser") and `Deps.plainFetch` (when a test gave no `fetch`): a request with no `user-agent` gets `browserUserAgent(installedChromeVersion())` and one with no `accept-language` gets `acceptLanguage(Intl locale)` (the process's locale, from LANG/LC_ALL, not the OS setting); a request's own header, in any case, wins. `installedChromeVersion` reads the macOS app's `Info.plist`, the Windows version folder beside `chrome.exe`, or Linux `chrome --version` (synchronous, 2 s); undefined falls back to a fixed recent major. Read once per run, on the first request. Chrome's UA is the reduced one (`Chrome/<major>.0.0.0`, platform token fixed per OS).
+- `withSiteHeaders(send, site.headers, origin)` is applied by the Client's constructor around both fetches, before `guardFetch`: the site's `headers` go to requests whose origin is the site's, never to another host (a login host, a token endpoint elsewhere), and a header the request already has wins. It carries `guardFetch`'s marker over from the fetch it wraps (`keepGuard`, runtime/never.ts), so a Client built on another's deps does not guard twice; the defaults are read only for a header a request lacks.
 
 ### transport "browser" (transport.ts) — SPEC §7
 

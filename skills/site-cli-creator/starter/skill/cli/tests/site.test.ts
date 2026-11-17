@@ -10,6 +10,25 @@ describe("siteProblems", () => {
     expect(siteProblems(loginSite())).toEqual([]);
   });
 
+  test("headers must be a map of header names to string values; cookie and authorization belong to the session (#111)", () => {
+    expect(siteProblems(makeSite({ headers: { "x-requested-with": "XMLHttpRequest", referer: "https://shop.example.test/" } }))).toEqual([]);
+    expect(siteProblems(makeSite({ headers: { "x-a": 1 as any } }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: { "bad name": "v" } }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: { Cookie: "a=1" } }))[0]).toContain("cookie");
+    expect(siteProblems(makeSite({ headers: { authorization: "Bearer x" } }))[0]).toContain("authorization");
+    // A value fetch would refuse, or the same header twice in another case, is a config error, not a crash on the first request (review).
+    expect(siteProblems(makeSite({ headers: { referer: "https://x.test/\n" } }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: { referer: "https://x.test/\u2603" } }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: { Referer: "a", referer: "b" } }))[0]).toContain("twice");
+    // What describes a body or a hop, or fetch controls itself, is not a site header (review).
+    // A Headers or a Map has no own entries: it would be ignored without a word (review 3).
+    expect(siteProblems(makeSite({ headers: new Headers({ referer: "x" }) as any }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: new Map([["referer", "x"]]) as any }))[0]).toContain("headers");
+    for (const name of ["content-type", "Content-Length", "content-language", "content-location", "host", "proxy-authorization", "transfer-encoding", "connection"]) {
+      expect(siteProblems(makeSite({ headers: { [name]: "x" } }))[0], name).toContain(name.toLowerCase());
+    }
+  });
+
   // add-skill replaces the placeholders in this file too; then the unfilled case can't be built here.
   const starterCopy = ("__AUTH__" as string).startsWith("__");
   test.skipIf(!starterCopy)("unfilled placeholders are reported", () => {

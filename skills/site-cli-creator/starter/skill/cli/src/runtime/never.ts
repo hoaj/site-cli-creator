@@ -322,6 +322,12 @@ const GUARDED = Symbol("site.never guard");
 const BODY_HEADERS = ["content-type", "content-length", "content-encoding", "content-language", "content-location"];
 
 
+/** `to` (a fetch that only adds headers around `from`) is as guarded as `from` is, so guardFetch leaves it as it is. */
+export function keepGuard(from: Fetch, to: Fetch): Fetch {
+  if ((from as { [GUARDED]?: true })[GUARDED]) Object.defineProperty(to, GUARDED, { value: true });
+  return to;
+}
+
 /**
  * A fetch that refuses what site.never forbids: the Client wraps every fetch it makes with it (the
  * Operations', the hooks' ctx.fetch, login.refresh.renew's). Redirects are followed by hand, as fetch

@@ -190,7 +190,8 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
 - **`auth: "none"`:** there is no `login` command, no `profile/`, no post-login step, and exit 4 (session) never happens. Commands use plain `fetch`.
   - **Optional `bootstrap`** (`site.ts`), written by the agent from the Capture, fetches what a public API still needs, such as a front-page cookie or a CSRF token, with plain `fetch`. It is cached in `session.json` like a session and reruns silently when it expires.
   - **On a 401 or 403,** the CLI reruns `bootstrap` and retries once. If it still fails, it's Drift: the site now wants a login, a new token, or blocks the CLI. A 429 is `network`.
-  - A site behind a bot wall needs `transport: "browser"` (below). Captchas stay out of scope. A wall the CLI recognises is reported as a bot block (exit 5 with `blocked`, §10), not as Drift.
+  - **Plain fetch looks like the user's browser by default** ([a block is a bug](https://github.com/hoaj/site-cli-creator/issues/111)): it sends the user-agent of the Chrome installed on this machine (its major version; a fixed recent one when none is found) and an `accept-language` from the process's locale (LANG, LC_ALL; `en-US` when a launcher sets neither), each only when the request names none. A site's `headers` (`site.ts`) go to every request to its origin under the session's and the Operation's own, which win; never `cookie`, `authorization`, or a header that describes the body or the hop (`content-type`, `host`, `proxy-*` …); a value fetch refuses, or one header named twice, is a config error. They name one fixed value, so `site.headers` is not the place for client hints that must agree with a user-agent that follows each user's Chrome: pin both, or use `transport: "browser"`. `transport: "browser"` is unchanged: Chrome sets its own, so `user-agent`, `origin`, `referer` and `sec-*` in `site.headers` do nothing there (Chrome drops them) and the rest still go.
+  - A site behind a bot wall climbs the ladder in §10, ending with `transport: "browser"` (below). A wall the CLI recognises is reported as a bot block (exit 5 with `blocked`, §10), not as Drift.
   - `check --writes` on an `auth: "none"` skill runs `trigger(page)` in a fresh temporary profile, deleted afterwards ([Gaps found in the final spec read](https://github.com/hoaj/site-cli-creator/issues/31)).
 - **`transport: "browser"`** (`site.ts`, either `auth`), decided in [send a CLI skill's requests from inside Chrome](https://github.com/hoaj/site-cli-creator/issues/93). It is for a site that refuses plain `fetch` but answers a browser: a bot wall a real Chrome passes on its own (a challenge its scripts solve, cookies they set), or a check of Chrome's own TLS and headers.
   - **How requests go:** every Operation, and every `fetch` of a site hook, is sent from a tab of the user's Chrome open on the origin, as the page's own `fetch` with the page's cookies and no HTTP cache.
@@ -234,7 +235,7 @@ The envelope is everything the Feedback skill needs, and the CLI is responsible 
 | 2 | input | fix the flags (see `help`). If the error lists accounts, ask the user which one and pass `--account <id>` from then on |
 | 3 | drift | stop, offer to file it through the Feedback skill with this envelope (filed only on a yes), and don't work around it with raw calls |
 | 4 | session | run `login` (the user signs in to Chrome), then rerun. Never happens for `auth: "none"` |
-| 5 | network | tell the user the site isn't responding, and stop. With `blocked` (a bot block, §10): tell the user the site refused the request as automated traffic and stop, without retrying even to find out; ask the user whether it happens every time, and if so offer a feature request through the Feedback skill (filed only on a yes) |
+| 5 | network | tell the user the site isn't responding, and stop. With `blocked` (a bot block, §10): tell the user the site refused the request as automated traffic and stop, without retrying even to find out; ask the user whether it happens every time, and if so offer a bug report through the Feedback skill (filed only on a yes) |
 
 **Writes:** decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cli-creator/issues/11). A write command without `--confirm` validates its input, resolves the chain, prints `{"dryRun": true, "would": {...}}` and exits 0. SKILL.md tells the agent to show the user the dry run and get an explicit yes before rerunning with `--confirm`.
 
@@ -331,7 +332,14 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 
     Only the vendor's name is kept: the envelope's `blocked` field says which, and nothing the site sent leaves the check.
   - **Behaviour:** it is checked before anything else, so it is never Drift, never retried, and no sign-in, `bootstrap` rerun or renewal is spent on it. A `sessionProbe` answered by a block is not a sign-out. A site hook's own request (`bootstrap`, `postLogin`, `accounts`) that meets the wall is the same block, not a bug. A `renew` that meets it keeps its refresh token, which the site never took, and Chrome signs in instead: a real browser may pass where a plain request was refused. When no Chrome sign-in follows (the Setup page's check) or it does not complete (MCP), the block is reported, not an expired sign-in. `check` sends nothing more once it meets a wall: the remaining Operations are skipped, and the write checker does not run.
-  - **What the agent does:** exit 5 like other network failures, but its `next` says the site refused the request as automated traffic: tell the user, stop, and work around nothing. If it keeps happening, the plugin cannot reach the site this way, and the agent offers a feature request ("the site blocks the CLI") through the Feedback skill; the maintainer then looks at `transport: "browser"` (§7).
+  - **What the agent does:** exit 5 like other network failures, but its `next` says the site refused the request as automated traffic: tell the user, stop, and work around nothing. If it keeps happening, the plugin cannot reach the site this way, and the agent offers a bug report ("the site blocks the CLI") through the Feedback skill. It is a bug, fixed in `fix` mode, not a feature request: the CLI should look like the user's browser, so the maintainer climbs a ladder, cheapest step first, and stops at the first that passes `check`:
+    1. **Headers:** send the ones the Capture shows the page's requests carry and the CLI lacks (`origin`, `referer`, `sec-fetch-*`, `x-requested-with`, client hints) through `site.headers`; the user-agent and `accept-language` are already the default (§7).
+    2. **Cookies the page's scripts set,** read in `bootstrap` with `ctx.cookies()`.
+    3. **`transport: "browser"`,** for Chrome's TLS and JavaScript.
+    4. **`browserWindow: true`,** for a site that refuses headless Chrome.
+    5. **Only what needs a person is out of scope:** a captcha that must be solved. A request the page signs one at a time may sometimes be ported, case by case.
+
+    The CLI imitates the user's own browser on the user's own account: no captcha solving, IP rotation or forged fingerprints.
   - **Unrecognised walls:** a wall with none of these signals is still an `auth` or `zod` Drift, which `fix` traces to `transport: "browser"` (§7).
 - **input:** fails the variables or flag schema, so no call is made.
 - **bug:** a request `site.never` forbids (§6), refused before it leaves, and anything else thrown.
@@ -354,7 +362,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
   - **A shared repo of plugins** (`new --into`) gets no such workflow: it schedules its own (hoaj/plugins' `drift-check.yml`), and two would file every Drift twice.
 
 **The Feedback skill** (`skills/<plugin>-feedback/`, one per plugin, covering every CLI skill in it):
-- **When:** exit 3 (Drift), exit 1 (bug), a Task the plugin can't do (a feature request for `add-task`), a bot block that keeps happening (exit 5 with `blocked`: a feature request, "the site blocks the CLI"), or the user saying "report this". Never for other session, network or input failures.
+- **When:** exit 3 (Drift), exit 1 (bug), a Task the plugin can't do (a feature request for `add-task`), a bot block that keeps happening (exit 5 with `blocked`: a bug, "the site blocks the CLI", keyed `<plugin>:<skill>:blocked:<blocked>`), or the user saying "report this". Never for other session, network or input failures.
 - **Input:** the error envelope the CLI just printed (§8). The skill never reads the state dir and never sees response values.
 - **Always asks first, Drift included.** It drafts the issue, shows it to the user and files it only on a yes, using the user's own `gh`.
 - **Dedup**, as SKILL.md steps:
@@ -377,7 +385,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 - Rub-style inspection of the site's JS bundle.
 - Values a page's scripts compute with no call and no inline JSON in the page, and XML feeds: HTML Operations read only what the HTML answer itself holds (§6).
 - Private plugins installed without `gh`: a private repo's releases need `gh`, logged in, with read access. Public is the default (§9), accepting that a public plugin publishes a site's internal API shapes, never its values ([Generated plugins: install binaries over HTTPS without gh](https://github.com/hoaj/site-cli-creator/issues/78)).
-- Captchas and other bot walls a real Chrome does not pass on its own, and requests the page's scripts sign one by one. `transport: "browser"` (§7) covers walls that Chrome passes by itself.
+- Captchas a person must solve, IP rotation and forged fingerprints. Bot walls are otherwise in scope: the ladder in §10 goes from headers to a Chrome window, and a request the page's scripts sign one by one may sometimes be ported, case by case.
 - Jira as a test case: it was replaced by Mit YouSee.
 
 ## 12. Open points (all resolved)
