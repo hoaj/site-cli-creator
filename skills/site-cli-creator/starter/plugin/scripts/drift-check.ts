@@ -21,13 +21,15 @@
 import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { flag } from "./run";
+import { compareVersions } from "./versions";
 
 export type Result = "ok" | "drift" | "error" | "session" | "no-session" | "network" | "install" | "off";
 /** `dailyCheck`: site.ts's answer to add-skill's question; false keeps the skill out of the daily check. */
 export type Skill = { plugin: string; skill: string; dir: string; version: string; auth: "login" | "none"; dailyCheck: boolean };
 export type Drift = { operation: string; fingerprint: string; diff: unknown[] };
 export type Outcome = { result: Result; detail: string; drifts: Drift[]; kind?: string };
-export type Issue = { number: number; title: string; state: "OPEN" | "CLOSED"; labels?: { name: string }[] };
+export type Issue = { number: number; title: string; state: "OPEN" | "CLOSED"; closedAt?: string; labels?: { name: string }[] };
 /** `isolated`: the child sees none of this job's secrets (SECRETS_JSON, SESSION_*, GH_TOKEN, GITHUB_TOKEN). */
 export type Exec = (cmd: string[], opts?: { cwd?: string; env?: Record<string, string>; stdin?: string; timeoutMs?: number; isolated?: boolean }) => { code: number; stdout: string; stderr: string };
 
@@ -73,6 +75,9 @@ export function sessionText(secret: string | undefined): string | null {
   }
 }
 
+/** The exit code realExec reports for a child its time limit killed. */
+export const TIMED_OUT = 124;
+
 /** What one `check` run means, from its exit code and its stdout (one JSON document). */
 export function classify(code: number, stdout: string): Outcome {
   let doc: any = null;
@@ -88,10 +93,14 @@ export function classify(code: number, stdout: string): Outcome {
     const warnings = Array.isArray(doc.warnings) ? doc.warnings.length : 0;
     return { result: "ok", detail: `${ok} Operation(s) ok${warnings ? `, ${warnings} not checkable` : ""}`, drifts: [] };
   }
+  // Killed by its time limit (realExec's 124): the site hung, which is the site not answering.
+  if (code === TIMED_OUT && !err) return { result: "network", detail: "check timed out", drifts: [] };
   const kind: string = err?.kind ?? (code === 3 ? "drift" : code === 4 ? "session" : code === 5 ? "network" : "bug");
   if (kind === "drift") {
     const drifts: Drift[] = (Array.isArray(err?.drifts) ? err.drifts : []).filter((d: Drift) => d?.fingerprint);
     if (drifts.length === 0 && err?.fingerprint) drifts.push({ operation: "", fingerprint: err.fingerprint, diff: err.diff ?? [] });
+    // Drift with no Fingerprint to file under: an error the maintainer must see, never a silent pass.
+    if (drifts.length === 0) return { result: "error", detail: `check reported drift with no Fingerprint (exit ${code})`, drifts: [], kind };
     return { result: "drift", detail: `${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation || d.fingerprint).join(", ")}`, drifts, kind };
   }
   if (kind === "session") return { result: "session", detail: "the CI session is signed out or expired", drifts: [], kind };
@@ -113,23 +122,24 @@ export function fixedIn(issue: Issue): string | null {
   return null;
 }
 
-function newer(a: string, b: string): boolean {
-  const pa = a.split(".").map(Number), pb = b.split(".").map(Number);
-  for (let i = 0; i < 3; i++) if (pa[i] !== pb[i]) return pa[i]! > pb[i]!;
-  return false;
+/** The closed issue closed last (by `closedAt`, else the highest number). */
+function lastClosed(closed: Issue[]): Issue | undefined {
+  const at = (i: Issue) => Date.parse(i.closedAt ?? "") || 0;
+  return [...closed].sort((a, b) => at(b) - at(a) || b.number - a.number)[0];
 }
 
 /**
- * The closed issue that already stands for this Drift, as the Feedback skill decides: one whose fix
- * is merged but not released yet (no fixed-in label), or released in a version newer than the one
- * checked. Null when every fix was released at or below that version: the Drift came back.
+ * The closed issue that already stands for this Drift, decided as the Feedback skill decides it: by the most
+ * recently closed match, against the highest fixed-in label among all of them. It stands when that issue has no
+ * fixed-in label (its fix is merged, not released yet), or the highest fix shipped in a version newer than the
+ * one checked. Null when the fix shipped at or below that version: the Drift came back.
  */
 export function pendingFix(closed: Issue[], s: Skill): Issue | null {
-  for (const i of [...closed].sort((a, b) => b.number - a.number)) {
-    const v = fixedIn(i);
-    if (v === null || (s.version !== "unknown" && newer(v, s.version))) return i;
-  }
-  return null;
+  const last = lastClosed(closed);
+  if (!last) return null;
+  if (fixedIn(last) === null) return last;
+  const highest = closed.map(fixedIn).filter((v): v is string => v !== null).sort(compareVersions).at(-1)!;
+  return s.version !== "unknown" && compareVersions(highest, s.version) > 0 ? last : null;
 }
 
 /** Where a skill keeps session.json on the maintainer's machine (SPEC §7). */
@@ -147,7 +157,7 @@ export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string |
   if (o.result === "drift") {
     return o.drifts.map((d) => {
       const same = closed.filter((i) => i.title === d.fingerprint);
-      const back = same.length ? same.reduce((a, b) => (a.number > b.number ? a : b)) : undefined;
+      const back = lastClosed(same);
       return {
         title: d.fingerprint,
         labels: ["drift"],
@@ -217,7 +227,8 @@ const realExec: Exec = (cmd, opts = {}) => {
     stdin: opts.stdin !== undefined ? new TextEncoder().encode(opts.stdin) : "ignore",
     timeout: opts.timeoutMs,
   });
-  return { code: p.exitCode ?? 1, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
+  // No exit code: its time limit (or a signal) killed it.
+  return { code: p.exitCode ?? TIMED_OUT, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
 };
 
 function lastLine(text: string): string {
@@ -225,12 +236,15 @@ function lastLine(text: string): string {
 }
 
 /** Installs and checks one skill. The session, if any, lives in a temp state dir removed afterwards. */
-export function checkSkill(s: Skill, secrets: Record<string, string>, exec: Exec = realExec): Outcome {
+export function checkSkill(s: Skill, secrets: Record<string, string>, exec: Exec = realExec, env: Record<string, string | undefined> = process.env): Outcome {
   if (!s.dailyCheck) return { result: "off", detail: "skipped: dailyCheck is false in site.ts", drifts: [] };
   if (s.auth === "login" && !sessionText(secrets[secretName(s)])) {
     return { result: "no-session", detail: `skipped: no ${secretName(s)} secret`, drifts: [] };
   }
-  const install = exec(["bash", join(s.dir, "install.sh")], { timeoutMs: 300_000, isolated: true });
+  // install.sh falls back to `gh release download` for a private repo: it gets the job's read-only token, the
+  // check never does.
+  const token = env.GH_TOKEN ?? env.GITHUB_TOKEN;
+  const install = exec(["bash", join(s.dir, "install.sh")], { timeoutMs: 300_000, isolated: true, ...(token ? { env: { GH_TOKEN: token } } : {}) });
   if (install.code !== 0) return { result: "install", detail: lastLine(install.stderr) || "install.sh failed", drifts: [] };
   const state = mkdtempSync(join(tmpdir(), `check-${s.skill}-`));
   try {
@@ -248,7 +262,7 @@ export function checkSkill(s: Skill, secrets: Record<string, string>, exec: Exec
 }
 
 function ghIssues(exec: Exec, repo: string, title: string): Issue[] {
-  const r = exec(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "50", "--search", `"${title}" in:title`, "--json", "number,title,state,labels"]);
+  const r = exec(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "50", "--search", `"${title}" in:title`, "--json", "number,title,state,closedAt,labels"]);
   if (r.code !== 0) throw new Error(`gh issue list failed: ${lastLine(r.stderr)}`);
   return (JSON.parse(r.stdout) as Issue[]).filter((i) => i.title === title);
 }
@@ -277,11 +291,6 @@ export function fileIssues(plans: IssuePlan[], repo: string, exec: Exec, dryRun:
   return numbers;
 }
 
-function flag(argv: string[], name: string): string | undefined {
-  const i = argv.indexOf(name);
-  return i >= 0 ? argv[i + 1] : undefined;
-}
-
 export function main(argv: string[], exec: Exec = realExec, env: Record<string, string | undefined> = process.env): number {
   const root = flag(argv, "--root") ?? ".";
   const repo = flag(argv, "--repo") ?? env.GITHUB_REPOSITORY ?? "__REPO__";
@@ -296,9 +305,19 @@ export function main(argv: string[], exec: Exec = realExec, env: Record<string, 
   for (const [k, v] of Object.entries(env)) if (k.startsWith("SESSION_") && v) secrets[k] = v;
 
   const summary: string[] = ["| Skill | Version | Result | Detail | Issues |", "|---|---|---|---|---|"];
+  // A skill that could not be checked at all (no binary, a crash) or an issue that could not be filed turns
+  // the run red, so the maintainer hears of it; Drift, a failing check and a session are the issues' to tell.
+  let red = false;
   for (const s of discover(root)) {
     console.error(`${s.plugin}:${s.skill} ${s.version}`);
-    const o = checkSkill(s, secrets, exec);
+    let o: Outcome;
+    try {
+      o = checkSkill(s, secrets, exec, env);
+    } catch (e) {
+      // One skill's crash (a binary install.sh did not leave) must not stop the others.
+      o = { result: "error", detail: `check could not run: ${(e as Error).message}`.slice(0, 300), drifts: [], kind: "crash" };
+    }
+    if (o.result === "install" || o.kind === "crash") red = true;
     console.error(`  ${o.result}: ${o.detail}`);
     // A login skill without its secret is a notice, not a failure: the run stays green.
     if (o.result === "no-session") console.log(`::notice title=${s.skill} not checked::${s.skill} is a login skill and the secret ${secretName(s)} is not set (README: Daily drift check).`);
@@ -313,6 +332,7 @@ export function main(argv: string[], exec: Exec = realExec, env: Record<string, 
       } catch (err) {
         console.error(`  issues not filed: ${(err as Error).message}`);
         o.detail += " (issue not filed: see the run log)";
+        red = true;
       }
     }
     summary.push(`| ${s.skill} | ${s.version} | ${o.result} | ${o.detail.replaceAll("|", "\\|")} | ${issues.map((n) => `#${n}`).join(" ")} |`);
@@ -320,7 +340,7 @@ export function main(argv: string[], exec: Exec = realExec, env: Record<string, 
   const out = env.GITHUB_STEP_SUMMARY;
   if (out) writeFileSync(out, `## Daily drift check\n\n${summary.join("\n")}\n`, { flag: "a" });
   console.error(summary.join("\n"));
-  return 0;
+  return red ? 1 : 0;
 }
 
 if (import.meta.main) process.exit(main(process.argv.slice(2)));
