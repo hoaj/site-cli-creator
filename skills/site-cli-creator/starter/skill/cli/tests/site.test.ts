@@ -16,6 +16,10 @@ describe("siteProblems", () => {
     expect(siteProblems(makeSite({ headers: { "bad name": "v" } }))[0]).toContain("headers");
     expect(siteProblems(makeSite({ headers: { Cookie: "a=1" } }))[0]).toContain("cookie");
     expect(siteProblems(makeSite({ headers: { authorization: "Bearer x" } }))[0]).toContain("authorization");
+    // A value fetch would refuse, or the same header twice in another case, is a config error, not a crash on the first request (review).
+    expect(siteProblems(makeSite({ headers: { referer: "https://x.test/\n" } }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: { referer: "https://x.test/\u2603" } }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: { Referer: "a", referer: "b" } }))[0]).toContain("twice");
   });
 
   // add-skill replaces the placeholders in this file too; then the unfilled case can't be built here.
