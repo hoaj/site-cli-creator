@@ -78,6 +78,22 @@ To check whether the site changed or the problem is on your side, ask your agent
 ## Maintaining
 
 #@standalone Changes are made with the site-cli-creator generator (`add-skill`, `add-task`, `fix`). Every change bumps the version (`bun run bump <patch|minor|major>`); merging it to `main` builds and publishes the release.
+#@standalone
+#@standalone ### Daily drift check
+#@standalone
+#@standalone `.github/workflows/drift-check.yml` runs every CLI skill's read-only `check` against its site each morning (and on demand: `gh workflow run drift-check.yml`), with the released binary. Drift opens an issue titled with its Fingerprint and labelled `drift`, the same issue a user's report would file, for `fix`; a failing check opens a `bug`, and an expired CI session a `ci-session` issue.
+#@standalone
+#@standalone Every CLI skill is in it unless its `site.ts` says `dailyCheck: false` (the answer you gave when it was added; change it there and bump to change it). A skill with a login is checked only with a CI session stored as the secret `SESSION_<PLUGIN>_<SKILL>` (upper case, `-` as `_`); until then it is skipped with a notice. Make it with a sign-in of its own, never a copy of your own `session.json` (the two would share a refresh token, and whichever renews first spends the other's):
+#@standalone
+#@standalone ```sh
+#@standalone (cd skills/<skill> && export SITE_CLI_HOME="$(mktemp -d)" && bin/<skill> login && gh secret set SESSION_<PLUGIN>_<SKILL> --repo __REPO__ < "$SITE_CLI_HOME/session.json"; rm -rf "$SITE_CLI_HOME")
+#@standalone ```
+#@standalone
+#@standalone A site whose sign-in lasts only hours, or that rotates its refresh token on every renewal, needs this again when the check opens a `ci-session` issue.
+#@standalone
+#@standalone A CI login with several accounts is checked for the one in the secret `ACCOUNT_<PLUGIN>_<SKILL>` (an id as `--account` takes it); without it, `check` stops at the account choice and the run opens a `check: … (input)` issue.
+#@standalone
+#@standalone A run that could not check a skill at all (no released binary to install, a crash) is red, so GitHub tells you. GitHub turns a scheduled workflow off after 60 days with no activity in the repo; turn it back on with `gh workflow enable drift-check.yml --repo __REPO__`.
 #@shared Changes are made with the site-cli-creator generator (`add-skill`, `add-task`, `fix`), with `__PLUGIN_DIR__` as the plugin root and `__REPO__` as its repo. Every change bumps the version (`cd __PLUGIN_DIR__ && bun run bump <patch|minor|major>`); merging it to `main` builds and publishes the release `__PREFIX__vX.Y.Z` (`.github/workflows/__PREFIX__release.yml`). CI for the plugin is `.github/workflows/__PREFIX__ci.yml`; both run only when `__PLUGIN_DIR__/` changes.
 #@shared
 #@shared Issues for this plugin are the ones labelled `__PLUGIN__`: `gh issue list --repo __REPO__ --label __PLUGIN__`.

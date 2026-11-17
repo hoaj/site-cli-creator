@@ -368,7 +368,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code and the fixtur
         expect(p.exitCode, p.stdout.toString() + p.stderr.toString()).toBe(0);
       };
       spawn([NEW, "--dir", plugin, "--plugin", "shop", "--repo", "acme/shop", "--description", "d", "--maintainer", "octo", "--no-labels", "--skip-checks"]);
-      spawn([ADD_SKILL, "--dir", plugin, "--skill", "shop", "--origin", "http://127.0.0.1:9", "--auth", auth]);
+      spawn([ADD_SKILL, "--dir", plugin, "--skill", "shop", "--origin", "http://127.0.0.1:9", "--auth", auth, "--daily-check", "on"]);
       const skill = join(plugin, "skills", "shop");
       symlinkSync(join(GENERATOR_ROOT, "node_modules"), join(skill, "cli", "node_modules"));
       const { copyExpected } = await import(EXPECTED);

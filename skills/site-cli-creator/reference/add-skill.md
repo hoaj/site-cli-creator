@@ -13,8 +13,16 @@ Done when the skill's Tasks pass `check --writes`, and (outside `new`) the PR is
 | auth | `login` when the Tasks need the user signed in, else `none` | `login` |
 | Tasks | plain words, one per line; or "explore first" when the user can't name them yet ([explore.md](explore.md)) | "see my subscription and price" |
 | never | what the skill must never do on this site, whatever a later Task needs; or "nothing" | "place an order or pay; delete the account" |
+| daily check | whether the plugin repo's daily drift check runs this skill's read-only `check` each morning: `on` or `off` (`--daily-check`) | `on` |
 
 For `login`, confirm the maintainer's own account can perform every Task.
+
+Ask **daily check** with your question tool (AskUserQuestion in Claude Code; else in plain words), every time, as its own question with two options:
+
+- **On (recommended):** each morning the repo's CI runs this skill's read-only `check` against the site, and Drift opens an issue for `fix` before a user hits it. A login skill also needs a CI session stored as a secret (the README's "Daily drift check"); until then it is skipped with a notice.
+- **Off:** the skill is left out, for a site that must not see traffic from CI (it bans datacenter addresses, its terms forbid automated use) or one whose sign-in cannot last in CI. Drift is then found only when a user reports it.
+
+In a shared repo (`pluginDir` other than `.`) the repo's own schedule decides whether it reads the answer. A plugin in its own repo made before generator 0.18.0 has no `.github/workflows/drift-check.yml`: ask anyway (the answer is kept for when it gets one) and say that nothing checks the skill daily until the workflow is added.
 
 Ask for **never** every time, and propose the usual ones for the site: placing an order, paying, deleting the account, changing the address or the delivery. Writes go through `--confirm`, but an agent can pass it, and a later `add-task` or `fix` can add a Contract nobody meant to allow. Step 4 turns the answer into `site.ts`'s `never` list.
 
@@ -23,7 +31,7 @@ Ask for **never** every time, and propose the usual ones for the site: placing a
 Outside `new`, branch first: `git switch -c add-skill/<skill>`.
 
 ```sh
-bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none
+bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none --daily-check on|off
 cd <plugin>/skills/<skill>/cli && bun install
 ```
 
@@ -42,7 +50,7 @@ When the Capture contradicts the answer from step 1, tell the user and scaffold 
 
 ```sh
 mv <plugin>/skills/<skill>/captures /tmp/<skill>-captures && rm -rf <plugin>/skills/<skill>
-bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth <the other one>
+bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth <the other one> --daily-check <the same answer>
 mv /tmp/<skill>-captures <plugin>/skills/<skill>/captures && cd <plugin>/skills/<skill>/cli && bun install
 ```
 
@@ -75,7 +83,7 @@ Rewrite the `description` in `<skill>/SKILL.md` to name the site and the Tasks, 
 
 ## 7. Bump and PR
 
-Skip inside `new`.
+Skip inside `new`, and for every further skill added before the plugin's first push: they all ship as `0.1.0`.
 
 ```sh
 cd <plugin> && bun run bump minor && bun test
@@ -83,4 +91,4 @@ git add -A && git commit -m "add-skill: <skill>" && git push -u origin HEAD
 gh pr create --title "add-skill: <skill>" --body "<Tasks, Operations, check result>"
 ```
 
-The maintainer merges.
+The maintainer merges. For a plugin in its own repo, an `auth: login` skill with the daily check on and no CI session yet: tell the maintainer it is skipped until its session is stored as a secret (the README's "Daily drift check").

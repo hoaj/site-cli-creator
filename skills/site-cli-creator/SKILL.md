@@ -70,7 +70,7 @@ Run from anywhere; paths are absolute or relative to the shell's directory. Ever
 
 ```sh
 bun <gen>/tools/new.ts --dir <path> | --into <repo root> --plugin <name> --repo <owner/name> --description "<text>" --maintainer <login> [--no-labels] [--skip-checks]
-bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none
+bun <gen>/tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none --daily-check on|off
 bun <gen>/tools/capture.ts --skill-dir <skill> --task <slug> | --explore --url <start> [--write] [--write-op <op>] [--allow-read <op>] [--script <file.ts>] [--profile <dir>] [--headless] [--origin <url>] [--login-host <host>]
 bun <gen>/tools/split-capture.ts --skill-dir <skill> --task <slug> --op <operation> [--op <operation>]... [--start-path <path>]
 bun <gen>/tools/draft-contract.ts <skill>/captures/<task>/<operation>.shape.json [--name <op>] [--out <file.ts>]

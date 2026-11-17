@@ -6,6 +6,12 @@ Fixes one issue filed by a plugin's Feedback skill. The title says which kind:
 |---|---|---|
 | `plugin:skill:operation:breakType:path:code` | Drift | `yousee:yousee:listFtpdProducts:zod:data.listFtpdProducts[].status:invalid_type` |
 | `bug: plugin:skill:bug:command:ErrorName:frame` | bug | `bug: yousee:yousee:bug:subscription-show:TypeError:commands/subscription-show.ts#render` |
+| `check: plugin:skill: the daily check failed (<kind>)` | the daily drift check's `check` failed without Drift (label `bug`, no bug key) | `check: shop:shop: the daily check failed (input)` |
+| `ci-session: plugin:skill: the daily check needs a new session` | the daily drift check's CI session for a login skill expired (label `ci-session`) | `ci-session: shop:shop: the daily check needs a new session` |
+
+**A `check:` issue** is the daily drift check (README: Daily drift check) reporting a `check` that failed with a kind other than Drift. Run `bin/<skill> check` (or `bun src/main.ts check`) yourself and read its envelope: a `bug` envelope carries its bug key, so fix it as a bug; an `input` one (often several accounts under the CI login) is fixed in the Contract's `needs`, or with the secret `ACCOUNT_<PLUGIN>_<SKILL>` naming the account (README: Daily drift check), not the code; `secret` means `SESSION_<PLUGIN>_<SKILL>` holds no session.json: store it again; `timeout` means `check` hung for 5 minutes: run it yourself to see where; `blocked` means the site refuses the CI runner (a bot wall, a blocked address): no Contract change fixes that, so set the skill's `dailyCheck: false` in `site.ts` (or try `transport: "browser"`), with a patch bump; `crash` or `drift with no Fingerprint` means the binary did not run as built (a release asset missing, a broken build): check the release. Close it once a manual run of the workflow (`gh workflow run drift-check.yml`) passes.
+
+**A `ci-session:` issue** needs no code: renew the CI session with the commands in the issue, then close it.
 
 The queue, by kind (the Feedback skill labels each issue; one filed through the pre-filled link may lack the label, but its title still says the kind):
 

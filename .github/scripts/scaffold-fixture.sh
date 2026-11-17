@@ -12,7 +12,7 @@ skill="$plugin/skills/fixture"
 
 bun "$skill_dir/tools/new.ts" --dir "$plugin" --plugin smoke --repo hoaj/smoke-plugin \
   --description "Smoke test plugin" --maintainer hoaj --no-labels --skip-checks
-bun "$skill_dir/tools/add-skill.ts" --dir "$plugin" --skill fixture \
+bun "$skill_dir/tools/add-skill.ts" --dir "$plugin" --skill fixture --daily-check on \
   --origin http://127.0.0.1:4310 --auth none
 # The fixture's agent-written files, with the placeholders add-skill fills.
 SRC="$skill/cli/src" WORKSPACE="$workspace" bun -e '
