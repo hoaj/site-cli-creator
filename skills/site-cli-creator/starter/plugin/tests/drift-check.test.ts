@@ -2,7 +2,7 @@ import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkSkill, classify, discover, fileIssues, fixedIn, isolatedEnv, main, planIssues, secretName, sessionText, type Exec, type Result, type Skill } from "../scripts/drift-check";
+import { checkSkill, classify, discover, fileIssues, fixedIn, isolatedEnv, KILLED, main, planIssues, secretName, sessionText, type Exec, type Result, type Skill } from "../scripts/drift-check";
 
 const tmp = mkdtempSync(join(tmpdir(), "drift-check-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -49,6 +49,14 @@ describe("classify", () => {
     expect(o.drifts.map((d) => d.fingerprint)).toEqual([FP]);
   });
 
+  test("a check killed by a signal is a crash; a site that blocks the runner is an error to file; a Drift entry with no Fingerprint is counted (review 2)", () => {
+    expect(classify(KILLED, "")).toMatchObject({ result: "error", kind: "crash" });
+    expect(classify(5, JSON.stringify({ error: { kind: "network", message: "m", blocked: "challenge page" } }))).toMatchObject({ result: "error", kind: "blocked" });
+    const mixed = classify(3, JSON.stringify({ error: { kind: "drift", drifts: [{ operation: "a", fingerprint: FP, diff: [] }, { operation: "b", fingerprint: "", diff: [] }] } }));
+    expect(mixed).toMatchObject({ result: "drift", unfiled: 1 });
+    expect(mixed.drifts.map((d) => d.fingerprint)).toEqual([FP]);
+  });
+
   test("a check killed by its time limit is network (the site hung), and Drift with no Fingerprint is an error (review 1)", () => {
     expect(classify(124, "")).toMatchObject({ result: "network", detail: "check timed out" });
     expect(classify(3, "not json")).toMatchObject({ result: "error", kind: "drift" });
@@ -79,8 +87,9 @@ describe("planIssues", () => {
     expect(p!.body).toContain("Run: https://run/1");
   });
 
-  test("an open issue with the same title is reused, not filed again", () => {
+  test("an open issue with the same title is reused, not filed again; of several, the oldest, as the Feedback skill picks (review 2)", () => {
     expect(planIssues(SKILL, drift, [{ number: 7, title: FP, state: "OPEN" }], undefined, [], "acme/shop-plugin")[0]!.existing).toBe(7);
+    expect(planIssues(SKILL, drift, [{ number: 12, title: FP, state: "OPEN" }, { number: 10, title: FP, state: "OPEN" }], undefined, [], "acme/shop-plugin")[0]!.existing).toBe(10);
   });
 
   test("a closed one whose fix shipped at or below this version: a new issue that links it (it came back)", () => {
@@ -116,8 +125,14 @@ describe("planIssues", () => {
   test("session: a ci-session issue that says how to make a CI sign-in of its own and store it as the secret", () => {
     const [p] = planIssues(SKILL, classify(4, JSON.stringify({ error: { kind: "session" } })), [], undefined, [], "acme/shop-plugin");
     expect(p!.labels).toEqual(["ci-session"]);
-    expect(p!.body).toContain('export SITE_CLI_HOME="$(mktemp -d)" && bin/shop login');
-    expect(p!.body).toContain('gh secret set SESSION_SHOP_SHOP --repo acme/shop-plugin < "$SITE_CLI_HOME/session.json"');
+    // In a subshell, so SITE_CLI_HOME never stays set in the maintainer's shell after the dir is gone (review 2).
+    expect(p!.body).toContain('(cd skills/shop && export SITE_CLI_HOME="$(mktemp -d)" && bin/shop login && gh secret set SESSION_SHOP_SHOP --repo acme/shop-plugin < "$SITE_CLI_HOME/session.json"; rm -rf "$SITE_CLI_HOME")');
+  });
+
+  test("blocked: a check: issue that says the runner is refused, so the maintainer can turn the skill's daily check off (review 2)", () => {
+    const [p] = planIssues(SKILL, classify(5, JSON.stringify({ error: { kind: "network", blocked: "challenge page" } })), [], undefined, [], "acme/shop-plugin");
+    expect(p).toMatchObject({ title: "check: shop:shop: the daily check failed (blocked)", labels: ["bug"] });
+    expect(p!.body).toContain("dailyCheck: false");
   });
 
   test("ok, network, no-session and install file nothing", () => {
@@ -207,6 +222,9 @@ test("main: a failed install, or a skill whose check crashes, turns the run red;
       expect(checked).toHaveLength(2);
       expect(readFileSync(summary, "utf8")).toContain("| shop | 1.2.3 | error |");
       expect(readFileSync(summary, "utf8")).toContain("| shop2 | 1.2.3 | ok |");
+      const halfDrift: Exec = (cmd) =>
+        cmd[0] === "bash" ? { code: 0, stdout: "", stderr: "" } : { code: 3, stdout: JSON.stringify({ error: { kind: "drift", drifts: [{ operation: "a", fingerprint: FP, diff: [] }, { operation: "b", fingerprint: "", diff: [] }] } }), stderr: "" };
+      expect(main(["--root", root, "--repo", "acme/shop-plugin", "--dry-run"], halfDrift, {})).toBe(1);
       const noInstall: Exec = (cmd) => (cmd[0] === "bash" ? { code: 1, stdout: "", stderr: "no release" } : { code: 0, stdout: '{"ok":true,"operations":[]}', stderr: "" });
       expect(main(["--root", root, "--repo", "acme/shop-plugin", "--dry-run"], noInstall, {})).toBe(1);
     } finally {

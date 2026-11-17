@@ -83,11 +83,10 @@ To check whether the site changed or the problem is on your side, ask your agent
 #@standalone
 #@standalone `.github/workflows/drift-check.yml` runs every CLI skill's read-only `check` against its site each morning (and on demand: `gh workflow run drift-check.yml`), with the released binary. Drift opens an issue titled with its Fingerprint and labelled `drift`, the same issue a user's report would file, for `fix`; a failing check opens a `bug`, and an expired CI session a `ci-session` issue.
 #@standalone
-#@standalone A skill is in it only when its `site.ts` says `dailyCheck: true` (the answer you gave when it was added; change it there and bump to change it). A skill with a login is checked only with a CI session stored as the secret `SESSION_<PLUGIN>_<SKILL>` (upper case, `-` as `_`); until then it is skipped with a notice. Make it with a sign-in of its own, never a copy of your own `session.json` (the two would share a refresh token, and whichever renews first spends the other's):
+#@standalone Every CLI skill is in it unless its `site.ts` says `dailyCheck: false` (the answer you gave when it was added; change it there and bump to change it). A skill with a login is checked only with a CI session stored as the secret `SESSION_<PLUGIN>_<SKILL>` (upper case, `-` as `_`); until then it is skipped with a notice. Make it with a sign-in of its own, never a copy of your own `session.json` (the two would share a refresh token, and whichever renews first spends the other's):
 #@standalone
 #@standalone ```sh
-#@standalone cd skills/<skill> && export SITE_CLI_HOME="$(mktemp -d)" && bin/<skill> login
-#@standalone gh secret set SESSION_<PLUGIN>_<SKILL> --repo __REPO__ < "$SITE_CLI_HOME/session.json" && rm -rf "$SITE_CLI_HOME"
+#@standalone (cd skills/<skill> && export SITE_CLI_HOME="$(mktemp -d)" && bin/<skill> login && gh secret set SESSION_<PLUGIN>_<SKILL> --repo __REPO__ < "$SITE_CLI_HOME/session.json"; rm -rf "$SITE_CLI_HOME")
 #@standalone ```
 #@standalone
 #@standalone A site whose sign-in lasts only hours, or that rotates its refresh token on every renewal, needs this again when the check opens a `ci-session` issue.
