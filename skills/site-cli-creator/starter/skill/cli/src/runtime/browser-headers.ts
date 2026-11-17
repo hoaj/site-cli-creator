@@ -7,6 +7,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { findChrome } from "./chrome";
+import { keepGuard } from "./never";
 import type { Env, Fetch } from "./site";
 
 /** The Chrome major used when none is installed or its version cannot be read. */
@@ -21,7 +22,9 @@ export function browserUserAgent(version: string | undefined, platform: string =
 
 /** The accept-language of a browser set to `locale` (the process's: Bun reads LANG and LC_ALL, so an app launched without them says en-US): the locale, its language, then English. */
 export function acceptLanguage(locale: string | undefined): string {
-  const tag = locale && /^[a-z]{2,3}(-[A-Za-z0-9]+)*$/.test(locale) ? locale : "en-US";
+  // A browser sends language[-region]: any script (Hant) or Unicode extension (-u-ca-gregory) is cut.
+  const parts = /^([a-z]{2,3})(?:-[A-Za-z]{4})?(?:-([A-Z]{2}|\d{3}))?(?:-|$)/.exec(locale ?? "");
+  const tag = parts ? (parts[2] ? `${parts[1]}-${parts[2]}` : parts[1]!) : "en-US";
   const language = tag.split("-")[0]!;
   if (language === "en") return tag === "en" ? "en;q=0.9" : `${tag},en;q=0.9`;
   return tag === language ? `${tag},en;q=0.8` : `${tag},${language};q=0.9,en;q=0.8`;
@@ -62,10 +65,10 @@ export function defaultSources(env: Env = process.env): BrowserHeaderSources {
 }
 
 /** The headers a call goes with: a Request's, then init's over them (as the Client's own calls expect), then `defaults` for each the call lacks. */
-function withDefaults(input: Parameters<Fetch>[0], init: RequestInit | undefined, defaults: () => [string, string][]): Headers {
+function withDefaults(input: Parameters<Fetch>[0], init: RequestInit | undefined, defaults: [string, () => string][]): Headers {
   const headers = new Headers(input instanceof Request ? input.headers : undefined);
   new Headers(init?.headers).forEach((v, k) => headers.set(k, v));
-  for (const [k, v] of defaults()) if (!headers.has(k)) headers.set(k, v);
+  for (const [k, value] of defaults) if (!headers.has(k)) headers.set(k, value()); // read only for a header the call lacks
   return headers;
 }
 
@@ -73,14 +76,14 @@ function withDefaults(input: Parameters<Fetch>[0], init: RequestInit | undefined
 export function withSiteHeaders(send: Fetch, headers: Record<string, string> | undefined, origin: string): Fetch {
   if (!headers || Object.keys(headers).length === 0) return send;
   const own = new URL(origin).origin;
-  return (input, init) => {
+  return keepGuard(send, (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), origin);
     if (url.origin !== own) return send(input, init);
-    return send(input, { ...init, headers: withDefaults(input, init, () => Object.entries(headers)) });
-  };
+    return send(input, { ...init, headers: withDefaults(input, init, Object.entries(headers).map(([k, v]): [string, () => string] => [k, () => v])) });
+  });
 }
 
 /** `send` with a user-agent and accept-language added where the request names none. */
 export function withBrowserHeaders(send: Fetch, sources: BrowserHeaderSources = defaultSources()): Fetch {
-  return (input, init) => send(input, { ...init, headers: withDefaults(input, init, () => [["user-agent", sources.userAgent()], ["accept-language", sources.acceptLanguage()]]) });
+  return (input, init) => send(input, { ...init, headers: withDefaults(input, init, [["user-agent", sources.userAgent], ["accept-language", sources.acceptLanguage]]) });
 }
