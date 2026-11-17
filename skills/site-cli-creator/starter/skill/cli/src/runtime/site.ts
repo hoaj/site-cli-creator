@@ -201,14 +201,14 @@ export function siteProblems(site: Site): string[] {
   }
   const h = site.headers;
   if (h !== undefined) {
-    if (typeof h !== "object" || h === null || Array.isArray(h) || Object.entries(h).some(([k, v]) => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(k) || typeof v !== "string")) {
+    if (typeof h !== "object" || h === null || Object.getPrototypeOf(h) !== Object.prototype || Object.entries(h).some(([k, v]) => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(k) || typeof v !== "string")) {
       out.push("headers must be a map of header names to string values");
     } else {
       const seen = new Set<string>();
       for (const [name, value] of Object.entries(h)) {
         const key = name.toLowerCase();
         if (key === "cookie" || key === "authorization") out.push(`headers must not set ${key}: the session holds it`);
-        else if (/^(content-type|content-length|content-encoding|host|connection|keep-alive|transfer-encoding|te|upgrade|proxy-.*)$/.test(key)) out.push(`headers must not set ${key}: the request or fetch sets it`);
+        else if (/^(content-type|content-length|content-encoding|content-language|content-location|host|connection|keep-alive|transfer-encoding|te|upgrade|proxy-.*)$/.test(key)) out.push(`headers must not set ${key}: the request or fetch sets it`);
         if (seen.has(key)) out.push(`headers names ${key} twice (header names are not case-sensitive)`);
         seen.add(key);
         // The Fetch standard's header value: no NUL, CR or LF, and Latin-1 only (Bun strips or passes some of these silently).

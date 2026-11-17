@@ -21,7 +21,10 @@ describe("siteProblems", () => {
     expect(siteProblems(makeSite({ headers: { referer: "https://x.test/\u2603" } }))[0]).toContain("headers");
     expect(siteProblems(makeSite({ headers: { Referer: "a", referer: "b" } }))[0]).toContain("twice");
     // What describes a body or a hop, or fetch controls itself, is not a site header (review).
-    for (const name of ["content-type", "Content-Length", "host", "proxy-authorization", "transfer-encoding", "connection"]) {
+    // A Headers or a Map has no own entries: it would be ignored without a word (review 3).
+    expect(siteProblems(makeSite({ headers: new Headers({ referer: "x" }) as any }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: new Map([["referer", "x"]]) as any }))[0]).toContain("headers");
+    for (const name of ["content-type", "Content-Length", "content-language", "content-location", "host", "proxy-authorization", "transfer-encoding", "connection"]) {
       expect(siteProblems(makeSite({ headers: { [name]: "x" } }))[0], name).toContain(name.toLowerCase());
     }
   });
