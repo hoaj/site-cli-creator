@@ -7,7 +7,7 @@ import { blockSignal, buildRequest, Client } from "../src/runtime/call";
 import { DryRun, Failure } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
 import { loadSession, saveSession } from "../src/runtime/session";
-import { client, fakeFetch, getCustomer, getOrder, json, listProducts, loginSite, makeDeps, makeSite, renameOrder, tempHome } from "./helpers";
+import { client, fakeFetch, getCustomer, getOrder, json, listProducts, loginSite, makeDeps, makeSite, ORIGIN, renameOrder, tempHome } from "./helpers";
 
 let home: ReturnType<typeof tempHome>;
 beforeEach(() => (home = tempHome()));
@@ -77,6 +77,38 @@ describe("request building", () => {
     await client(loginSite(), makeDeps(fetch, home.dir).deps).call(getCustomer, { customerId: "C-1" });
     expect(calls[0].headers.authorization).toBe("Bearer cached");
     expect(calls[0].headers.cookie).toBe("sid=1");
+  });
+});
+
+describe("site.headers (#111)", () => {
+  const ok = () => json({ data: { getCustomer: { id: "C-1", name: "n" } } });
+  const headers = { "x-requested-with": "XMLHttpRequest", "sec-fetch-site": "same-origin", referer: `${ORIGIN}/`, accept: "never-wins" };
+
+  test("a site's own headers go with every call to its origin; the session's and the call's own win", async () => {
+    saved({ authorization: "Bearer cached", "x-requested-with": "session" });
+    const { fetch, calls } = fakeFetch(ok);
+    await client(loginSite({ headers }), makeDeps(fetch, home.dir).deps).call(getCustomer, { customerId: "C-1" });
+    expect(calls[0].headers["sec-fetch-site"]).toBe("same-origin");
+    expect(calls[0].headers.referer).toBe(`${ORIGIN}/`);
+    expect(calls[0].headers["x-requested-with"]).toBe("session");
+    expect(calls[0].headers.accept).toBe("application/json");
+    expect(calls[0].headers.authorization).toBe("Bearer cached");
+  });
+
+  test("never to another host: a hook's request there carries none of them", async () => {
+    const { fetch, calls } = fakeFetch(() => json({}));
+    const site = makeSite({
+      headers,
+      bootstrap: async (ctx) => {
+        await ctx.fetch("https://other.example.test/x");
+        await ctx.fetch(`${ORIGIN}/csrf`);
+        return { headers: {} };
+      },
+    });
+    await client(site, makeDeps(fetch, home.dir).deps).call(getCustomer, { customerId: "C-1" }).catch(() => {});
+    expect(calls[0].url).toBe("https://other.example.test/x");
+    expect(calls[0].headers["x-requested-with"]).toBeUndefined();
+    expect(calls[1].headers["x-requested-with"]).toBe("XMLHttpRequest");
   });
 });
 

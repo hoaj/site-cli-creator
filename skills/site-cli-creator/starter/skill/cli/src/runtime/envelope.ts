@@ -74,12 +74,13 @@ export type Surface = "cli" | "mcp";
 export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, surface: Surface = "cli", blocked = false): string {
   const feedback = `${site.plugin}-feedback`;
   if (blocked) {
-    // Not an outage and not Drift: the site may block the CLI every time, which the maintainer can
-    // only fix in the plugin (transport "browser"), so a block that keeps happening is worth a report.
+    // Not an outage and not Drift: the site may block the CLI every time. That is a bug in the plugin
+    // (it does not yet look like the browser), which the maintainer fixes with `fix` (#111), so a
+    // block that keeps happening is worth a report.
     const report =
       surface === "mcp"
-        ? `Ask the user whether it happens every time; if so, the plugin cannot reach the site this way, which is a feature request ("the site blocks the CLI"). ${capitalized(feedbackOffer(site))}.`
-        : `Ask the user whether it happens every time; if so, offer to report it through the ${feedback} skill as a feature request (the site blocks the CLI), and file it only if the user says yes.`;
+        ? `Ask the user whether it happens every time; if so, the plugin cannot reach the site this way, which is a bug ("the site blocks the CLI"). ${capitalized(feedbackOffer(site))}.`
+        : `Ask the user whether it happens every time; if so, offer to report it through the ${feedback} skill as a bug (the site blocks the CLI), and file it only if the user says yes.`;
     return `Tell the user the site refused the request as automated traffic (bot protection), and stop. Do not retry, not even to find out whether it keeps happening, and do not work around it with raw calls or the browser. ${report}`;
   }
   if (surface === "mcp") return mcpNextStep(kind, site, hasAccounts);

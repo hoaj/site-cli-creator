@@ -1,6 +1,6 @@
 ---
 name: __PLUGIN__-feedback
-description: Files a problem with the __PLUGIN__ plugin as a GitHub issue on __REPO__, after the user approves the text. Use when a __PLUGIN__ CLI exits 3 (drift) or 1 (bug), when the plugin cannot do a Task the user needs or keeps being refused as automated traffic (exit 5 with `blocked`; a feature request), or when the user says "report this" about it. Not for exit 2 (input), 4 (session) or other exit 5 (network).
+description: Files a problem with the __PLUGIN__ plugin as a GitHub issue on __REPO__, after the user approves the text. Use when a __PLUGIN__ CLI exits 3 (drift) or 1 (bug), when the plugin keeps being refused as automated traffic (exit 5 with `blocked`; a bug) or cannot do a Task the user needs (a feature request), or when the user says "report this" about it. Not for exit 2 (input), 4 (session) or other exit 5 (network).
 ---
 <!-- version: 0.1.0 -->
 
@@ -16,7 +16,7 @@ A CLI skill in this plugin hit Drift or a bug, or it lacks a Task the user needs
 | exit 3, `kind: "drift"` | drift | the envelope's `fingerprint` (one per entry in `drifts` for `check`) |
 | exit 1, `kind: "bug"` | bug | the envelope's `fingerprint` (the bug key) |
 | the plugin has no command for what the user asked | feature | none |
-| exit 5 with `blocked`, every time the user tries (the site refuses the CLI as automated traffic) | feature | none; the Task is "the site blocks the CLI", and the body names the envelope's `blocked` and the command |
+| exit 5 with `blocked`, every time the user tries (the site refuses the CLI as automated traffic) | bug | `<plugin>:<skill>:blocked:<blocked>`, from the envelope's `blocked` (one per skill and protection) |
 | the user says "report this" about the plugin | whichever fits | as above |
 
 Exit 2 (input), 4 (session) and 5 (network) without `blocked` never come here: the CLI skill's own table handles them.
@@ -47,7 +47,7 @@ gh issue list --repo __REPO__ --state all --search "\"$key\" in:title" --json nu
 #@shared gh issue list --repo __REPO__ --state open --search '"feature: <skill>:" in:title' --json number,title,url
 ```
 
-GitHub's search is fuzzy: for Drift and bug, a match is only an issue whose title is exactly the title step 3 would write (the Fingerprint, or `bug: <bug key>`). For Drift, also note open issues whose title starts with the same `<plugin>:<skill>:<operation>:` (the same Operation, seen another way, such as by `check` instead of a command); they are not matches, but the body names them (step 3). When `gh` is missing or not logged in, skip the search and go to step 3; step 4 gives the user a link instead.
+GitHub's search is fuzzy: for Drift and bug, a match is only an issue whose title is exactly the title step 3 would write (the Fingerprint, `bug: <bug key>`, or the block title). For Drift, also note open issues whose title starts with the same `<plugin>:<skill>:<operation>:` (the same Operation, seen another way, such as by `check` instead of a command); they are not matches, but the body names them (step 3). When `gh` is missing or not logged in, skip the search and go to step 3; step 4 gives the user a link instead.
 
 ### 2. Decide what to do
 
@@ -72,6 +72,7 @@ With no open match and several closed ones, judge the closed rows by the most re
 |---|---|---|
 | drift | the Fingerprint, exactly | `drift` |
 | bug | `bug: <bug key>` | `bug` |
+| bug, a bot block | `bug: <plugin>:<skill>:blocked:<blocked>` | `bug` |
 | feature | `feature: <skill>: <Task in plain words>` | `feature` |
 
 #@standalone The label lets the maintainer filter the queue; dedup still goes by the exact title (step 1).
@@ -90,6 +91,8 @@ Body for drift and bug:
 <"Previously closed as #n." when step 2 links one>
 <"Same Operation: #n, #m." when step 1 noted open issues with the same operation prefix>
 ````
+
+Body for a bot block: the version, the OS, the envelope's `message` and `blocked`, the command that was refused, and whether it fails every time (ask the user). Say that the site refuses the CLI as automated traffic, and nothing the user sees on the site.
 
 Body for a feature: the Task in plain words, what the user expected the plugin to return or change, the `version` from `<skill> version` and the `os` from `<skill> doctor`.
 

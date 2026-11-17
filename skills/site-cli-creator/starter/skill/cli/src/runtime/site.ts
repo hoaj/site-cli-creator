@@ -118,6 +118,13 @@ export type SiteConfig = {
    * refuses headless Chrome. The window opens on every run.
    */
   browserWindow?: boolean;
+  /**
+   * Headers sent with every request to the origin, under the session's and the Operation's own
+   * (which win): what the page's own requests carry that plain fetch lacks (`x-requested-with`,
+   * `sec-fetch-*`, `referer`, client hints). Never `cookie` or `authorization`: the session holds
+   * those. Plain fetch already sends the user's Chrome's `user-agent` and an `accept-language`.
+   */
+  headers?: Record<string, string>;
   /** auth "login" only. */
   login?: LoginConfig;
   /** auth "none" only: fetches a cookie or CSRF token a public API needs; returns headers to send. */
@@ -191,6 +198,14 @@ export function siteProblems(site: Site): string[] {
     } else if (from instanceof RegExp && (from.global || from.sticky)) {
       out.push("login.refresh.from must be a RegExp without the g or y flag (its test() would skip matches)");
     } else if (from !== undefined && typeof refresh.keep !== "function") out.push("login.refresh.from needs a keep function");
+  }
+  const h = site.headers;
+  if (h !== undefined) {
+    if (typeof h !== "object" || h === null || Array.isArray(h) || Object.entries(h).some(([k, v]) => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(k) || typeof v !== "string")) {
+      out.push("headers must be a map of header names to string values");
+    } else {
+      for (const name of Object.keys(h)) if (/^(cookie|authorization)$/i.test(name)) out.push(`headers must not set ${name.toLowerCase()}: the session holds it`);
+    }
   }
   const ro = site.readOnlyRequests;
   if (ro !== undefined && (!Array.isArray(ro) || ro.some((p) => !(typeof p === "string" && p !== "") && !(p instanceof RegExp)))) {

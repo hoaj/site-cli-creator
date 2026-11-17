@@ -10,6 +10,14 @@ describe("siteProblems", () => {
     expect(siteProblems(loginSite())).toEqual([]);
   });
 
+  test("headers must be a map of header names to string values; cookie and authorization belong to the session (#111)", () => {
+    expect(siteProblems(makeSite({ headers: { "x-requested-with": "XMLHttpRequest", referer: "https://shop.example.test/" } }))).toEqual([]);
+    expect(siteProblems(makeSite({ headers: { "x-a": 1 as any } }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: { "bad name": "v" } }))[0]).toContain("headers");
+    expect(siteProblems(makeSite({ headers: { Cookie: "a=1" } }))[0]).toContain("cookie");
+    expect(siteProblems(makeSite({ headers: { authorization: "Bearer x" } }))[0]).toContain("authorization");
+  });
+
   // add-skill replaces the placeholders in this file too; then the unfilled case can't be built here.
   const starterCopy = ("__AUTH__" as string).startsWith("__");
   test.skipIf(!starterCopy)("unfilled placeholders are reported", () => {

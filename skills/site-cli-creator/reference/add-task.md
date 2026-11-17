@@ -12,7 +12,7 @@ When the user can't name the Tasks yet, or wants several read Tasks from one wal
 
 **A plugin in a shared repo** (its `generated.json` has a `pluginDir` other than `.`): find its feature requests with `gh issue list --repo <owner/name> --state open --label feature --label <plugin>`, and run every `cd <plugin>` in `plugins/<plugin>`.
 
-**"The site blocks the CLI"** (a feature request filed after exit 5 with `blocked` in the envelope) asks for no new Task: the site refuses the CLI's requests as automated traffic. Reproduce it with `SITE_CLI_NONINTERACTIVE=1 bun src/main.ts check` (the same exit 5 and `blocked`), set `transport: "browser"` ([contracts.md](contracts.md#sitets)), run `check` again until it exits 0, then bump and open the PR with `Fixes #<n>` as in step 6. Still blocked: the wall is out of scope; close the issue saying so.
+**"The site blocks the CLI"** (a bug filed after exit 5 with `blocked` in the envelope) is not an `add-task` job: it asks for no new Task, and `fix` mode handles it with the ladder in [fix.md](fix.md#2c-a-bot-block). One filed as a feature request goes the same way: relabel it `bug`.
 
 If the Task is something `site.ts`'s `never` list forbids (placing an order, paying: [contracts.md](contracts.md#sitets)), it can never be a command, however it is asked for. Tell the user. For an issue, close it with a comment that names the entry's `why` and says the user does it on the site; neither `--confirm` nor a new Contract changes that. Only the maintainer may change the list itself.
 
