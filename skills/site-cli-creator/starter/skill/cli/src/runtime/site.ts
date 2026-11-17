@@ -204,7 +204,15 @@ export function siteProblems(site: Site): string[] {
     if (typeof h !== "object" || h === null || Array.isArray(h) || Object.entries(h).some(([k, v]) => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(k) || typeof v !== "string")) {
       out.push("headers must be a map of header names to string values");
     } else {
-      for (const name of Object.keys(h)) if (/^(cookie|authorization)$/i.test(name)) out.push(`headers must not set ${name.toLowerCase()}: the session holds it`);
+      const seen = new Set<string>();
+      for (const [name, value] of Object.entries(h)) {
+        const key = name.toLowerCase();
+        if (key === "cookie" || key === "authorization") out.push(`headers must not set ${key}: the session holds it`);
+        if (seen.has(key)) out.push(`headers names ${key} twice (header names are not case-sensitive)`);
+        seen.add(key);
+        // The Fetch standard's header value: no NUL, CR or LF, and Latin-1 only (Bun strips or passes some of these silently).
+        if (/[\0\r\n]|[^\x00-\xff]/.test(value)) out.push(`headers.${name} is not a value fetch can send (no line breaks, no characters beyond Latin-1)`);
+      }
     }
   }
   const ro = site.readOnlyRequests;

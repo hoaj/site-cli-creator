@@ -1,7 +1,10 @@
 // Plain fetch looks like the user's own browser by default (#111): the user-agent of the Chrome
 // installed here and an accept-language, each only when the request has none of its own.
 import { afterAll, describe, expect, test } from "bun:test";
-import { acceptLanguage, browserUserAgent, withBrowserHeaders } from "../src/runtime/browser-headers";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { acceptLanguage, browserUserAgent, installedChromeVersion, withBrowserHeaders, withSiteHeaders } from "../src/runtime/browser-headers";
 
 const seen: Headers[] = [];
 const server = Bun.serve({
@@ -62,5 +65,65 @@ describe("withBrowserHeaders", () => {
     expect(res.status).toBe(200);
     expect(last().get("content-type")).toBe("application/x-www-form-urlencoded");
     expect(last().get("x-one")).toBe("1");
+  });
+});
+
+describe("installedChromeVersion", () => {
+  const dir = mkdtempSync(join(tmpdir(), "chrome-version-"));
+  afterAll(() => rmSync(dir, { recursive: true, force: true }));
+
+  test("macOS: the app's Info.plist", () => {
+    const app = join(dir, "Google Chrome.app", "Contents");
+    mkdirSync(join(app, "MacOS"), { recursive: true });
+    writeFileSync(join(app, "MacOS", "Google Chrome"), "");
+    writeFileSync(join(app, "Info.plist"), "<dict><key>CFBundleShortVersionString</key>\n\t<string>141.0.7390.55</string></dict>");
+    expect(installedChromeVersion({ SITE_CLI_CHROME: join(app, "MacOS", "Google Chrome") }, "darwin")).toBe("141.0.7390.55");
+  });
+
+  test("Windows: the highest version folder beside chrome.exe", () => {
+    const app = join(dir, "win");
+    for (const v of ["9.0.1.2", "141.0.7390.55", "141.0.7390.9"]) mkdirSync(join(app, v), { recursive: true });
+    writeFileSync(join(app, "chrome.exe"), "");
+    expect(installedChromeVersion({ SITE_CLI_CHROME: join(app, "chrome.exe") }, "win32")).toBe("141.0.7390.55");
+  });
+
+  test.skipIf(process.platform === "win32")("Linux: what `chrome --version` prints", () => {
+    const bin = join(dir, "chrome");
+    writeFileSync(bin, "#!/bin/sh\necho 'Google Chrome 141.0.7390.55 '\n");
+    chmodSync(bin, 0o755);
+    expect(installedChromeVersion({ SITE_CLI_CHROME: bin }, "linux")).toBe("141.0.7390.55");
+  });
+
+  test("undefined when Chrome is missing or says nothing useful", () => {
+    expect(installedChromeVersion({ SITE_CLI_CHROME: join(dir, "nope") }, "linux")).toBeUndefined();
+    const bin = join(dir, "mute");
+    writeFileSync(bin, "#!/bin/sh\nexit 0\n");
+    chmodSync(bin, 0o755);
+    if (process.platform !== "win32") expect(installedChromeVersion({ SITE_CLI_CHROME: bin }, "linux")).toBeUndefined();
+  });
+});
+
+describe("withSiteHeaders", () => {
+  const origin = server.url.origin;
+  const wrapped = withSiteHeaders((input, init) => fetch(input, init), { "x-requested-with": "XMLHttpRequest", referer: `${origin}/` }, origin);
+
+  test("adds the site's headers to its origin, from a string, a relative path or a Request; the request's own win", async () => {
+    await wrapped(server.url.href);
+    expect(last().get("x-requested-with")).toBe("XMLHttpRequest");
+    await wrapped(new Request(server.url.href, { headers: { referer: "mine" } }));
+    expect(last().get("referer")).toBe("mine");
+    expect(last().get("x-requested-with")).toBe("XMLHttpRequest");
+    await wrapped(server.url.href, { headers: { "X-Requested-With": "own" } });
+    expect(last().get("x-requested-with")).toBe("own");
+  });
+
+  test("never to another origin", async () => {
+    const other = Bun.serve({ port: 0, fetch: (req) => (seen.push(req.headers), new Response("ok")) });
+    try {
+      await wrapped(other.url.href);
+      expect(last().get("x-requested-with")).toBeNull();
+    } finally {
+      other.stop(true);
+    }
   });
 });

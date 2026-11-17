@@ -19,7 +19,7 @@ export function browserUserAgent(version: string | undefined, platform: string =
   return `Mozilla/5.0 (${os}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/${major}.0.0.0 Safari/537.36`;
 }
 
-/** The accept-language of a browser set to `locale`: the locale, its language, then English. */
+/** The accept-language of a browser set to `locale` (the process's: Bun reads LANG and LC_ALL, so an app launched without them says en-US): the locale, its language, then English. */
 export function acceptLanguage(locale: string | undefined): string {
   const tag = locale && /^[a-z]{2,3}(-[A-Za-z0-9]+)*$/.test(locale) ? locale : "en-US";
   const language = tag.split("-")[0]!;
@@ -42,7 +42,7 @@ export function installedChromeVersion(env: Env = process.env, platform: string 
       const versions = readdirSync(dirname(path)).filter((d) => /^\d+\.\d+\.\d+\.\d+$/.test(d));
       return versions.sort((a, b) => a.localeCompare(b, undefined, { numeric: true })).at(-1);
     }
-    const out = spawnSync(path, ["--version"], { encoding: "utf8", timeout: 5_000 });
+    const out = spawnSync(path, ["--version"], { encoding: "utf8", timeout: 2_000 });
     return /(\d+\.\d+\.\d+\.\d+)/.exec(out.stdout ?? "")?.[1];
   } catch {
     return undefined;
@@ -61,27 +61,26 @@ export function defaultSources(env: Env = process.env): BrowserHeaderSources {
   };
 }
 
+/** The headers a call goes with: a Request's, then init's over them (as the Client's own calls expect), then `defaults` for each the call lacks. */
+function withDefaults(input: Parameters<Fetch>[0], init: RequestInit | undefined, defaults: () => [string, string][]): Headers {
+  const headers = new Headers(input instanceof Request ? input.headers : undefined);
+  new Headers(init?.headers).forEach((v, k) => headers.set(k, v));
+  for (const [k, v] of defaults()) if (!headers.has(k)) headers.set(k, v);
+  return headers;
+}
+
 /** `send` with the site's own headers added to a request to its origin, where the request names none. */
 export function withSiteHeaders(send: Fetch, headers: Record<string, string> | undefined, origin: string): Fetch {
   if (!headers || Object.keys(headers).length === 0) return send;
+  const own = new URL(origin).origin;
   return (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), origin);
-    if (url.origin !== new URL(origin).origin) return send(input, init);
-    const merged = new Headers(input instanceof Request ? input.headers : undefined);
-    new Headers(init?.headers).forEach((v, k) => merged.set(k, v));
-    for (const [k, v] of Object.entries(headers)) if (!merged.has(k)) merged.set(k, v);
-    return send(input, { ...init, headers: merged });
+    if (url.origin !== own) return send(input, init);
+    return send(input, { ...init, headers: withDefaults(input, init, () => Object.entries(headers)) });
   };
 }
 
 /** `send` with a user-agent and accept-language added where the request names none. */
 export function withBrowserHeaders(send: Fetch, sources: BrowserHeaderSources = defaultSources()): Fetch {
-  return (input, init) => {
-    // A Request's headers and init.headers combine as the Client's own fetch calls expect: init wins.
-    const headers = new Headers(input instanceof Request ? input.headers : undefined);
-    new Headers(init?.headers).forEach((v, k) => headers.set(k, v));
-    if (!headers.has("user-agent")) headers.set("user-agent", sources.userAgent());
-    if (!headers.has("accept-language")) headers.set("accept-language", sources.acceptLanguage());
-    return send(input, { ...init, headers });
-  };
+  return (input, init) => send(input, { ...init, headers: withDefaults(input, init, () => [["user-agent", sources.userAgent()], ["accept-language", sources.acceptLanguage()]]) });
 }
