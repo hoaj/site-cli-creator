@@ -57,8 +57,8 @@ describe("classify", () => {
     expect(mixed.drifts.map((d) => d.fingerprint)).toEqual([FP]);
   });
 
-  test("a check killed by its time limit is network (the site hung), and Drift with no Fingerprint is an error (review 1)", () => {
-    expect(classify(124, "")).toMatchObject({ result: "network", detail: "check timed out" });
+  test("a check killed by its time limit is an error to file once (a hang every day must be seen), and Drift with no Fingerprint is an error (review 1, 3)", () => {
+    expect(classify(124, "")).toMatchObject({ result: "error", kind: "timeout" });
     expect(classify(3, "not json")).toMatchObject({ result: "error", kind: "drift" });
   });
 
@@ -109,12 +109,31 @@ describe("planIssues", () => {
       { number: 3, title: FP, state: "CLOSED" as const, closedAt: "2026-01-01T00:00:00Z", labels: [] },
       { number: 7, title: FP, state: "CLOSED" as const, closedAt: "2026-06-01T00:00:00Z", labels: [{ name: "fixed-in:v1.2.0" }] },
     ];
-    const [p] = planIssues(SKILL, drift, [], undefined, closed, "acme/shop-plugin");
+    const now = Date.parse("2026-06-05T00:00:00Z");
+    const [p] = planIssues(SKILL, drift, [], undefined, closed, "acme/shop-plugin", now);
     expect(p!.existing).toBeUndefined();
     expect(p!.body).toContain("reported before in #7");
-    // The most recently closed one has no fixed-in yet: its fix is on the way, nothing new.
+    // The most recently closed one has no fixed-in yet (closed days ago): its fix is on the way, nothing new.
     const pending = [{ ...closed[1]!, labels: [] }, { ...closed[0]!, labels: [{ name: "fixed-in:v1.0.0" }] }];
-    expect(planIssues(SKILL, drift, [], undefined, pending, "acme/shop-plugin")[0]!.existing).toBe(7);
+    expect(planIssues(SKILL, drift, [], undefined, pending, "acme/shop-plugin", now)[0]!.existing).toBe(7);
+  });
+
+  test("a Drift issue closed long ago without a fixed-in label no longer stands for it: a new issue links it (review 3)", () => {
+    const now = Date.parse("2026-11-17T00:00:00Z");
+    const recent = [{ number: 7, title: FP, state: "CLOSED" as const, closedAt: "2026-11-10T00:00:00Z", labels: [] }];
+    expect(planIssues(SKILL, drift, [], undefined, recent, "acme/shop-plugin", now)[0]!.existing).toBe(7);
+    const old = [{ ...recent[0]!, closedAt: "2026-09-01T00:00:00Z" }];
+    const [p] = planIssues(SKILL, drift, [], undefined, old, "acme/shop-plugin", now);
+    expect(p!.existing).toBeUndefined();
+    expect(p!.body).toContain("reported before in #7");
+  });
+
+  test("a check: or ci-session: issue closed in the last 14 days is not filed again; an older one is (review 3)", () => {
+    const now = Date.parse("2026-11-17T00:00:00Z");
+    const blocked = classify(5, JSON.stringify({ error: { kind: "network", blocked: "wall" } }));
+    const title = "check: shop:shop: the daily check failed (blocked)";
+    expect(planIssues(SKILL, blocked, [], undefined, [{ number: 5, title, state: "CLOSED", closedAt: "2026-11-12T00:00:00Z" }], "acme/shop-plugin", now)[0]!.existing).toBe(5);
+    expect(planIssues(SKILL, blocked, [], undefined, [{ number: 5, title, state: "CLOSED", closedAt: "2026-10-01T00:00:00Z" }], "acme/shop-plugin", now)[0]!.existing).toBeUndefined();
   });
 
   test("fixedIn reads a fixed-in:vX.Y.Z label", () => {
@@ -176,6 +195,17 @@ describe("checkSkill", () => {
     expect(seen[1]!.env?.GH_TOKEN).toBeUndefined();
   });
 
+  test("a malformed session secret is not a missing one: it is named and turns the run red (review 3)", () => {
+    expect(checkSkill(SKILL, { SESSION_SHOP_SHOP: "/Users/me/.shop/session.json" }, (() => ({ code: 0, stdout: "", stderr: "" })) as Exec)).toMatchObject({ result: "error", kind: "secret" });
+  });
+
+  test("ACCOUNT_<PLUGIN>_<SKILL> picks the account of a CI login with several (review 3)", () => {
+    const seen: string[][] = [];
+    const e: Exec = (cmd) => (seen.push(cmd), cmd[0] === "bash" ? { code: 0, stdout: "", stderr: "" } : { code: 0, stdout: '{"ok":true,"operations":[]}', stderr: "" });
+    checkSkill(SKILL, { SESSION_SHOP_SHOP: '{"headers":{}}', ACCOUNT_SHOP_SHOP: "A-2" }, e);
+    expect(seen.at(-1)).toEqual(["/x/bin/shop", "check", "--account", "A-2"]);
+  });
+
   test("a failed install is recorded as install", () => {
     expect(checkSkill(SKILL, { SESSION_SHOP_SHOP: '{"headers":{}}' }, exec({ install: { code: 1 } }))).toMatchObject({ result: "install", detail: "install.sh: release v9 still being built" });
   });
@@ -227,6 +257,9 @@ test("main: a failed install, or a skill whose check crashes, turns the run red;
       expect(main(["--root", root, "--repo", "acme/shop-plugin", "--dry-run"], halfDrift, {})).toBe(1);
       const noInstall: Exec = (cmd) => (cmd[0] === "bash" ? { code: 1, stdout: "", stderr: "no release" } : { code: 0, stdout: '{"ok":true,"operations":[]}', stderr: "" });
       expect(main(["--root", root, "--repo", "acme/shop-plugin", "--dry-run"], noInstall, {})).toBe(1);
+      // A malformed session secret turns the run red too (review 3).
+      const login = pluginRoot("main-bad-secret", "login");
+      expect(main(["--root", login, "--repo", "acme/shop-plugin", "--dry-run"], noInstall, { SESSION_SHOP_SHOP: "not json" })).toBe(1);
     } finally {
       err.mockRestore();
     }

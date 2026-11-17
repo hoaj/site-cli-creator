@@ -91,6 +91,8 @@ To check whether the site changed or the problem is on your side, ask your agent
 #@standalone
 #@standalone A site whose sign-in lasts only hours, or that rotates its refresh token on every renewal, needs this again when the check opens a `ci-session` issue.
 #@standalone
+#@standalone A CI login with several accounts is checked for the one in the secret `ACCOUNT_<PLUGIN>_<SKILL>` (an id as `--account` takes it); without it, `check` stops at the account choice and the run opens a `check: … (input)` issue.
+#@standalone
 #@standalone A run that could not check a skill at all (no released binary to install, a crash) is red, so GitHub tells you. GitHub turns a scheduled workflow off after 60 days with no activity in the repo; turn it back on with `gh workflow enable drift-check.yml --repo __REPO__`.
 #@shared Changes are made with the site-cli-creator generator (`add-skill`, `add-task`, `fix`), with `__PLUGIN_DIR__` as the plugin root and `__REPO__` as its repo. Every change bumps the version (`cd __PLUGIN_DIR__ && bun run bump <patch|minor|major>`); merging it to `main` builds and publishes the release `__PREFIX__vX.Y.Z` (`.github/workflows/__PREFIX__release.yml`). CI for the plugin is `.github/workflows/__PREFIX__ci.yml`; both run only when `__PLUGIN_DIR__/` changes.
 #@shared

@@ -219,7 +219,8 @@ await runTool(async () => {
   assertNoTokens(root, files);
 
   const next = `${toolCommand("add-skill")} --dir ${dir} --skill <name> --origin <url> --auth login|none --daily-check on|off`;
-  const labelSet = shared ? [...LABELS, pluginLabel(plugin)] : LABELS;
+  // ci-session is for the daily drift check, which only a plugin in its own repo gets.
+  const labelSet = shared ? [...LABELS.filter((l) => l.name !== "ci-session"), pluginLabel(plugin)] : LABELS;
   let labels: { created: string[]; failed?: string } | "skipped" = "skipped";
   if (!values["no-labels"]) {
     progress(`creating labels on ${values.repo}`);
