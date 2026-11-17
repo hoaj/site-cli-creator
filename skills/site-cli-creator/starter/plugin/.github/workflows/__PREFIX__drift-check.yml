@@ -23,7 +23,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Each skill may take up to 10 minutes (a 5-minute install, a 5-minute check); rows are written as they finish.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
@@ -46,4 +47,5 @@ jobs:
           SECRETS_JSON: ${{ toJSON(secrets) }}
           SITE_CLI_CHROME: /usr/bin/google-chrome
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-        run: bun scripts/drift-check.ts --repo "$GITHUB_REPOSITORY" --run-url "$RUN_URL"
+        # xvfb-run: a skill with browserWindow: true opens a Chrome window, which needs a display.
+        run: xvfb-run -a bun scripts/drift-check.ts --repo "$GITHUB_REPOSITORY" --run-url "$RUN_URL"

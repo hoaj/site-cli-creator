@@ -18,7 +18,7 @@
 // (raw JSON or base64); the workflow passes all secrets as SECRETS_JSON. Without it the skill is
 // skipped with a notice. The check's output carries shapes and type names only, never site values,
 // and this script prints none of it beyond the Fingerprints and type-only diffs the issues hold.
-import { chmodSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { flag } from "./run";
@@ -28,7 +28,8 @@ export type Result = "ok" | "drift" | "error" | "session" | "no-session" | "netw
 /** `dailyCheck`: site.ts's answer to add-skill's question; false keeps the skill out of the daily check. */
 export type Skill = { plugin: string; skill: string; dir: string; version: string; auth: "login" | "none"; dailyCheck: boolean };
 export type Drift = { operation: string; fingerprint: string; diff: unknown[] };
-export type Outcome = { result: Result; detail: string; drifts: Drift[]; kind?: string };
+/** `unfiled`: Drift entries with no Fingerprint to file under (they turn the run red). */
+export type Outcome = { result: Result; detail: string; drifts: Drift[]; kind?: string; unfiled?: number };
 export type Issue = { number: number; title: string; state: "OPEN" | "CLOSED"; closedAt?: string; labels?: { name: string }[] };
 /** `isolated`: the child sees none of this job's secrets (SECRETS_JSON, SESSION_*, GH_TOKEN, GITHUB_TOKEN). */
 export type Exec = (cmd: string[], opts?: { cwd?: string; env?: Record<string, string>; stdin?: string; timeoutMs?: number; isolated?: boolean }) => { code: number; stdout: string; stderr: string };
@@ -77,6 +78,8 @@ export function sessionText(secret: string | undefined): string | null {
 
 /** The exit code realExec reports for a child its time limit killed. */
 export const TIMED_OUT = 124;
+/** The exit code realExec reports for a child a signal killed (a segfault, the OOM killer): a crash. */
+export const KILLED = 125;
 
 /** What one `check` run means, from its exit code and its stdout (one JSON document). */
 export function classify(code: number, stdout: string): Outcome {
@@ -95,13 +98,19 @@ export function classify(code: number, stdout: string): Outcome {
   }
   // Killed by its time limit (realExec's 124): the site hung, which is the site not answering.
   if (code === TIMED_OUT && !err) return { result: "network", detail: "check timed out", drifts: [] };
+  if (code === KILLED && !err) return { result: "error", detail: "check was killed by a signal", drifts: [], kind: "crash" };
+  // The site refuses the runner (a bot wall, a blocked datacenter address): every day the same, so it is filed once.
+  if (err?.blocked) return { result: "error", detail: "the site blocks the runner", drifts: [], kind: "blocked" };
   const kind: string = err?.kind ?? (code === 3 ? "drift" : code === 4 ? "session" : code === 5 ? "network" : "bug");
   if (kind === "drift") {
-    const drifts: Drift[] = (Array.isArray(err?.drifts) ? err.drifts : []).filter((d: Drift) => d?.fingerprint);
+    const all: Drift[] = Array.isArray(err?.drifts) ? err.drifts : [];
+    const drifts = all.filter((d) => d?.fingerprint);
     if (drifts.length === 0 && err?.fingerprint) drifts.push({ operation: "", fingerprint: err.fingerprint, diff: err.diff ?? [] });
     // Drift with no Fingerprint to file under: an error the maintainer must see, never a silent pass.
     if (drifts.length === 0) return { result: "error", detail: `check reported drift with no Fingerprint (exit ${code})`, drifts: [], kind };
-    return { result: "drift", detail: `${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation || d.fingerprint).join(", ")}`, drifts, kind };
+    const unfiled = all.length - all.filter((d) => d?.fingerprint).length;
+    const more = unfiled > 0 ? `, and ${unfiled} with no Fingerprint` : "";
+    return { result: "drift", detail: `${drifts.length} Operation(s) drifted: ${drifts.map((d) => d.operation || d.fingerprint).join(", ")}${more}`, drifts, kind, ...(unfiled > 0 ? { unfiled } : {}) };
   }
   if (kind === "session") return { result: "session", detail: "the CI session is signed out or expired", drifts: [], kind };
   if (kind === "network") return { result: "network", detail: "the site did not answer", drifts: [], kind };
@@ -142,17 +151,13 @@ export function pendingFix(closed: Issue[], s: Skill): Issue | null {
   return s.version !== "unknown" && compareVersions(highest, s.version) > 0 ? last : null;
 }
 
-/** Where a skill keeps session.json on the maintainer's machine (SPEC §7). */
-export function stateDir(s: Pick<Skill, "plugin" | "skill">): string {
-  return s.plugin === s.skill ? `~/.${s.plugin}` : `~/.${s.plugin}-${s.skill}`;
-}
-
 /**
  * The issues an outcome calls for. `existing` is set when an issue already stands for it: an open
  * one with that exact title, or (Drift) a closed one whose fix is not released at this version yet.
  */
 export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string | undefined, closed: Issue[], repo: string): IssuePlan[] {
-  const exact = (title: string) => open.find((i) => i.title === title && i.state === "OPEN")?.number;
+  // Of several open matches, the oldest, as the Feedback skill picks.
+  const exact = (title: string) => open.filter((i) => i.title === title && i.state === "OPEN").sort((a, b) => a.number - b.number)[0]?.number;
   const run = runUrl ? `\n\nRun: ${runUrl}` : "";
   if (o.result === "drift") {
     return o.drifts.map((d) => {
@@ -179,11 +184,14 @@ export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string |
   }
   if (o.result === "error") {
     const title = errorTitle(s, o.kind ?? "bug");
+    const blocked = o.kind === "blocked"
+      ? ` The site refuses requests from the CI runner (a bot wall or a blocked address), which no Contract change fixes: set \`dailyCheck: false\` in \`skills/${s.skill}/cli/src/site.ts\` to leave the skill out, or try \`transport: "browser"\` there if Chrome gets through.`
+      : "";
     return [{
       title,
       labels: ["bug"],
       existing: exact(title),
-      body: `The daily \`check\` of \`${s.plugin}\` ${s.version}, skill \`${s.skill}\`, failed with kind \`${o.kind}\` instead of passing or reporting Drift. Run it locally (\`skills/${s.skill}/bin/${s.skill} check\`) to see the envelope. Filed by the daily drift check.${run}`,
+      body: `The daily \`check\` of \`${s.plugin}\` ${s.version}, skill \`${s.skill}\`, failed with kind \`${o.kind}\` instead of passing or reporting Drift.${blocked} Run it locally (\`skills/${s.skill}/bin/${s.skill} check\`) to see the envelope. Filed by the daily drift check.${run}`,
     }];
   }
   if (o.result === "session") {
@@ -195,14 +203,13 @@ export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string |
       body: [
         `The daily check of \`${s.plugin}\`, skill \`${s.skill}\`, could not sign in: its CI session expired or was signed out. Until it is renewed, the skill is not checked.`,
         "",
-        "To renew it, on the maintainer's machine, sign in in a state dir of its own (a copy of your own session.json would share its refresh token with your machine, and whichever renews first spends the other's):",
+        "To renew it, at the repo root on the maintainer's machine, sign in in a throwaway state dir (a copy of your own session.json would share its refresh token with your machine, and whichever renews first spends the other's; the parentheses keep SITE_CLI_HOME out of your shell, and your own sign-in as it is):",
         "",
         "```sh",
-        `cd skills/${s.skill} && export SITE_CLI_HOME="$(mktemp -d)" && bin/${s.skill} login`,
-        `gh secret set ${secretName(s)} --repo ${repo} < "$SITE_CLI_HOME/session.json" && rm -rf "$SITE_CLI_HOME"`,
+        `(cd skills/${s.skill} && export SITE_CLI_HOME="$(mktemp -d)" && bin/${s.skill} login && gh secret set ${secretName(s)} --repo ${repo} < "$SITE_CLI_HOME/session.json"; rm -rf "$SITE_CLI_HOME")`,
         "```",
         "",
-        `Then close this issue. (Your own sign-in stays in ${stateDir(s)}/.) Filed by the daily drift check.${run}`,
+        `Then close this issue. Filed by the daily drift check.${run}`,
       ].join("\n"),
     }];
   }
@@ -227,8 +234,9 @@ const realExec: Exec = (cmd, opts = {}) => {
     stdin: opts.stdin !== undefined ? new TextEncoder().encode(opts.stdin) : "ignore",
     timeout: opts.timeoutMs,
   });
-  // No exit code: its time limit (or a signal) killed it.
-  return { code: p.exitCode ?? TIMED_OUT, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
+  // No exit code: its time limit killed it (the site hung), or a signal did (a crash).
+  const code = p.exitCode ?? (p.exitedDueToTimeout ? TIMED_OUT : KILLED);
+  return { code, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
 };
 
 function lastLine(text: string): string {
@@ -250,7 +258,6 @@ export function checkSkill(s: Skill, secrets: Record<string, string>, exec: Exec
   try {
     if (s.auth === "login") {
       writeFileSync(join(state, "session.json"), sessionText(secrets[secretName(s)])!, { mode: 0o600 });
-      chmodSync(join(state, "session.json"), 0o600);
     }
     const bin = join(s.dir, "bin", process.platform === "win32" ? `${s.skill}.exe` : s.skill);
     // No one can sign in on a runner: an expired session must end as kind "session", not open Chrome.
@@ -305,6 +312,10 @@ export function main(argv: string[], exec: Exec = realExec, env: Record<string, 
   for (const [k, v] of Object.entries(env)) if (k.startsWith("SESSION_") && v) secrets[k] = v;
 
   const summary: string[] = ["| Skill | Version | Result | Detail | Issues |", "|---|---|---|---|---|"];
+  const out = env.GITHUB_STEP_SUMMARY;
+  // Each row as its skill finishes: a job cancelled at its time limit still shows the skills it got through.
+  const write = (line: string) => out && writeFileSync(out, `${line}\n`, { flag: "a" });
+  write(`## Daily drift check\n\n${summary.join("\n")}`);
   // A skill that could not be checked at all (no binary, a crash) or an issue that could not be filed turns
   // the run red, so the maintainer hears of it; Drift, a failing check and a session are the issues' to tell.
   let red = false;
@@ -317,7 +328,7 @@ export function main(argv: string[], exec: Exec = realExec, env: Record<string, 
       // One skill's crash (a binary install.sh did not leave) must not stop the others.
       o = { result: "error", detail: `check could not run: ${(e as Error).message}`.slice(0, 300), drifts: [], kind: "crash" };
     }
-    if (o.result === "install" || o.kind === "crash") red = true;
+    if (o.result === "install" || o.kind === "crash" || (o.unfiled ?? 0) > 0) red = true;
     console.error(`  ${o.result}: ${o.detail}`);
     // A login skill without its secret is a notice, not a failure: the run stays green.
     if (o.result === "no-session") console.log(`::notice title=${s.skill} not checked::${s.skill} is a login skill and the secret ${secretName(s)} is not set (README: Daily drift check).`);
@@ -335,10 +346,10 @@ export function main(argv: string[], exec: Exec = realExec, env: Record<string, 
         red = true;
       }
     }
-    summary.push(`| ${s.skill} | ${s.version} | ${o.result} | ${o.detail.replaceAll("|", "\\|")} | ${issues.map((n) => `#${n}`).join(" ")} |`);
+    const row = `| ${s.skill} | ${s.version} | ${o.result} | ${o.detail.replaceAll("|", "\\|")} | ${issues.map((n) => `#${n}`).join(" ")} |`;
+    summary.push(row);
+    write(row);
   }
-  const out = env.GITHUB_STEP_SUMMARY;
-  if (out) writeFileSync(out, `## Daily drift check\n\n${summary.join("\n")}\n`, { flag: "a" });
   console.error(summary.join("\n"));
   return red ? 1 : 0;
 }

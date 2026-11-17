@@ -425,7 +425,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     // The daily drift check (#110): scheduled, runs the script, and gives drift and bug new.ts's own colours and texts.
     const driftCheck = readFileSync(join(dir, ".github/workflows/drift-check.yml"), "utf8");
     expect(driftCheck).toMatch(/schedule:\n\s+- cron: "17 5 \* \* \*"/);
-    expect(driftCheck).toContain("run: bun scripts/drift-check.ts --repo \"$GITHUB_REPOSITORY\"");
+    expect(driftCheck).toContain("run: xvfb-run -a bun scripts/drift-check.ts --repo \"$GITHUB_REPOSITORY\"");
     const newSource = readFileSync(NEW, "utf8");
     for (const name of ["drift", "bug", "ci-session"]) {
       const label = new RegExp(`\\{ name: "${name}", color: "(\\w+)", description: "([^"]+)" \\}`).exec(newSource)!;
