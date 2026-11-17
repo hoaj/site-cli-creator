@@ -4,6 +4,8 @@ import { afterAll, describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { guardFetch } from "../src/runtime/never";
+import { makeSite } from "./helpers";
 import { acceptLanguage, browserUserAgent, installedChromeVersion, withBrowserHeaders, withSiteHeaders } from "../src/runtime/browser-headers";
 
 const seen: Headers[] = [];
@@ -36,6 +38,10 @@ describe("acceptLanguage", () => {
     expect(acceptLanguage("en-US")).toBe("en-US,en;q=0.9");
     expect(acceptLanguage("en")).toBe("en;q=0.9");
     expect(acceptLanguage(undefined)).toBe("en-US,en;q=0.9");
+    // A browser sends language[-region]: a Unicode extension or a script subtag is cut (review).
+    expect(acceptLanguage("da-DK-u-ca-gregory")).toBe("da-DK,da;q=0.9,en;q=0.8");
+    expect(acceptLanguage("en-US-u-hc-h23")).toBe("en-US,en;q=0.9");
+    expect(acceptLanguage("zh-Hant-TW")).toBe("zh-TW,zh;q=0.9,en;q=0.8");
   });
 });
 
@@ -58,6 +64,15 @@ describe("withBrowserHeaders", () => {
     await wrapped(new Request(server.url.href, { headers: { "user-agent": "mine/3", accept: "application/json" } }));
     expect(last().get("user-agent")).toBe("mine/3");
     expect(last().get("accept")).toBe("application/json");
+  });
+
+  test("reads the user-agent and accept-language only for a request that lacks them", async () => {
+    let asked = 0;
+    const lazy = withBrowserHeaders((input, init) => fetch(input, init), { userAgent: () => (asked++, MAC), acceptLanguage: () => (asked++, "fr") });
+    await lazy(server.url.href, { headers: { "user-agent": "a", "accept-language": "b" } });
+    expect(asked).toBe(0);
+    await lazy(server.url.href, { headers: { "user-agent": "a" } });
+    expect(asked).toBe(1);
   });
 
   test("changes nothing else: method, body, other headers, redirect mode", async () => {
@@ -115,6 +130,13 @@ describe("withSiteHeaders", () => {
     expect(last().get("x-requested-with")).toBe("XMLHttpRequest");
     await wrapped(server.url.href, { headers: { "X-Requested-With": "own" } });
     expect(last().get("x-requested-with")).toBe("own");
+  });
+
+  test("a fetch the guard already wrapped stays guarded as it is, so a Client built on another's deps does not guard twice (review)", () => {
+    const site = makeSite({ never: [{ method: "DELETE", path: "/account", why: "test" }] });
+    const guarded = guardFetch(site, (input, init) => fetch(input, init));
+    const wrapped = withSiteHeaders(guarded, { "x-requested-with": "XMLHttpRequest" }, server.url.origin);
+    expect(guardFetch(site, wrapped)).toBe(wrapped);
   });
 
   test("never to another origin", async () => {

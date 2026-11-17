@@ -31,7 +31,7 @@ export const DRIFTS = [
   "rate-limit", // data APIs answer 429
   "input-rejected", // calls with variables are rejected with 400 BAD_USER_INPUT
   "bot-wall", // data APIs answer 403 with an HTML challenge page unless the request comes from a browser (Sec-Fetch-Mode) and carries the cookie the front page sets in JavaScript
-  "ua-wall", // data APIs answer 403 with an HTML challenge page to a request whose user-agent is missing or starts with Bun/ (a script's, not a browser's); #111
+  "ua-wall", // data APIs answer 403 with an HTML challenge page to a request whose user-agent is not a Chrome one (`Mozilla/5.0 … Chrome/<version>`): Bun/…, missing, or any other; #111
   "html-layout", // GET /notices renders the same notices in a new layout, with no ul.notices (#102)
 ] as const;
 

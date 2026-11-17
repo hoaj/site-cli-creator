@@ -20,6 +20,10 @@ describe("siteProblems", () => {
     expect(siteProblems(makeSite({ headers: { referer: "https://x.test/\n" } }))[0]).toContain("headers");
     expect(siteProblems(makeSite({ headers: { referer: "https://x.test/\u2603" } }))[0]).toContain("headers");
     expect(siteProblems(makeSite({ headers: { Referer: "a", referer: "b" } }))[0]).toContain("twice");
+    // What describes a body or a hop, or fetch controls itself, is not a site header (review).
+    for (const name of ["content-type", "Content-Length", "host", "proxy-authorization", "transfer-encoding", "connection"]) {
+      expect(siteProblems(makeSite({ headers: { [name]: "x" } }))[0], name).toContain(name.toLowerCase());
+    }
   });
 
   // add-skill replaces the placeholders in this file too; then the unfilled case can't be built here.
