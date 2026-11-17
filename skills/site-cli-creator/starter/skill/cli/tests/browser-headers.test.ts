@@ -139,6 +139,12 @@ describe("withSiteHeaders", () => {
     expect(guardFetch(site, wrapped)).toBe(wrapped);
   });
 
+  test("a malformed call rejects, as fetch does, instead of throwing before a .catch can see it (review 3)", async () => {
+    await expect(wrapped("http://[bad")).rejects.toBeDefined();
+    const ua = withBrowserHeaders(() => Promise.resolve(new Response("ok")), { userAgent: () => { throw new Error("boom"); }, acceptLanguage: () => "en" });
+    await expect(ua(server.url.href)).rejects.toThrow("boom");
+  });
+
   test("never to another origin", async () => {
     const other = Bun.serve({ port: 0, fetch: (req) => (seen.push(req.headers), new Response("ok")) });
     try {

@@ -76,7 +76,7 @@ function withDefaults(input: Parameters<Fetch>[0], init: RequestInit | undefined
 export function withSiteHeaders(send: Fetch, headers: Record<string, string> | undefined, origin: string): Fetch {
   if (!headers || Object.keys(headers).length === 0) return send;
   const own = new URL(origin).origin;
-  return keepGuard(send, (input, init) => {
+  return keepGuard(send, async (input, init) => {
     const url = new URL(input instanceof Request ? input.url : String(input), origin);
     if (url.origin !== own) return send(input, init);
     return send(input, { ...init, headers: withDefaults(input, init, Object.entries(headers).map(([k, v]): [string, () => string] => [k, () => v])) });
@@ -85,5 +85,5 @@ export function withSiteHeaders(send: Fetch, headers: Record<string, string> | u
 
 /** `send` with a user-agent and accept-language added where the request names none. */
 export function withBrowserHeaders(send: Fetch, sources: BrowserHeaderSources = defaultSources()): Fetch {
-  return (input, init) => send(input, { ...init, headers: withDefaults(input, init, [["user-agent", sources.userAgent], ["accept-language", sources.acceptLanguage]]) });
+  return async (input, init) => send(input, { ...init, headers: withDefaults(input, init, [["user-agent", sources.userAgent], ["accept-language", sources.acceptLanguage]]) });
 }
