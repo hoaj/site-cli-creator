@@ -118,6 +118,13 @@ export type SiteConfig = {
    * refuses headless Chrome. The window opens on every run.
    */
   browserWindow?: boolean;
+  /**
+   * Headers sent with every request to the origin, under the session's and the Operation's own
+   * (which win): what the page's own requests carry that plain fetch lacks (`x-requested-with`,
+   * `sec-fetch-*`, `referer`, client hints). Never `cookie` or `authorization`: the session holds
+   * those. Plain fetch already sends the user's Chrome's `user-agent` and an `accept-language`.
+   */
+  headers?: Record<string, string>;
   /** auth "login" only. */
   login?: LoginConfig;
   /** auth "none" only: fetches a cookie or CSRF token a public API needs; returns headers to send. */
@@ -191,6 +198,23 @@ export function siteProblems(site: Site): string[] {
     } else if (from instanceof RegExp && (from.global || from.sticky)) {
       out.push("login.refresh.from must be a RegExp without the g or y flag (its test() would skip matches)");
     } else if (from !== undefined && typeof refresh.keep !== "function") out.push("login.refresh.from needs a keep function");
+  }
+  const h = site.headers;
+  if (h !== undefined) {
+    if (typeof h !== "object" || h === null || Object.getPrototypeOf(h) !== Object.prototype || Object.entries(h).some(([k, v]) => !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(k) || typeof v !== "string")) {
+      out.push("headers must be a map of header names to string values");
+    } else {
+      const seen = new Set<string>();
+      for (const [name, value] of Object.entries(h)) {
+        const key = name.toLowerCase();
+        if (key === "cookie" || key === "authorization") out.push(`headers must not set ${key}: the session holds it`);
+        else if (/^(content-type|content-length|content-encoding|content-language|content-location|host|connection|keep-alive|transfer-encoding|te|upgrade|proxy-.*)$/.test(key)) out.push(`headers must not set ${key}: the request or fetch sets it`);
+        if (seen.has(key)) out.push(`headers names ${key} twice (header names are not case-sensitive)`);
+        seen.add(key);
+        // The Fetch standard's header value: no NUL, CR or LF, and Latin-1 only (Bun strips or passes some of these silently).
+        if (/[\0\r\n]|[^\x00-\xff]/.test(value)) out.push(`headers.${name} is not a value fetch can send (no line breaks, no characters beyond Latin-1)`);
+      }
+    }
   }
   const ro = site.readOnlyRequests;
   if (ro !== undefined && (!Array.isArray(ro) || ro.some((p) => !(typeof p === "string" && p !== "") && !(p instanceof RegExp)))) {

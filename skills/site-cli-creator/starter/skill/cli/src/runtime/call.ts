@@ -24,6 +24,7 @@ import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
 import { extractHtml, type HtmlContract } from "./html";
 import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
+import { withSiteHeaders } from "./browser-headers";
 import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
@@ -389,7 +390,9 @@ export class Client {
     // hop of fetchFollowing), the hooks' ctx.fetch and login.refresh.renew's plain fetch.
     const note = (e: NeverSent) => this.noteRefusal(e);
     const origin = effectiveOrigin(site, deps.env);
-    this.deps = { ...deps, fetch: guardFetch(site, deps.fetch, note, origin), plainFetch: guardFetch(site, deps.plainFetch ?? deps.fetch, note, origin) };
+    // The site's own headers (site.headers) go to its origin on every request, hooks' too.
+    const withOwn = (f: Fetch) => guardFetch(site, withSiteHeaders(f, site.headers, origin), note, origin);
+    this.deps = { ...deps, fetch: withOwn(deps.fetch), plainFetch: withOwn(deps.plainFetch ?? deps.fetch) };
     this.confirm = options.confirm ?? false;
     this.session = options.session ?? null;
     this.persisted = !options.session;

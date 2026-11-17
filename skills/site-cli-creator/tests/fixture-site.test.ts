@@ -533,11 +533,23 @@ describe("drift switches", () => {
     expect((await gql(site, browser, "getAccount", "query getAccount { getAccount { id } }")).status).toBe(200);
   });
 
+  test("ua-wall: a data API answers an HTML challenge with 403 to a request without a Chrome user-agent (#111)", async () => {
+    const site = startFixtureSite({ auth: "none" });
+    sites.push(site);
+    site.setDrift("ua-wall");
+    const h = await csrfHeaders(site);
+    const url = `${site.url}/api/invoices?accountId=${ACCOUNT.id}`;
+    expect((await fetch(url, { headers: h })).status).toBe(403);
+    expect((await fetch(url, { headers: { ...h, "user-agent": "Bun/1.4.3" } })).status).toBe(403);
+    const chrome = { ...h, "user-agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36" };
+    expect((await fetch(url, { headers: chrome })).status).toBe(200);
+  });
+
   test("unknown switches are refused", () => {
     const site = startFixtureSite({ auth: "none" });
     sites.push(site);
     expect(() => site.setDrift("nope" as Drift)).toThrow(/unknown drift/);
-    expect(DRIFTS.length).toBe(12);
+    expect(DRIFTS.length).toBe(13);
   });
 });
 
