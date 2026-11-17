@@ -22,7 +22,7 @@ Ask **daily check** with your question tool (AskUserQuestion in Claude Code; els
 - **On (recommended):** each morning the repo's CI runs this skill's read-only `check` against the site, and Drift opens an issue for `fix` before a user hits it. A login skill also needs a CI session stored as a secret (the README's "Daily drift check"); until then it is skipped with a notice.
 - **Off:** the skill is left out, for a site that must not see traffic from CI (it bans datacenter addresses, its terms forbid automated use) or one whose sign-in cannot last in CI. Drift is then found only when a user reports it.
 
-In a shared repo (`pluginDir` other than `.`) the repo's own schedule decides whether it reads the answer.
+In a shared repo (`pluginDir` other than `.`) the repo's own schedule decides whether it reads the answer. A plugin in its own repo made before generator 0.18.0 has no `.github/workflows/drift-check.yml`: ask anyway (the answer is kept for when it gets one) and say that nothing checks the skill daily until the workflow is added.
 
 Ask for **never** every time, and propose the usual ones for the site: placing an order, paying, deleting the account, changing the address or the delivery. Writes go through `--confirm`, but an agent can pass it, and a later `add-task` or `fix` can add a Contract nobody meant to allow. Step 4 turns the answer into `site.ts`'s `never` list.
 

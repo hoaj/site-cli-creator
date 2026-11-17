@@ -15,6 +15,7 @@ export default defineSite({
   graphqlPath: "/graphql",
   auth: "none",
   needsChrome: true,
+  dailyCheck: true, // add-skill's --daily-check answer: keep it
   // The front page sets a csrf_token cookie (only when the browser lacks one);
   // every API call must send it back both as the cookie and in the x-csrf-token
   // header. ctx.cookies() also finds it when Chrome's tab took it already.

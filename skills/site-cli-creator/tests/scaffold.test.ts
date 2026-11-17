@@ -428,7 +428,8 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     expect(driftCheck).toContain("run: xvfb-run -a bun scripts/drift-check.ts --repo \"$GITHUB_REPOSITORY\"");
     const newSource = readFileSync(NEW, "utf8");
     for (const name of ["drift", "bug", "ci-session"]) {
-      const label = new RegExp(`\\{ name: "${name}", color: "(\\w+)", description: "([^"]+)" \\}`).exec(newSource)!;
+      const label = new RegExp(`\\{ name: "${name}", color: "(\\w+)", description: "([^"]+)" \\}`).exec(newSource);
+      if (!label) throw new Error(`new.ts LABELS no longer has { name: "${name}", color, description } on one line: keep the workflow's label line in step with it`);
       expect(driftCheck, name).toContain(`add ${name} ${label[1]} "${label[2]}"`);
     }
     expect(driftCheck).not.toMatch(/gh label create[^\n]*--force/);
@@ -647,7 +648,8 @@ describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", ()
     write(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${log}"\nexit 0\n`, 0o755);
     const r = run(NEW, intoArgs(monorepo("mono-labels")), { ...env, PATH: `${bin}:${process.env.PATH}` });
     expect(r.code, JSON.stringify(r.out)).toBe(0);
-    const names = ["feature", "drift", "bug", "unverified", "needs-account", "ci-session", "shop"];
+    // No ci-session in a shared repo: it gets no daily drift check (review 3).
+    const names = ["feature", "drift", "bug", "unverified", "needs-account", "shop"];
     expect(r.out.labels).toEqual({ created: names });
     const calls = readFileSync(log, "utf8").trim().split("\n");
     for (const [i, name] of names.entries()) expect(calls[i]).toStartWith(`label create ${name} --repo acme/plugins --force`);

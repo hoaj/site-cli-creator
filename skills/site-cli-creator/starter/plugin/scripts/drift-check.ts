@@ -63,6 +63,11 @@ export function secretName(s: Pick<Skill, "plugin" | "skill">): string {
   return `SESSION_${s.plugin}_${s.skill}`.toUpperCase().replace(/[^A-Z0-9_]/g, "_");
 }
 
+/** The secret that names the account a CI login with several accounts is checked for: ACCOUNT_<PLUGIN>_<SKILL>. */
+export function accountName(s: Pick<Skill, "plugin" | "skill">): string {
+  return secretName(s).replace(/^SESSION_/, "ACCOUNT_");
+}
+
 /** session.json text from a secret holding the raw JSON or its base64. Null when it is neither. */
 export function sessionText(secret: string | undefined): string | null {
   if (!secret || !secret.trim()) return null;
@@ -97,7 +102,8 @@ export function classify(code: number, stdout: string): Outcome {
     return { result: "ok", detail: `${ok} Operation(s) ok${warnings ? `, ${warnings} not checkable` : ""}`, drifts: [] };
   }
   // Killed by its time limit (realExec's 124): the site hung, which is the site not answering.
-  if (code === TIMED_OUT && !err) return { result: "network", detail: "check timed out", drifts: [] };
+  // Killed at its time limit: a hang (a deadlocked renew, a Chrome window that never opens), filed once.
+  if (code === TIMED_OUT && !err) return { result: "error", detail: "check timed out", drifts: [], kind: "timeout" };
   if (code === KILLED && !err) return { result: "error", detail: "check was killed by a signal", drifts: [], kind: "crash" };
   // The site refuses the runner (a bot wall, a blocked datacenter address): every day the same, so it is filed once.
   if (err?.blocked) return { result: "error", detail: "the site blocks the runner", drifts: [], kind: "blocked" };
@@ -131,6 +137,14 @@ export function fixedIn(issue: Issue): string | null {
   return null;
 }
 
+/** How long a closed issue still stands for what it reported: a release takes minutes, a deliberate close is final. */
+export const RECENT_MS = 14 * 24 * 3600 * 1000;
+
+function closedRecently(i: Issue, now: number): boolean {
+  const at = Date.parse(i.closedAt ?? "");
+  return Number.isNaN(at) || now - at < RECENT_MS;
+}
+
 /** The closed issue closed last (by `closedAt`, else the highest number). */
 function lastClosed(closed: Issue[]): Issue | undefined {
   const at = (i: Issue) => Date.parse(i.closedAt ?? "") || 0;
@@ -140,13 +154,14 @@ function lastClosed(closed: Issue[]): Issue | undefined {
 /**
  * The closed issue that already stands for this Drift, decided as the Feedback skill decides it: by the most
  * recently closed match, against the highest fixed-in label among all of them. It stands when that issue has no
- * fixed-in label (its fix is merged, not released yet), or the highest fix shipped in a version newer than the
+ * fixed-in label and was closed in the last RECENT_MS (its fix is merged, not released yet; one closed longer ago
+ * was closed without a fix, so the Drift is live again), or the highest fix shipped in a version newer than the
  * one checked. Null when the fix shipped at or below that version: the Drift came back.
  */
-export function pendingFix(closed: Issue[], s: Skill): Issue | null {
+export function pendingFix(closed: Issue[], s: Skill, now = Date.now()): Issue | null {
   const last = lastClosed(closed);
   if (!last) return null;
-  if (fixedIn(last) === null) return last;
+  if (fixedIn(last) === null) return closedRecently(last, now) ? last : null;
   const highest = closed.map(fixedIn).filter((v): v is string => v !== null).sort(compareVersions).at(-1)!;
   return s.version !== "unknown" && compareVersions(highest, s.version) > 0 ? last : null;
 }
@@ -155,9 +170,12 @@ export function pendingFix(closed: Issue[], s: Skill): Issue | null {
  * The issues an outcome calls for. `existing` is set when an issue already stands for it: an open
  * one with that exact title, or (Drift) a closed one whose fix is not released at this version yet.
  */
-export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string | undefined, closed: Issue[], repo: string): IssuePlan[] {
+export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string | undefined, closed: Issue[], repo: string, now = Date.now()): IssuePlan[] {
   // Of several open matches, the oldest, as the Feedback skill picks.
   const exact = (title: string) => open.filter((i) => i.title === title && i.state === "OPEN").sort((a, b) => a.number - b.number)[0]?.number;
+  // A check: or ci-session: issue closed in the last RECENT_MS still stands for it (closed as expected, or being
+  // handled): not filed again each morning.
+  const standing = (title: string) => exact(title) ?? lastClosed(closed.filter((i) => i.title === title && closedRecently(i, now)))?.number;
   const run = runUrl ? `\n\nRun: ${runUrl}` : "";
   if (o.result === "drift") {
     return o.drifts.map((d) => {
@@ -166,7 +184,7 @@ export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string |
       return {
         title: d.fingerprint,
         labels: ["drift"],
-        existing: exact(d.fingerprint) ?? pendingFix(same, s)?.number,
+        existing: exact(d.fingerprint) ?? pendingFix(same, s, now)?.number,
         body: [
           `The daily check found Drift in \`${s.plugin}\` ${s.version}, skill \`${s.skill}\`${d.operation ? `, Operation \`${d.operation}\`` : ""}: the site changed away from the Contract.`,
           "",
@@ -190,7 +208,7 @@ export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string |
     return [{
       title,
       labels: ["bug"],
-      existing: exact(title),
+      existing: standing(title),
       body: `The daily \`check\` of \`${s.plugin}\` ${s.version}, skill \`${s.skill}\`, failed with kind \`${o.kind}\` instead of passing or reporting Drift.${blocked} Run it locally (\`skills/${s.skill}/bin/${s.skill} check\`) to see the envelope. Filed by the daily drift check.${run}`,
     }];
   }
@@ -199,7 +217,7 @@ export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string |
     return [{
       title,
       labels: ["ci-session"],
-      existing: exact(title),
+      existing: standing(title),
       body: [
         `The daily check of \`${s.plugin}\`, skill \`${s.skill}\`, could not sign in: its CI session expired or was signed out. Until it is renewed, the skill is not checked.`,
         "",
@@ -220,7 +238,7 @@ export function planIssues(s: Skill, o: Outcome, open: Issue[], runUrl: string |
 export function isolatedEnv(env: Record<string, string | undefined>): Record<string, string> {
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(env)) {
-    if (v === undefined || k === "SECRETS_JSON" || k === "GH_TOKEN" || k === "GITHUB_TOKEN" || k.startsWith("SESSION_")) continue;
+    if (v === undefined || k === "SECRETS_JSON" || k === "GH_TOKEN" || k === "GITHUB_TOKEN" || k.startsWith("SESSION_") || k.startsWith("ACCOUNT_")) continue;
     out[k] = v;
   }
   return out;
@@ -228,15 +246,24 @@ export function isolatedEnv(env: Record<string, string | undefined>): Record<str
 
 const realExec: Exec = (cmd, opts = {}) => {
   const base = opts.isolated ? isolatedEnv(process.env) : process.env;
-  const p = Bun.spawnSync(cmd, {
-    cwd: opts.cwd,
-    env: { ...base, ...(opts.env ?? {}) },
-    stdin: opts.stdin !== undefined ? new TextEncoder().encode(opts.stdin) : "ignore",
-    timeout: opts.timeoutMs,
-  });
-  // No exit code: its time limit killed it (the site hung), or a signal did (a crash).
-  const code = p.exitCode ?? (p.exitedDueToTimeout ? TIMED_OUT : KILLED);
-  return { code, stdout: p.stdout.toString(), stderr: p.stderr.toString() };
+  // Output goes to files, not pipes: a Chrome the CLI started could keep a pipe open past the time limit.
+  const io = mkdtempSync(join(tmpdir(), "drift-check-io-"));
+  try {
+    const p = Bun.spawnSync(cmd, {
+      cwd: opts.cwd,
+      env: { ...base, ...(opts.env ?? {}) },
+      stdin: opts.stdin !== undefined ? new TextEncoder().encode(opts.stdin) : "ignore",
+      stdout: Bun.file(join(io, "out")),
+      stderr: Bun.file(join(io, "err")),
+      timeout: opts.timeoutMs,
+    });
+    const read = (name: string) => (existsSync(join(io, name)) ? readFileSync(join(io, name), "utf8") : "");
+    // No exit code: its time limit killed it (a hang), or a signal did (a crash).
+    const code = p.exitCode ?? (p.exitedDueToTimeout ? TIMED_OUT : KILLED);
+    return { code, stdout: read("out"), stderr: read("err") };
+  } finally {
+    rmSync(io, { recursive: true, force: true });
+  }
 };
 
 function lastLine(text: string): string {
@@ -247,6 +274,8 @@ function lastLine(text: string): string {
 export function checkSkill(s: Skill, secrets: Record<string, string>, exec: Exec = realExec, env: Record<string, string | undefined> = process.env): Outcome {
   if (!s.dailyCheck) return { result: "off", detail: "skipped: dailyCheck is false in site.ts", drifts: [] };
   if (s.auth === "login" && !sessionText(secrets[secretName(s)])) {
+    // Set but not session.json (a path, a truncated paste): never mistaken for a skill nobody set up yet.
+    if (secrets[secretName(s)]?.trim()) return { result: "error", detail: `the secret ${secretName(s)} holds no session.json (raw JSON or base64)`, drifts: [], kind: "secret" };
     return { result: "no-session", detail: `skipped: no ${secretName(s)} secret`, drifts: [] };
   }
   // install.sh falls back to `gh release download` for a private repo: it gets the job's read-only token, the
@@ -261,7 +290,9 @@ export function checkSkill(s: Skill, secrets: Record<string, string>, exec: Exec
     }
     const bin = join(s.dir, "bin", process.platform === "win32" ? `${s.skill}.exe` : s.skill);
     // No one can sign in on a runner: an expired session must end as kind "session", not open Chrome.
-    const r = exec([bin, "check"], { env: { SITE_CLI_HOME: state, SITE_CLI_NONINTERACTIVE: "1" }, timeoutMs: 300_000, isolated: true });
+    // A CI login with several accounts names the one to check in ACCOUNT_<PLUGIN>_<SKILL>.
+    const account = secrets[accountName(s)]?.trim();
+    const r = exec([bin, "check", ...(account ? ["--account", account] : [])], { env: { SITE_CLI_HOME: state, SITE_CLI_NONINTERACTIVE: "1" }, timeoutMs: 300_000, isolated: true });
     return classify(r.code, r.stdout);
   } finally {
     rmSync(state, { recursive: true, force: true });
@@ -309,7 +340,7 @@ export function main(argv: string[], exec: Exec = realExec, env: Record<string, 
   } catch {
     console.error("SECRETS_JSON is not JSON; checking without sessions");
   }
-  for (const [k, v] of Object.entries(env)) if (k.startsWith("SESSION_") && v) secrets[k] = v;
+  for (const [k, v] of Object.entries(env)) if ((k.startsWith("SESSION_") || k.startsWith("ACCOUNT_")) && v) secrets[k] = v;
 
   const summary: string[] = ["| Skill | Version | Result | Detail | Issues |", "|---|---|---|---|---|"];
   const out = env.GITHUB_STEP_SUMMARY;
@@ -328,7 +359,7 @@ export function main(argv: string[], exec: Exec = realExec, env: Record<string, 
       // One skill's crash (a binary install.sh did not leave) must not stop the others.
       o = { result: "error", detail: `check could not run: ${(e as Error).message}`.slice(0, 300), drifts: [], kind: "crash" };
     }
-    if (o.result === "install" || o.kind === "crash" || (o.unfiled ?? 0) > 0) red = true;
+    if (o.result === "install" || o.kind === "crash" || o.kind === "secret" || (o.unfiled ?? 0) > 0) red = true;
     console.error(`  ${o.result}: ${o.detail}`);
     // A login skill without its secret is a notice, not a failure: the run stays green.
     if (o.result === "no-session") console.log(`::notice title=${s.skill} not checked::${s.skill} is a login skill and the secret ${secretName(s)} is not set (README: Daily drift check).`);

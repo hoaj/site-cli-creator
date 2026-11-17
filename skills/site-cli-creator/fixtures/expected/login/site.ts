@@ -22,6 +22,7 @@ export default defineSite({
   graphqlPath: "/graphql",
   auth: "login",
   needsChrome: true,
+  dailyCheck: true, // add-skill's --daily-check answer: keep it
   login: {
     startUrl: "__LOGIN_ORIGIN__/login?autologin=1",
     hosts: ["__LOGIN_HOST__"],
