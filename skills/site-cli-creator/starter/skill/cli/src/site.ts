@@ -29,6 +29,11 @@ export default defineSite({
     // anonymous user), set this to a GET path that answers 2xx only while signed in, such as
     // /api/me: the CLI asks it once per run, so an expired sign-in is exit 4, not Drift.
     // sessionProbe: "/api/me",
+    // An expired sign-in that the site answers with a redirect to its own sign-in page (302 Location:
+    // /login on the origin) or with a 200 that shows the sign-in form in place is not seen as signed
+    // out by `hosts` alone, and would read as false Drift. Name the page and/or an element only it has:
+    // paths: ["/login"],
+    // signedOutSelector: "form#login",
     timeoutMs: 600_000,
     postLogin: async () => ({}),
     // When the sign-in's token call answers with a refresh_token, add `refresh` (from, keep,

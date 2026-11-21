@@ -130,6 +130,27 @@ function value(scope: Doc | Element, field: { css: string; attr?: string; all?: 
   return read(first(scope, field.css));
 }
 
+/** Whether a content-type header names HTML: `text/html` or `application/xhtml+xml` (parameters ignored). */
+export function isHtmlType(contentType: string | null | undefined): boolean {
+  const type = (contentType ?? "").split(";")[0]!.trim().toLowerCase();
+  return type === "text/html" || type === "application/xhtml+xml";
+}
+
+/** Whether `css` parses, as css-select reads it: undefined when it does, else the parser's message. */
+export function selectorProblem(css: string): string | undefined {
+  try {
+    selectOne(css, []);
+    return undefined;
+  } catch (e) {
+    return (e as Error).message;
+  }
+}
+
+/** Whether any element of `html` matches `css` (login.signedOutSelector, SPEC §7). A selector the parser refuses is a ContractError. */
+export function htmlMatches(html: string, css: string): boolean {
+  return compiled(css, () => selectOne<Node, Element>(css, parseHtml(html).children)) !== null;
+}
+
 function isScope(css: string): boolean {
   return css.trim() === ":scope";
 }
