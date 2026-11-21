@@ -62,7 +62,7 @@ Every mode that adds or changes a Task runs this loop. Steps are in [reference/a
 - Personal data is never stored or logged: `postLogin` returns chain-root ids only, and nothing writes values into captures, issues, PR text or commit messages. Shapes and type names only.
 - Command names are `<noun> <verb>` in English (`subscription show`, `bill list`), one per Task; the file is `commands/<noun>-<verb>.ts`.
 - `registry.ts` and the `## Commands` table are written only by `regen.ts`. Edit everything else in the plugin freely: it owns its files.
-- Only the release build compiles. Run the CLI from source while developing: `cd <skill>/cli && bun src/main.ts <command>`. Set `SITE_CLI_NONINTERACTIVE=1` on those runs: an expired login then exits 4 at once instead of opening Chrome and waiting up to 10 minutes (run `login`, then rerun).
+- Only the release build compiles. Run the CLI from source while developing: `cd <skill>/cli && bun src/main.ts <command>`. Set `SITE_CLI_NONINTERACTIVE=1` on those runs: an expired login then exits 4 at once instead of opening Chrome and waiting up to 10 minutes (run `login`, then rerun a read; a write that got the sign-in page may have taken effect: check on the site first, see [contracts.md](reference/contracts.md#sitets)).
 
 ## Tools
 
