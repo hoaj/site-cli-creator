@@ -289,7 +289,7 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
     if (!skip) checkOutput(app.site, command, value);
     return new Checked(value, command.output !== undefined && !skip);
   } catch (e) {
-    // Whatever fails after a write the site accepted (a later call, the mapping, a bug) must not read as a failed write.
+    // Whatever fails after a write the site answered with success (a later call, the mapping, a bug) must not read as a failed write.
     if (client.writeSent && !(e instanceof DryRun)) throw new AfterWrite(e);
     throw e;
   }

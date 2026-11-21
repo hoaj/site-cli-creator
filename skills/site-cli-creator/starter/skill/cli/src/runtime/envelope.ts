@@ -22,7 +22,7 @@ export type FailureDetails = {
    */
   blocked?: string;
   /**
-   * Any kind, from a command that had already sent a write the site accepted: the failure came
+   * Any kind, from a command that had already sent a write the site answered with success: the failure came
    * after it (a later call, a mapping, a bug in run), so the write must not be run again.
    */
   writeSent?: boolean;
@@ -76,7 +76,7 @@ export type EnvelopeSite = { plugin: string; skill: string; version: string; rep
 /** Who reads the envelope: an agent running the CLI, or an MCP client calling the `mcp` server's tools. */
 export type Surface = "cli" | "mcp";
 
-/** First in `next` of any failure after a write the site accepted (details.writeSent), on both surfaces. */
+/** First in `next` of any failure after a write the site answered with success (details.writeSent), on both surfaces. */
 export const WRITE_SENT = "The write was sent and the site answered with success, so it may have taken effect. Check on the site before running it again.";
 
 export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, surface: Surface = "cli", blocked = false): string {
