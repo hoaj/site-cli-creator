@@ -118,6 +118,18 @@ const server = Bun.serve({
           await gql({ operationName: "plainQuery", query: "fragment F on Order { id }\\nquery plainQuery { order { ...F } }" });
           fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});
         };`);
+    // The site's own sign-in page (login.paths) and a sign-in form served in place (login.signedOutSelector) (#107).
+    // ?forward=1: a signed-in session only passes through on its way to /orders.
+    if (url.pathname === "/login")
+      return new Response(`<!doctype html><html><body><form id="signin"></form>${url.searchParams.has("forward") ? `<script>setTimeout(() => (location.href = "/orders"), 600)</script>` : ""}</body></html>`, { headers: { "content-type": "text/html" } });
+    // A shell page whose scripts mount the sign-in form a moment after load.
+    if (url.pathname === "/contains") return new Response(`<!doctype html><html><body><form id="f">Sign in</form></body></html>`, { headers: { "content-type": "text/html" } });
+    if (url.pathname === "/shell")
+      return new Response(`<!doctype html><html><body><div id="app"></div><script>setTimeout(() => { document.getElementById("app").innerHTML = '<form id="signin"></form>'; }, 800)</script></body></html>`, { headers: { "content-type": "text/html" } });
+    if (url.pathname === "/expired") return Response.redirect(`${url.origin}/login`, 302);
+    if (url.pathname === "/form-expired") return new Response(`<!doctype html><html><body><form id="signin"></form></body></html>`, { headers: { "content-type": "text/html" } });
+    // A valid session that only passes through the sign-in page: it is on it a moment, then goes on to the account.
+    if (url.pathname === "/passthrough") return new Response(`<!doctype html><html><body><form id="signin"></form><script>setTimeout(() => (location.href = "/account"), 1200)</script></body></html>`, { headers: { "content-type": "text/html" } });
     if (url.pathname === "/graphql") {
       if (req.method === "POST") graphqlReceived.push((await req.clone().json().catch(() => ({}))).operationName ?? "?");
       return Response.json({ data: { ok: true } });
@@ -199,6 +211,93 @@ describe.skipIf(skip)("Chrome", () => {
     s.login!.startUrl = `${server.url.origin}/logged-out`;
     expect(await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } })).toBeNull();
   }, 60_000);
+
+  describe("the site's own sign-in page (#107)", () => {
+    const ownSite = () => {
+      const s = site();
+      s.login = { ...s.login!, hosts: [], paths: ["/login"], signedOutSelector: "form#signin" };
+      return s;
+    };
+
+    test("a headless sign-in that lands on login.paths, or on a page with the form, ends within the grace period", async () => {
+      for (const start of ["/expired", "/form-expired", "/shell"]) {
+        const s = ownSite();
+        s.login!.startUrl = `${server.url.origin}${start}`;
+        const t0 = Date.now();
+        expect(await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } })).toBeNull();
+        expect([start, Date.now() - t0 < 20_000]).toEqual([start, true]); // not the 30 s timeout
+      }
+    }, 90_000);
+
+    test("one way to see a form: :contains() works in the headless sign-in, and check --writes waits for a form that mounts after the trigger threw (review 3)", async () => {
+      const s = ownSite();
+      s.login = { ...s.login!, paths: [], signedOutSelector: "form:contains(Sign in)", startUrl: `${server.url.origin}/contains` };
+      expect(await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } })).toBeNull();
+
+      const op = defineOperation({
+        name: "PATCH /api/orders/:orderId",
+        effect: "write",
+        rest: { method: "PATCH", path: "/api/orders/:orderId", body: (v) => ({ name: v.name }) },
+        variables: z.object({ orderId: z.string(), name: z.string() }),
+        response: z.object({ ok: z.boolean() }),
+        trigger: async (p) => {
+          await p.goto("/shell");
+          await p.waitForTimeout(500);
+          throw new Error("the trigger gave up before the form mounted");
+        },
+      });
+      const err = await chromeWriteChecker(ownSite(), { SITE_CLI_HOME: home.dir })([op], []).catch((e) => e);
+      expect(err?.kind).toBe("session");
+    }, 90_000);
+
+    test("a valid session that only passes through the sign-in page still signs in", async () => {
+      const s = ownSite();
+      s.login!.startUrl = `${server.url.origin}/passthrough`;
+      const out = await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } });
+      expect(out?.headers.authorization).toBe("Bearer tok-1");
+    }, 60_000);
+
+    test("check --writes: a trigger that lands on login.paths or the form is kind session, not trigger Drift", async () => {
+      for (const path of ["/expired", "/form-expired"]) {
+        const op = defineOperation({
+          name: "PATCH /api/orders/:orderId",
+          effect: "write",
+          rest: { method: "PATCH", path: "/api/orders/:orderId", body: (v) => ({ name: v.name }) },
+          variables: z.object({ orderId: z.string(), name: z.string() }),
+          response: z.object({ ok: z.boolean() }),
+          trigger: async (p) => {
+            await p.goto(path);
+            await p.click("#save", { timeout: 500 });
+          },
+        });
+        const checker = chromeWriteChecker(ownSite(), { SITE_CLI_HOME: home.dir });
+        const err = await checker([op], []).catch((e) => e);
+        expect([path, err?.kind]).toEqual([path, "session"]);
+      }
+    }, 90_000);
+  });
+
+  describe("a pass-through is not signed out (#107, review 2)", () => {
+    test("check --writes: a trigger that passes through login.paths and then fails on a missing locator is trigger Drift", async () => {
+      const s = site();
+      s.login = { ...s.login!, hosts: [], paths: ["/login"] };
+      const op = defineOperation({
+        name: "PATCH /api/orders/:orderId",
+        effect: "write",
+        rest: { method: "PATCH", path: "/api/orders/:orderId", body: (v) => ({ name: v.name }) },
+        variables: z.object({ orderId: z.string(), name: z.string() }),
+        response: z.object({ ok: z.boolean() }),
+        trigger: async (p) => {
+          await p.goto("/login?forward=1");
+          await p.waitForURL("**/orders");
+          await p.click("#gone", { timeout: 500 });
+        },
+      });
+      const out = await chromeWriteChecker(s, { SITE_CLI_HOME: home.dir })([op], []);
+      const drift = out.get(op.name) as DriftEntry;
+      expect(drift.fingerprint).toContain(":trigger:");
+    }, 60_000);
+  });
 
   const rename = (trigger: (p: any) => Promise<void>) =>
     defineOperation({
