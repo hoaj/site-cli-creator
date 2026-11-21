@@ -254,8 +254,10 @@ function assertOutputSchemas(app: App): void {
   for (const command of app.commands) assertOutputSchema(command);
 }
 
-/** Thrown objects that came after a write the site accepted; `failed()` marks their envelope `writeSent`. */
-const afterWrite = new WeakSet<object>();
+/** Whatever was thrown after a write the site answered with success (any value); `failed()` unwraps it and marks the envelope `writeSent`. */
+class AfterWrite {
+  constructor(readonly cause: unknown) {}
+}
 
 /** A result that passed the command's `output` schema: the MCP surface may send it as structuredContent. */
 class Checked {
@@ -268,11 +270,11 @@ class Checked {
  * run is thrown by `call` before the command returns, so it is never checked against `output`.
  */
 async function runTask(app: App, client: Client, deps: Deps, command: Command, args: unknown, account: string | undefined): Promise<Checked> {
+  // First of all: no sign-in, account step or request for a command whose output schema is broken.
+  assertOutputSchema(command);
   if (app.site.auth === "login") await client.ensureSession();
   const chosen = await client.resolveAccount(account);
   deps.note(`${command.name}: ${command.uses.map((o) => o.name).join(" → ") || "no Operations"}`);
-  // Before anything is sent: a broken output schema must not follow a write the site then accepts.
-  assertOutputSchema(command);
   try {
     // A refusal the command caught (a fallback) still ends it: the user does that step on the site.
     const result = await client.withRefusals(() => command.run(args as never, {
@@ -288,7 +290,7 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
     return new Checked(value, command.output !== undefined && !skip);
   } catch (e) {
     // Whatever fails after a write the site accepted (a later call, the mapping, a bug) must not read as a failed write.
-    if (client.writeSent && e instanceof Object && !(e instanceof DryRun)) afterWrite.add(e);
+    if (client.writeSent && !(e instanceof DryRun)) throw new AfterWrite(e);
     throw e;
   }
 }
@@ -296,7 +298,8 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
 /** What a run that threw prints: the dry run, the classified Failure's envelope, or a bug. */
 function failed(e: unknown, site: Site, commandName: string, surface: Surface = "cli"): RunResult {
   if (e instanceof DryRun) return ok({ dryRun: true, would: { operation: e.operation, variables: e.variables } });
-  const writeSent = e instanceof Object && afterWrite.has(e);
+  const writeSent = e instanceof AfterWrite;
+  if (e instanceof AfterWrite) e = e.cause;
   if (e instanceof Failure) return { output: errorEnvelope(writeSent ? new Failure(e.kind, e.message, { ...e.details, writeSent }) : e, site, surface), code: EXIT[e.kind] };
   const stack = e instanceof Error ? e.stack : undefined;
   const what = e instanceof ContractError ? e.message : `${errorName(e)} in ${bugFrame(stack)}`;

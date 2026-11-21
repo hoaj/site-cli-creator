@@ -77,7 +77,7 @@ export type EnvelopeSite = { plugin: string; skill: string; version: string; rep
 export type Surface = "cli" | "mcp";
 
 /** First in `next` of any failure after a write the site accepted (details.writeSent), on both surfaces. */
-export const WRITE_SENT = "The write was sent and the site accepted it, so do not run it again.";
+export const WRITE_SENT = "The write was sent and the site answered with success, so it may have taken effect. Check on the site before running it again.";
 
 export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, surface: Surface = "cli", blocked = false): string {
   const feedback = `${site.plugin}-feedback`;
