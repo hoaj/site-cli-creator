@@ -6,6 +6,7 @@
 // | transport error, 5xx, 429 (after retries)              | network                              |
 // | GraphQL data null + server error code (after retries)  | network (INTERNAL*, SERVICE_UNAVAILABLE) |
 // | login: 401/403/redirect to a login host                | renew (login.refresh), else sign in again; retry; still → drift auth |
+// | login: redirect to a login.paths entry, or a 2xx HTML answer showing login.signedOutSelector | as a login-host redirect; still after the sign-in → session |
 // | login: sessionProbe not 2xx (5xx/429 aside), once a run before the first call | sign in again before sending |
 // | login: sign-in doesn't complete                        | session                              |
 // | none: 401/403                                          | rerun bootstrap, retry; still → drift auth |
@@ -22,13 +23,13 @@
 import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
-import { extractHtml, type HtmlContract } from "./html";
+import { extractHtml, htmlMatches, type HtmlContract } from "./html";
 import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import { withSiteHeaders } from "./browser-headers";
 import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { loadSession, saveSession, stateDir, withRenewLock, type Session } from "./session";
-import { decodeJwt, effectiveOrigin, isLoginHost, nonInteractive, onSiteDomain, siteDomain, type Env, type Fetch, type NeverRule, type RefreshConfig, type Site, type SiteCtx } from "./site";
+import { decodeJwt, effectiveOrigin, isLoginHost, isLoginPath, nonInteractive, onSiteDomain, siteDomain, type Env, type Fetch, type NeverRule, type RefreshConfig, type Site, type SiteCtx } from "./site";
 
 /** `fromProfile`: seed the sign-in from another Chrome profile's cookies (`login --from-profile`). */
 export type SignInOptions = {
@@ -101,7 +102,7 @@ export type Request = { method: string; url: string; headers: Record<string, str
  * (`decodeBody`) and reads an HTML text that happens to parse as JSON as HTML.
  * `blocked`: the bot protection that refused the request (blockSignal), when one did.
  */
-type Response_ = { status: number; body: unknown; bytes?: Uint8Array; contentType?: string; loginRedirect?: boolean; offsite?: boolean; blocked?: string };
+type Response_ = { status: number; body: unknown; bytes?: Uint8Array; contentType?: string; loginRedirect?: boolean; signedOut?: "path" | "selector"; offsite?: boolean; blocked?: string };
 
 /** What a browser asks for when it loads a page. */
 const HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
@@ -818,6 +819,13 @@ export class Client {
         const wall = this.renewWall();
         if (wall) throw wall;
       }
+      // The site's own sign-in page (login.paths, login.signedOutSelector) after the one sign-in a run is allowed: the
+      // sign-in did not take, which is a session failure, not a change of the site away from a Contract.
+      if (res.signedOut) {
+        const how = res.signedOut === "path" ? "a redirect to its sign-in page" : "its sign-in form";
+        const after = this.signedInHere ? "a fresh sign-in" : this.renewed ? "renewing the sign-in" : "a check of the saved sign-in";
+        throw new Failure("session", `${op.name}: the site still answers with ${how} after ${after}.`);
+      }
       const after =
         this.site.auth === "login"
           ? this.signedInHere ? "a fresh sign-in" : this.renewed ? "renewing the sign-in" : "a check of the saved sign-in"
@@ -933,12 +941,17 @@ export class Client {
       if (r.status < 300 || r.status >= 400 || !location) {
         const { body, bytes } = await readBody(r);
         const blocked = blockSignal(r.status, r.headers, body);
-        return { status: r.status, body, bytes, contentType: r.headers.get("content-type") ?? undefined, ...(blocked && { blocked }) };
+        const contentType = r.headers.get("content-type") ?? undefined;
+        // login.signedOutSelector: a 2xx that renders the sign-in form in place. An HTML answer only, never a JSON one.
+        if (!blocked && this.signedOutPage(r.status, contentType, bytes)) return { status: r.status, body, bytes, contentType, loginRedirect: true, signedOut: "selector" };
+        return { status: r.status, body, bytes, contentType, ...(blocked && { blocked }) };
       }
       const next = new URL(location, url);
       const blocked = blockHost(next);
       if (blocked) return { status: r.status, body: undefined, blocked };
       if (this.site.auth === "login" && isLoginHost(this.site, next.toString())) return { status: r.status, body: undefined, loginRedirect: true };
+      // login.paths: the site's own sign-in page. `next` is resolved, so a relative Location counts too.
+      if (this.site.auth === "login" && isLoginPath(this.site, next, this.origin)) return { status: r.status, body: undefined, loginRedirect: true, signedOut: "path" };
       if (next.origin !== new URL(url).origin) return { status: r.status, body: undefined, offsite: true };
       if (r.status === 303 || ((r.status === 301 || r.status === 302) && method !== "GET" && method !== "HEAD")) {
         method = "GET";
@@ -947,6 +960,13 @@ export class Client {
       url = next.toString();
     }
     return { status: 310, body: undefined, offsite: true };
+  }
+
+  /** Whether a 2xx HTML answer shows login.signedOutSelector's element. */
+  private signedOutPage(status: number, contentType: string | undefined, bytes: Uint8Array): boolean {
+    const selector = this.site.auth === "login" ? this.site.login?.signedOutSelector : undefined;
+    if (!selector || status < 200 || status >= 300 || !/html/i.test(contentType ?? "")) return false;
+    return htmlMatches(decodeBody(bytes, contentType), selector);
   }
 
   private classify(op: Operation, res: Response_): unknown {
