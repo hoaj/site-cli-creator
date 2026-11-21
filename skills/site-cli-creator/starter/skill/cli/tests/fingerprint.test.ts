@@ -207,3 +207,92 @@ describe("rejectedFields", () => {
     expect(withData.omitted).toBe(6);
   });
 });
+
+describe("rejectedFields, review 2", () => {
+  const flat = z.object({ orderId: z.string(), name: z.string() });
+  const nameOnly = z.object({ name: z.string() });
+  const typed = z.object({ type: z.string(), name: z.string() });
+  const both = z.object({ title: z.string(), message: z.string() });
+  const withMessage = z.object({ message: z.string(), name: z.string() });
+  const metaData = z.object({ name: z.string(), meta: z.object({ data: z.string() }) });
+  const dotted = z.object({ "filter[status]": z.string(), "page.size": z.number() });
+  const addr = z.object({ address: z.object({ street: z.string(), zip: z.string() }), name: z.string() });
+  const orders = z.object({ orders: z.string() });
+  const rec = z.object({ byId: z.record(z.string(), z.string()) });
+  const ids = z.object({ id: z.string(), type: z.string(), name: z.string() });
+  const letters = z.object({ "ønske": z.string(), name: z.string() });
+  const rel = z.object({ customer: z.string() });
+
+  const cases: [string, unknown, unknown, string[]][] = [
+    // 1. empty values name nothing
+    ["empty string, array, object", { errors: { name: "", orderId: [], other: {}, deep: { a: "", b: [] } } }, flat, []],
+    ["an empty entry next to a real one", { errors: { address: [], name: ["invalid"] } }, flat, ["name"]],
+    ["empty fieldErrors entries", { fieldErrors: { name: [], orderId: "" } }, flat, []],
+    ["wrapped formErrors empty, fieldErrors set", { errors: { formErrors: [], fieldErrors: { name: ["x"] } } }, flat, ["name"]],
+    // 2. envelope mode
+    ["declared type with message undeclared is an envelope", { errors: { type: "validation_error", message: "Bad" } }, typed, []],
+    ["message and requestId", { errors: { message: "Bad", requestId: "x" } }, flat, []],
+    ["a declared message is a field, not an envelope", { errors: { message: "Bad", name: "x" } }, withMessage, ["message", "name"]],
+    ["envelope with a declared field, message undeclared", { errors: { message: "Bad", name: "x" } }, nameOnly, ["name"]],
+    ["both envelope keys declared", { errors: { title: "blank", message: "blank" } }, both, ["message", "title"]],
+    ["new envelope keys", { errors: { traceId: "t", trace_id: "t", request_id: "r", timestamp: "now", reason: "r", errorCode: "E", name: "x" } }, nameOnly, ["name"]],
+    ["an envelope drops undeclared keys too", { errors: { message: "Bad", "kim@example.test": "x" } }, flat, []],
+    ["fieldErrors keys are fields, envelope or not", { fieldErrors: { message: ["x"], name: ["y"] } }, nameOnly, ["name", "{}"]],
+    // 3. only a bare single name matches at any depth
+    ["a route that is not in the Contract", { errors: [{ path: "/orders/123" }] }, orders, []],
+    ["a record key", { errors: { "byId.99812345": "x" } }, rec, ["{}"]],
+    ["a name plus an index on a string", { errors: [{ path: ["name", 0] }] }, flat, ["{}"]],
+    // 4. JSON:API resource pointers
+    ["/data", { errors: [{ source: { pointer: "/data" } }] }, ids, []],
+    ["/data/0", { errors: [{ source: { pointer: "/data/0" } }] }, ids, []],
+    ["/data/id", { errors: [{ source: { pointer: "/data/id" } }] }, ids, ["id"]],
+    ["/data/0/type", { errors: [{ source: { pointer: "/data/0/type" } }] }, ids, ["type"]],
+    ["/data/id undeclared", { errors: [{ source: { pointer: "/data/id" } }] }, nameOnly, ["{}"]],
+    ["relationship", { errors: [{ source: { pointer: "/data/relationships/customer/data/id" } }] }, rel, ["customer"]],
+    // 5. the data guard resolves by position
+    ["data declared deeper does not keep the wrapper", { errors: [{ source: { pointer: "/data/attributes/name" } }] }, metaData, ["name"]],
+    ["data declared at the root keeps it", { errors: [{ source: { pointer: "/data/name" } }] }, z.object({ data: z.object({ name: z.string() }) }), ["data.name"]],
+    // 6. declared names with dots or brackets
+    ["a declared name with brackets", { errors: { "filter[status]": ["x"] } }, dotted, ["filter[status]"]],
+    ["a declared name with a dot", { fieldErrors: { "page.size": ["x"] } }, dotted, ["page.size"]],
+    ["a declared field string with a dot", { errors: [{ field: "page.size" }] }, dotted, ["page.size"]],
+    // 7. {} sorts last
+    ["{} after a non-ASCII name", { errors: { "ønske": "x", "kim@example.test": "y" } }, letters, ["ønske", "{}"]],
+    ["{} last among ASCII names", { errors: { zed: "x", "kim@example.test": "y", name: "z" } }, z.object({ zed: z.string(), name: z.string() }), ["name", "zed", "{}"]],
+    // 8. nested field errors
+    ["children of a declared object", { errors: { address: { street: ["bad"], zip: ["bad"] } } }, addr, ["address.street", "address.zip"]],
+    ["no child resolves: keep the parent", { errors: { name: { message: "x", kind: "y" } } }, flat, ["name"]],
+    ["an undeclared parent is not descended", { errors: { "kim@example.test": { street: ["bad"] } } }, addr, ["{}"]],
+    ["some children resolve", { errors: { address: { street: ["bad"], other: ["bad"] } } }, addr, ["address.street"]],
+  ];
+
+  for (const [label, body, schema, expected] of cases) {
+    test(label, () => {
+      const out = rejectedFields(body, schema);
+      expect(out.fields).toEqual(expected);
+      expect(out.omitted).toBe(0);
+      // Nothing but declared names and {} may come out: planted values and undeclared keys never do.
+      const text = JSON.stringify(out);
+      for (const planted of ["Bad", "kim@example.test", "validation_error", "99812345", "invalid", "bad"]) expect(text).not.toContain(planted);
+    });
+  }
+
+  test("the cap keeps {} last", () => {
+    const names = Array.from({ length: 25 }, (_, i) => `f${String(i).padStart(2, "0")}`);
+    const schema = z.object(Object.fromEntries(names.map((n) => [n, z.string()])));
+    const out = rejectedFields({ errors: { ...Object.fromEntries(names.map((n) => [n, "x"])), "kim@example.test": "x" } }, schema);
+    expect(out.fields).toHaveLength(20);
+    expect(out.fields[19]).toBe("{}");
+    expect(out.fields[0]).toBe("f00");
+  });
+
+  test("nesting is followed at most 8 levels", () => {
+    let schema: z.ZodType = z.string();
+    for (let i = 0; i < 12; i++) schema = z.object({ n: schema });
+    let body: unknown = ["bad"];
+    for (let i = 0; i < 12; i++) body = { n: body };
+    const out = rejectedFields({ errors: body }, schema);
+    expect(out.fields).toHaveLength(1);
+    expect(out.fields[0].split(".").length).toBeLessThanOrEqual(9);
+  });
+});

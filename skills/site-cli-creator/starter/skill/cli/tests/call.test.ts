@@ -557,7 +557,7 @@ describe("drift", () => {
     test("errors array with field, path (string and array) and JSON:API pointer", async () => {
       expect((await reject({ errors: [{ field: "name", message: "Kim Secret" }] })).fingerprint).toBe(`${op}:name:400`);
       expect((await reject({ errors: [{ path: "name" }] })).fingerprint).toBe(`${op}:name:400`);
-      expect((await reject({ errors: [{ path: ["orderId", 0] }] })).fingerprint).toBe(`${op}:orderId[]:400`);
+      expect((await reject({ errors: [{ path: ["orderId", 0] }] })).fingerprint).toBe(`${op}:{}:400`);
       expect((await reject({ errors: [{ source: { pointer: "/data/attributes/name" } }] })).fingerprint).toBe(`${op}:name:400`);
       const mixed = await reject({ errors: [{ field: "name" }, { field: "name" }, { field: "nobody@example.test" }, { path: "name.first" }, 7, null] });
       expect(mixed.diff).toEqual([

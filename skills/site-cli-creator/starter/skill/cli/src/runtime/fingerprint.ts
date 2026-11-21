@@ -189,28 +189,36 @@ function pathSegments(raw: string): string[] {
   return [...raw.matchAll(/\[(\d*)\]|([^.[\]]+)/g)].map((m) => (m[2] === undefined || /^\d+$/.test(m[2]) ? "[]" : m[2]));
 }
 
-/** Whether a path's names are declared: a single name anywhere, several names by position through the Contract. */
+/** Whether a path's names are declared: a bare single name anywhere, everything else by position through the Contract. */
 function declaredPath(segs: readonly string[], variables: unknown, declared: ReadonlySet<string>): boolean {
-  const names = segs.filter((s) => s !== "[]");
-  if (names.length === 0) return false;
-  return names.length === 1 ? declared.has(names[0]) : resolves(segs, variables);
+  if (!segs.some((s) => s !== "[]")) return false;
+  return segs.length === 1 ? declared.has(segs[0]) : resolves(segs, variables);
 }
 
 /** Segments → a Fingerprint path, or "" when there is nothing to report. What is not declared is the site's data and is written `{}`. */
 function rejectedPath(segs: readonly string[], variables: unknown, declared: ReadonlySet<string>): string {
   if (!segs.some((s) => s !== "[]")) return "";
-  if (!declaredPath(segs, variables, declared)) return "{}";
+  return declaredPath(segs, variables, declared) ? formatPath(segs) : "{}";
+}
+
+function formatPath(segs: readonly string[]): string {
   let out = "";
   for (const s of segs) out += s === "[]" ? "[]" : (out ? "." : "") + s;
   return out;
 }
 
-/** A JSON:API pointer's wrapper (`/data[/0]/attributes|relationships/…`, a relationship's trailing `data[/0][/id]`) is not in the Contract's variables: strip it. */
-function stripJsonApi(segs: string[], declared: ReadonlySet<string>): string[] {
-  if (declared.has("data") || segs[0] !== "data") return segs;
+/**
+ * A JSON:API pointer without its wrapper: `/data[/i]/attributes|relationships/…` (a relationship's trailing `data[/i][/id]` too) and
+ * `/data[/i]/id|type` are not in the Contract's variables. The wrapper stays only when the pointer resolves through the variables as it is.
+ * `/data` and `/data/<i>` name no field.
+ */
+function stripJsonApi(segs: string[], variables: unknown): string[] {
+  if (segs[0] !== "data" || resolves(segs, variables)) return segs;
   let rest = segs.slice(1);
   if (rest[0] === "[]") rest = rest.slice(1);
   const kind = rest[0];
+  if (rest.length === 0) return [];
+  if ((kind === "id" || kind === "type") && rest.length === 1) return rest;
   if (kind !== "attributes" && kind !== "relationships") return segs;
   rest = rest.slice(1);
   if (kind === "relationships") {
@@ -225,14 +233,28 @@ function stripJsonApi(segs: string[], declared: ReadonlySet<string>): string[] {
 
 const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 /** Keys of an error object that are the envelope, not a field. */
-const ENVELOPE = new Set(["message", "code", "status", "title", "detail", "type", "error", "formErrors", "fieldErrors"]);
+const ENVELOPE = new Set(["message", "code", "status", "title", "detail", "type", "error", "formErrors", "fieldErrors", "requestId", "request_id", "traceId", "trace_id", "timestamp", "reason", "errorCode"]);
+
+/** A value that says something: a non-empty string or array, or an object holding something. `""`, `[]`, `{}` and objects of only those name nothing. */
+function usable(value: unknown): boolean {
+  if (typeof value === "string") return value !== "";
+  if (Array.isArray(value)) return value.length > 0;
+  if (isPlain(value)) return Object.values(value).some(usable);
+  return false;
+}
+
+/** `{}` (the site's data) sorts after every named field, so the first entry is a named field whenever there is one. */
+const byPath = (a: string, b: string): number => Number(a === "{}") - Number(b === "{}") || (a < b ? -1 : a > b ? 1 : 0);
 
 /**
  * The fields a REST 400/422 body says it rejected, as Fingerprint paths. Never reads a message (it can quote the values sent).
+ * When the body does not clearly name a field it names none: blaming a wrong field is worse than naming none.
  * Shapes: `{ errors: { <field>: … } }`, `{ errors: { fieldErrors: { … } } }`, `{ fieldErrors: { … } }`,
  * `{ errors: [{ field | path | source.pointer }] }` (per item, the first of these that gives a path).
- * An object key counts when its value is a string, an array or an object, and an envelope key (`message`, `code`, …) only when
- * `variables` declares it. A name `variables` does not declare is the site's data and is written `{}`. Sorted, deduped; past `limit`
+ * Rules (SPEC §10): an entry with an empty value names nothing; an `errors` object holding an envelope key (`message`, `code`, …) that
+ * `variables` does not declare is an error envelope, where only declared non-envelope keys count; a key that is itself a declared
+ * name is used whole (`filter[status]`); a plain-object value is descended (at most 8 levels) to the children that resolve through the
+ * variables. A name `variables` does not declare is the site's data and is written `{}`. Sorted with `{}` last and deduped; past `limit`
  * the `{}` entry is kept and the rest is counted in `omitted`.
  */
 export function rejectedFields(body: unknown, variables: unknown, limit = 20): { fields: string[]; omitted: number } {
@@ -242,27 +264,48 @@ export function rejectedFields(body: unknown, variables: unknown, limit = 20): {
   const add = (path: string): void => {
     if (path) found.add(path);
   };
-  const fromKeys = (o: unknown): void => {
+  const segsOf = (raw: string): string[] => (declared.has(raw) ? [raw] : pathSegments(raw));
+  const descend = (base: readonly string[], value: Record<string, unknown>, depth: number): string[] => {
+    const out: string[] = [];
+    for (const [key, child] of Object.entries(value)) {
+      if (!usable(child)) continue;
+      const segs = [...base, ...segsOf(key)];
+      if (!resolves(segs, variables)) continue;
+      const deeper = isPlain(child) && depth < 8 ? descend(segs, child, depth + 1) : [];
+      if (deeper.length > 0) out.push(...deeper);
+      else out.push(formatPath(segs));
+    }
+    return out;
+  };
+  const fromKeys = (o: unknown, isErrors: boolean): void => {
     if (!isPlain(o)) return;
-    for (const [key, value] of Object.entries(o)) {
-      if (value === null || (typeof value !== "string" && typeof value !== "object")) continue;
-      if (ENVELOPE.has(key) && !declared.has(key)) continue;
-      add(rejectedPath(pathSegments(key), variables, declared));
+    const keys = Object.keys(o);
+    const envelope = isErrors && keys.some((k) => ENVELOPE.has(k) && !declared.has(k));
+    for (const key of keys) {
+      const value = o[key];
+      if (!usable(value) || (envelope && ENVELOPE.has(key))) continue;
+      const segs = segsOf(key);
+      const path = rejectedPath(segs, variables, declared);
+      if (path === "" || (envelope && path === "{}")) continue;
+      const children = path !== "{}" && isPlain(value) ? descend(segs, value, 1) : [];
+      if (children.length > 0) for (const c of children) add(c);
+      else add(path);
     }
   };
   const errors = body.errors;
-  fromKeys(isPlain(errors) && isPlain(errors.fieldErrors) ? errors.fieldErrors : errors);
-  fromKeys(body.fieldErrors);
+  if (isPlain(errors) && isPlain(errors.fieldErrors)) fromKeys(errors.fieldErrors, false);
+  else fromKeys(errors, true);
+  fromKeys(body.fieldErrors, false);
   if (Array.isArray(errors)) {
     for (const e of errors) {
       if (!isPlain(e)) continue;
       const tries: (() => string)[] = [
-        () => (typeof e.field === "string" ? rejectedPath(pathSegments(e.field), variables, declared) : ""),
+        () => (typeof e.field === "string" ? rejectedPath(segsOf(e.field), variables, declared) : ""),
         () => {
           if (typeof e.path === "string") {
             const segs = pathSegments(e.path);
-            // A route (`/api/orders/1`) is no field: a leading slash counts only when it resolves through the Contract.
-            if (e.path.startsWith("/") && !declaredPath(segs, variables, declared)) return "";
+            // A route (`/orders/1`) is no field: a leading slash counts only when it resolves through the Contract.
+            if (e.path.startsWith("/") && !resolves(segs, variables)) return "";
             return rejectedPath(segs, variables, declared);
           }
           if (Array.isArray(e.path)) {
@@ -271,7 +314,7 @@ export function rejectedFields(body: unknown, variables: unknown, limit = 20): {
           }
           return "";
         },
-        () => (isPlain(e.source) && typeof e.source.pointer === "string" ? rejectedPath(stripJsonApi(pathSegments(e.source.pointer), declared), variables, declared) : ""),
+        () => (isPlain(e.source) && typeof e.source.pointer === "string" ? rejectedPath(stripJsonApi(pathSegments(e.source.pointer), variables), variables, declared) : ""),
       ];
       for (const attempt of tries) {
         const path = attempt();
@@ -282,11 +325,10 @@ export function rejectedFields(body: unknown, variables: unknown, limit = 20): {
       }
     }
   }
-  const all = [...found].sort();
+  const all = [...found].sort(byPath);
   if (all.length <= limit) return { fields: all, omitted: 0 };
-  const hasData = found.has("{}");
-  const kept = all.filter((p) => p !== "{}").slice(0, hasData ? limit - 1 : limit);
-  const fields = (hasData ? [...kept, "{}"] : kept).sort();
+  const named = all.filter((p) => p !== "{}");
+  const fields = found.has("{}") ? [...named.slice(0, limit - 1), "{}"] : named.slice(0, limit);
   return { fields, omitted: all.length - fields.length };
 }
 
