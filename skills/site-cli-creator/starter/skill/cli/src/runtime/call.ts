@@ -814,7 +814,10 @@ export class Client {
     const neverResend = (r: Response_): Response_ => {
       if (r.signedOut && op.effect !== "read") {
         const how = r.signedOut === "path" ? "a redirect to its sign-in page" : "its sign-in form";
-        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`);
+        // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
+        const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
+        const next = `Tell the user the write may already have taken effect and was not sent again, and ask them to check on the site. Do not run it again until they confirm it did not take effect. If it did not, ${login}, then run it again.`;
+        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { next });
       }
       return r;
     };
@@ -944,6 +947,10 @@ export class Client {
   /** fetch with redirects followed by hand: a login-host redirect means logged out, an off-site one is reported. */
   private async fetchFollowing(req: Request): Promise<Response_> {
     let { url, method, body } = req;
+    // A read may pass through the site's own sign-in page on its way to the page (a valid session forwarded on): only an
+    // answer that ends on a login.paths page is signed out. Any other method stops at the first hop onto one.
+    const read = req.method === "GET" || req.method === "HEAD";
+    const onLoginPath = (u: string) => this.site.auth === "login" && isLoginPath(this.site, new URL(u), this.origin);
     for (let hop = 0; hop < 6; hop++) {
       // deps.fetch is site.never's guard: every hop is checked, a redirect may lead to a forbidden path.
       const r = await this.deps.fetch(url, { method, headers: req.headers, body, redirect: "manual" });
@@ -952,6 +959,8 @@ export class Client {
         const { body, bytes } = await readBody(r);
         const blocked = blockSignal(r.status, r.headers, body);
         const contentType = r.headers.get("content-type") ?? undefined;
+        // The answer's own page is the site's sign-in page: signed out, whatever it holds (a read that was sent there).
+        if (!blocked && hop > 0 && onLoginPath(url)) return { status: r.status, body, bytes, contentType, loginRedirect: true, signedOut: "path" };
         // login.signedOutSelector: a 2xx that renders the sign-in form in place. An HTML answer only, never a JSON one.
         if (!blocked && this.signedOutPage(r.status, contentType, bytes)) return { status: r.status, body, bytes, contentType, loginRedirect: true, signedOut: "selector" };
         return { status: r.status, body, bytes, contentType, ...(blocked && { blocked }) };
@@ -961,7 +970,7 @@ export class Client {
       if (blocked) return { status: r.status, body: undefined, blocked };
       if (this.site.auth === "login" && isLoginHost(this.site, next.toString())) return { status: r.status, body: undefined, loginRedirect: true };
       // login.paths: the site's own sign-in page. `next` is resolved, so a relative Location counts too.
-      if (this.site.auth === "login" && isLoginPath(this.site, next, this.origin)) return { status: r.status, body: undefined, loginRedirect: true, signedOut: "path" };
+      if (!read && this.site.auth === "login" && isLoginPath(this.site, next, this.origin)) return { status: r.status, body: undefined, loginRedirect: true, signedOut: "path" };
       if (next.origin !== new URL(url).origin) return { status: r.status, body: undefined, offsite: true };
       if (r.status === 303 || ((r.status === 301 || r.status === 302) && method !== "GET" && method !== "HEAD")) {
         method = "GET";
@@ -969,6 +978,7 @@ export class Client {
       }
       url = next.toString();
     }
+    if (onLoginPath(url)) return { status: 310, body: undefined, loginRedirect: true, signedOut: "path" };
     return { status: 310, body: undefined, offsite: true };
   }
 

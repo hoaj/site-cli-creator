@@ -6,6 +6,7 @@ import type { SignedIn } from "./call";
 import { chromeLaunchOptions, chromeNotFound, findChrome } from "./chrome";
 import { ContractError, Failure, ProfileUnavailable } from "./envelope";
 import { ensureProfileDir } from "./session";
+import { htmlMatches } from "./html";
 import { effectiveOrigin, isLoginHost, isLoginPath, isTest, loginHostName, onSiteDomain, rebase, siteDomain, tokenMatches, type Env, type Site } from "./site";
 
 const REFRESH_TIMEOUT_MS = 30_000;
@@ -13,6 +14,23 @@ const REFRESH_TIMEOUT_MS = 30_000;
 const LOGIN_HOST_GRACE_MS = 5_000;
 /** How long a finished sign-in waits for the refresh exchange's answer to be read. */
 const KEEP_WAIT_MS = 5_000;
+
+/**
+ * Whether a page shows `selector` (login.signedOutSelector) within `timeoutMs`, which a script may mount late: the page's HTML
+ * is read every 200 ms and tested with the same parser as an answer's. A read that throws counts as no match; it stops at once
+ * when `stillCurrent` says the page was navigated away from.
+ */
+export async function mountsForm(getContent: () => Promise<string>, selector: string, stillCurrent: () => boolean = () => true, timeoutMs = LOGIN_HOST_GRACE_MS): Promise<boolean> {
+  const end = Date.now() + timeoutMs;
+  for (;;) {
+    if (!stillCurrent()) return false;
+    try {
+      if (htmlMatches(await getContent(), selector)) return stillCurrent();
+    } catch {}
+    if (Date.now() + 200 > end) return false;
+    await Bun.sleep(200);
+  }
+}
 
 export type LoginOptions = {
   headless: boolean;
@@ -228,9 +246,9 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
           // the grace period, then the grace period itself runs).
           void frame
             .waitForLoadState("domcontentloaded")
-            .then(() => frame.waitForSelector(`css=${selector}`, { state: "attached", timeout: LOGIN_HOST_GRACE_MS }))
-            .then(() => {
-              if (mine === navigation) signedOutAfterGrace();
+            .then(() => mountsForm(() => frame.content(), selector, () => mine === navigation))
+            .then((found) => {
+              if (found && mine === navigation) signedOutAfterGrace();
             })
             .catch(() => {});
         });
