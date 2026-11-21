@@ -53,6 +53,7 @@ jobs:
         run: |
           if [ ! -x /opt/google/chrome/chrome ]; then
             curl -fsSLo chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get update
             sudo apt-get install -y ./chrome.deb
             rm chrome.deb
           fi
@@ -119,6 +120,7 @@ jobs:
         if: matrix.target == 'linux-arm64'
         run: |
           curl -fsSLo chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_arm64.deb
+          sudo apt-get update
           sudo apt-get install -y ./chrome.deb
           rm chrome.deb
       - name: Prepare the binary as install.sh does
