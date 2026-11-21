@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { bugFrame, bugKey, driftFingerprint, fieldPath, operationSegment, redactStack, srcRelative, typeName, zodDiff } from "../src/runtime/fingerprint";
+import { bugFrame, bugKey, declaredNames, driftFingerprint, fieldPath, operationSegment, redactStack, srcRelative, typeName, zodDiff } from "../src/runtime/fingerprint";
 
 const site = { plugin: "yousee", skill: "yousee" };
 
@@ -122,5 +122,13 @@ describe("record keys are the site's data", () => {
     expect(fieldPath(["data", "jens.hansen@example.dk", "x"])).toBe("data.{}.x");
     expect(fieldPath(["byId", "99812345", "ok"])).toBe("byId.{}.ok");
     expect(fieldPath(["data", "listFtpdProducts", 0, "status"])).toBe("data.listFtpdProducts[].status");
+  });
+});
+
+describe("declaredNames", () => {
+  test("collects names at any depth through wrappers, unions and arrays", () => {
+    const schema = z.object({ a: z.string().optional(), b: z.array(z.object({ c: z.number().nullable() })), d: z.union([z.object({ e: z.string() }), z.object({ f: z.string() })]).default({ e: "x" }), g: z.record(z.string(), z.object({ h: z.string() })) });
+    expect([...declaredNames(schema)].sort()).toEqual(["a", "b", "c", "d", "e", "f", "g", "h"]);
+    expect(declaredNames(undefined).size).toBe(0);
   });
 });
