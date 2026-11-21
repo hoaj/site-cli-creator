@@ -172,7 +172,7 @@ describe("help never breaks on a shape", () => {
 });
 
 describe("writeSent covers every failure after an accepted write", () => {
-  const PREFIX = "The write was sent and the site accepted it, so do not run it again.";
+  const PREFIX = "The write was sent and the site answered with success, so it may have taken effect. Check on the site before running it again.";
   const writeThen = (then: (call: any) => Promise<unknown>) =>
     defineCommand({
       name: "item rename",
