@@ -23,7 +23,7 @@ import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
 import { extractHtml, type HtmlContract } from "./html";
-import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
+import { driftFingerprint, errorName, fieldPath, rejectedFields, zodDiff, type BreakType } from "./fingerprint";
 import { withSiteHeaders } from "./browser-headers";
 import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent } from "./never";
 import type { Operation } from "./operation";
@@ -967,7 +967,12 @@ export class Client {
         return this.fail(op, "input-rejected", "", code, `the site rejected variables that passed the Contract (${code})`);
       }
     }
-    if (status === 400 || status === 422) return this.fail(op, "input-rejected", "", String(status), `the site rejected variables that passed the Contract (HTTP ${status})`);
+    if (status === 400 || status === 422) {
+      const { fields, omitted } = op.graphql === undefined ? rejectedFields(body, op.variables) : { fields: [], omitted: 0 };
+      const why = `the site rejected variables that passed the Contract (HTTP ${status})`;
+      if (fields.length === 0) return this.fail(op, "input-rejected", "", String(status), why);
+      return this.fail(op, "input-rejected", fields[0], String(status), `${why} at ${fields.join(", ")}${omitted > 0 ? ` and ${omitted} more` : ""}`, fields.map((path) => ({ path, code: "rejected" })));
+    }
     if (status < 200 || status >= 300) return this.fail(op, "http", "", String(status), `unexpected HTTP ${status}`);
     const picked = op.html ? this.pickHtml(op, op.html, res) : body;
     const parsed = op.response.safeParse(picked);
