@@ -52,7 +52,7 @@ The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator'
 | `__OWNER__` | GitHub owner of the plugin repo | `hoaj` |
 | `__DESCRIPTION__` | one-line plugin description | |
 | `__MAINTAINER__` | GitHub login of the maintainer | `hoaj` |
-| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.19.0` |
+| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.20.0` |
 | `__ORIGIN__` | the site origin | `https://www.yousee.dk` |
 | `__AUTH__` | `login` or `none` | |
 | `__PREFIX__` | what release tags, workflow names and workflow files start with: empty in a plugin's own repo, `<plugin>-` in a shared repo | `yousee-` |
@@ -152,6 +152,8 @@ export default defineSite({
     hosts: ["login.example.com"],   // hosts that belong to the login flow
     tokenRequest: "/api/",          // substring or RegExp: the first request to this carrying an authorization header (or, if none carries one, a 2xx response) marks a finished login
     sessionProbe: "/api/me",        // optional: a path on the origin (siteProblems refuses anything else) of a GET that answers 2xx only while signed in; for a site that serves an expired session as anonymous (200 empty, 404) instead of 401/403
+    paths: ["/login"],              // optional (SPEC §7): paths on the origin of the site's own sign-in page (siteProblems: each starts with a single /); a redirect hop to one (`isLoginPath`: resolved target, own origin, exact pathname, one trailing slash/query/fragment ignored) is signed out like a redirect to a login host
+    signedOutSelector: "form#login", // optional: CSS selector (siteProblems: must parse, `selectorProblem` in runtime/html.ts) of an element only a signed-out page has; a 2xx HTML answer (also a sessionProbe's) that matches is signed out (`Client.signedOutPage`, `htmlMatches`), never a JSON one
     timeoutMs: 600_000,
     postLogin: async (ctx) => ({}), // derive chain-root ids; returns ids to store (never personal data)
     refresh: {                      // optional (SPEC §7): renew with plain fetch before Chrome; siteProblems wants renew, and keep when from is set
@@ -253,6 +255,7 @@ class Failure extends Error { kind; message; fingerprint?; diff?; drifts?; stack
 | transport error, 5xx, 429 (after 1–2 retries) | network |
 | GraphQL answer (any status) with `data` null and an error whose `extensions.code` is `INTERNAL_SERVER_ERROR`, `SERVICE_UNAVAILABLE` or starts with `INTERNAL` (retried like a 5xx; writes are not resent) | network |
 | auth login: 401/403/3xx to a login host → renew (`login.refresh`, once per `Client`: `renew()`) → else refresh headless → else headed login → retry after each (`reauthenticate()` in a loop that ends because each step runs once); still 401/403 after a sign-in | drift (breakType `auth`) |
+| auth login: a redirect hop to a `login.paths` entry, or a 2xx HTML answer matching `login.signedOutSelector` (both set `Response_.loginRedirect`, plus `signedOut: "path" \| "selector"`, in `fetchFollowing`): the same path as a login-host redirect; still signed out after the one sign-in this run allows | session (`call()` checks `signedOut` before the `auth` Drift; no second sign-in: `fresh` ends the loop) |
 | auth login: `login.sessionProbe` set, once per `Client` before its first Operation unless it just signed in or has `reauth: false` (`probeSession()`): a GET with the session headers through `fetchFollowing`; not 2xx, a login redirect or off-site (a 5xx, 429 or transport error is ignored) → sign in again before sending (`signInOrFail()`: headless, headed, or `session` for MCP / `SITE_CLI_NONINTERACTIVE`) | session when sign-in doesn't complete |
 | auth login: login doesn't complete | session |
 | auth none: 401/403 → rerun bootstrap once → retry; still 401/403 | drift (breakType `auth`) |
