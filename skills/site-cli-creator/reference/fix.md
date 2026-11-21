@@ -63,7 +63,7 @@ The Fingerprint names the skill, the Operation (for break type `output`, the com
    | `zod` | the field's type, nullability or presence in `response`, and the command if it reads the field (a type change: below). Leave the query as the new Capture's `request` shows it: the site answers it, only the response changed |
    | `graphql` | the trimmed query: a renamed or moved field, a new required argument |
    | `http` (404/405) | `rest.path` or `rest.method`, from the new Capture |
-   | `input-rejected` | `variables` and how the command builds them |
+   | `input-rejected` | `variables` and how the command builds them. A REST 400/422 Drift's `diff` and message name the rejected fields (`rejected`; a name the Contract does not declare is `{}`); `diff: []` means the site's body named none |
    | `auth` | `site.ts`: `login.tokenRequest`, `login.hosts`, `postLogin` or `bootstrap`; a 403 while the new Capture got JSON: `transport: "browser"` (step 2) |
    | `request` | `variables` and the command, from the new Capture of the write |
    | `html` | an HTML Operation's `html.fields` selectors (a `no_match` list: its `each` and `in`), or `html.from`, rewritten from the new Capture's outline ([contracts.md](contracts.md#html-operations)); a missing field is `zod` Drift on the picked object, fixed in `html.fields` the same way |
