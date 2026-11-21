@@ -118,6 +118,12 @@ const server = Bun.serve({
           await gql({ operationName: "plainQuery", query: "fragment F on Order { id }\\nquery plainQuery { order { ...F } }" });
           fetch("/api/orders/5", { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "New" }) }).catch(() => {});
         };`);
+    // The site's own sign-in page (login.paths) and a sign-in form served in place (login.signedOutSelector) (#107).
+    if (url.pathname === "/login") return new Response(`<!doctype html><html><body><form id="signin"></form></body></html>`, { headers: { "content-type": "text/html" } });
+    if (url.pathname === "/expired") return Response.redirect(`${url.origin}/login`, 302);
+    if (url.pathname === "/form-expired") return new Response(`<!doctype html><html><body><form id="signin"></form></body></html>`, { headers: { "content-type": "text/html" } });
+    // A valid session that only passes through the sign-in page: it is on it a moment, then goes on to the account.
+    if (url.pathname === "/passthrough") return new Response(`<!doctype html><html><body><form id="signin"></form><script>setTimeout(() => (location.href = "/account"), 1200)</script></body></html>`, { headers: { "content-type": "text/html" } });
     if (url.pathname === "/graphql") {
       if (req.method === "POST") graphqlReceived.push((await req.clone().json().catch(() => ({}))).operationName ?? "?");
       return Response.json({ data: { ok: true } });
@@ -199,6 +205,50 @@ describe.skipIf(skip)("Chrome", () => {
     s.login!.startUrl = `${server.url.origin}/logged-out`;
     expect(await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } })).toBeNull();
   }, 60_000);
+
+  describe("the site's own sign-in page (#107)", () => {
+    const ownSite = () => {
+      const s = site();
+      s.login = { ...s.login!, hosts: [], paths: ["/login"], signedOutSelector: "form#signin" };
+      return s;
+    };
+
+    test("a headless sign-in that lands on login.paths, or on a page with the form, ends within the grace period", async () => {
+      for (const start of ["/expired", "/form-expired"]) {
+        const s = ownSite();
+        s.login!.startUrl = `${server.url.origin}${start}`;
+        const t0 = Date.now();
+        expect(await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } })).toBeNull();
+        expect([start, Date.now() - t0 < 20_000]).toEqual([start, true]); // not the 30 s timeout
+      }
+    }, 90_000);
+
+    test("a valid session that only passes through the sign-in page still signs in", async () => {
+      const s = ownSite();
+      s.login!.startUrl = `${server.url.origin}/passthrough`;
+      const out = await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } });
+      expect(out?.headers.authorization).toBe("Bearer tok-1");
+    }, 60_000);
+
+    test("check --writes: a trigger that lands on login.paths or the form is kind session, not trigger Drift", async () => {
+      for (const path of ["/expired", "/form-expired"]) {
+        const op = defineOperation({
+          name: "PATCH /api/orders/:orderId",
+          effect: "write",
+          rest: { method: "PATCH", path: "/api/orders/:orderId", body: (v) => ({ name: v.name }) },
+          variables: z.object({ orderId: z.string(), name: z.string() }),
+          response: z.object({ ok: z.boolean() }),
+          trigger: async (p) => {
+            await p.goto(path);
+            await p.click("#save", { timeout: 500 });
+          },
+        });
+        const checker = chromeWriteChecker(ownSite(), { SITE_CLI_HOME: home.dir });
+        const err = await checker([op], []).catch((e) => e);
+        expect([path, err?.kind]).toEqual([path, "session"]);
+      }
+    }, 90_000);
+  });
 
   const rename = (trigger: (p: any) => Promise<void>) =>
     defineOperation({

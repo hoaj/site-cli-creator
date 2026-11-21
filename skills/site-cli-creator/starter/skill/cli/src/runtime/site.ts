@@ -315,5 +315,12 @@ export function isLoginPath(site: Site, url: URL, origin: string): boolean {
   }
   if (url.origin !== on) return false;
   const here = plainPath(url.pathname);
-  return paths.some((p) => typeof p === "string" && plainPath(p) === here);
+  // An entry is compared as the URL parser writes it, so `/log-på` and a space match what a Location carries (`%C3%A5`, `%20`).
+  return paths.some((p) => {
+    try {
+      return typeof p === "string" && plainPath(new URL(p, on).pathname) === here;
+    } catch {
+      return false;
+    }
+  });
 }

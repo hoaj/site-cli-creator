@@ -5,12 +5,9 @@ import { z } from "zod";
 import { Client } from "../src/runtime/call";
 import { Failure } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
-import * as siteModule from "../src/runtime/site";
-import { siteProblems } from "../src/runtime/site";
-
-const isLoginPath = (siteModule as any).isLoginPath as (site: unknown, url: URL, origin: string) => boolean;
 import { saveSession } from "../src/runtime/session";
-import { client, fakeFetch, getOrder, json, loginSite, makeDeps, ORIGIN, tempHome } from "./helpers";
+import { isLoginPath, siteProblems } from "../src/runtime/site";
+import { client, fakeFetch, getOrder, json, loginSite, makeDeps, ORIGIN, renameOrder, tempHome } from "./helpers";
 
 let home: ReturnType<typeof tempHome>;
 beforeEach(() => (home = tempHome()));
@@ -219,6 +216,65 @@ describe("login.signedOutSelector: a 200 that renders the sign-in form in place"
     const d2 = makeDeps(json2.fetch, home.dir);
     await client(probed(), d2.deps).call(getOrder, { orderId: "1" });
     expect(d2.loginCalls).toEqual([]);
+  });
+});
+
+describe("a write is never sent twice (review 1)", () => {
+  const FORM = `<!doctype html><html><body><form id="signin"></form></body></html>`;
+  const answers: Record<string, () => Response> = {
+    "303 to /login": () => redirect("/login", 303),
+    "302 to /login": () => redirect("/login", 302),
+    "200 sign-in form": () => html(FORM),
+  };
+  for (const [name, answer] of Object.entries(answers)) {
+    test(`${name}: one write request, kind session, no sign-in`, async () => {
+      saved();
+      const { fetch, calls } = fakeFetch((r) => (r.url.endsWith("/login") ? html(FORM) : answer()));
+      const d = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      const c = client(withLogin({ paths: ["/login"], signedOutSelector: "form#signin" }), d.deps, true);
+      const f = await failure(c.call(renameOrder, { orderId: "7", name: "N" }));
+      expect(f.kind).toBe("session");
+      expect(f.message).toContain("not sent again");
+      expect(calls.filter((x) => x.method === "PATCH")).toHaveLength(1);
+      expect(calls).toHaveLength(1);
+      expect(d.loginCalls).toEqual([]);
+    });
+  }
+});
+
+describe("encoded paths and content types (review 1)", () => {
+  test("an entry with a non-ASCII letter or a space matches the encoded Location", () => {
+    const s = withLogin({ paths: ["/log-på", "/sign in"] });
+    const at = (u: string) => isLoginPath(s, new URL(u, ORIGIN), ORIGIN);
+    expect([at("/log-p%C3%A5"), at("/log-på/"), at("/sign%20in?x=1"), at("/sign+in"), at("/log-pa")]).toEqual([true, true, true, false, false]);
+  });
+
+  test("only text/html and application/xhtml+xml answers are checked for the selector", async () => {
+    const FORM = `<form id="signin"></form>`;
+    const cases: Array<[string | undefined, boolean]> = [
+      ["text/html", true],
+      ["TEXT/HTML ; charset=utf-8", true],
+      ["application/xhtml+xml", true],
+      ["application/vnd.site.html+json", false],
+      ["text/plain", false],
+      [undefined, false],
+    ];
+    for (const [type, matches] of cases) {
+      home.cleanup();
+      home = tempHome();
+      saved();
+      const { fetch } = fakeFetch(() => new Response(FORM, { headers: type ? { "content-type": type } : {} }));
+      const d = makeDeps(fetch, home.dir);
+      const wrap = defineOperation({
+        name: "GET /raw",
+        effect: "read",
+        rest: { method: "GET", path: "/raw" },
+        variables: z.object({}),
+        response: z.any(),
+      });
+      await client(withLogin({ signedOutSelector: "form#signin" }), d.deps).call(wrap, {}).catch(() => {});
+      expect([type, d.loginCalls.length > 0]).toEqual([type, matches]);
+    }
   });
 });
 
