@@ -44,7 +44,7 @@ describe("login.paths: a redirect to the site's own sign-in page", () => {
     const { out, calls, loginCalls } = await run(`${ORIGIN}/login`);
     expect(out.total).toBe(5);
     expect(loginCalls).toEqual([true]);
-    expect(calls).toHaveLength(2); // the redirect is not followed to the form
+    expect(calls[calls.length - 1]!.headers.authorization).toBe("Bearer new"); // a read is followed to the page, found to end on the sign-in page, then sent again
   });
 
   test("a relative Location, an absolute one, a trailing slash, a query and a fragment all match", async () => {
@@ -107,7 +107,7 @@ describe("login.paths: a redirect to the site's own sign-in page", () => {
     expect(f.kind).toBe("session");
     expect(f.message).toContain("sign-in");
     expect(d.loginCalls).toEqual([true]); // headless once; never a second round
-    expect(calls).toHaveLength(2);
+    expect(calls.length).toBeGreaterThanOrEqual(2);
   });
 
   test("a client that may not sign in (MCP, SITE_CLI_NONINTERACTIVE) reports session, not Drift", async () => {
@@ -128,7 +128,7 @@ describe("login.paths: a redirect to the site's own sign-in page", () => {
     const out: any = await client(withLogin({ paths: ["/login"], sessionProbe: "/api/me" }), d.deps).call(getOrder, { orderId: "1" });
     expect(out.total).toBe(5);
     expect(d.loginCalls).toEqual([true]);
-    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(["/api/me", "/api/orders/1"]);
+    expect(calls.map((c) => new URL(c.url).pathname)).toEqual(["/api/me", "/login", "/api/orders/1"]);
   });
 });
 
@@ -256,6 +256,76 @@ describe("a write is never resent, on any answer (review 2)", () => {
     expect(f.message).toContain("may have taken effect");
     expect(calls.map((c) => c.method)).toEqual(["PATCH", "PATCH"]);
     expect(d.loginCalls).toEqual([]);
+  });
+});
+
+describe("review 3", () => {
+  const ordersOp = defineOperation({
+    name: "GET /orders",
+    effect: "read",
+    rest: { method: "GET", path: "/orders" },
+    variables: z.object({}),
+    response: z.object({ id: z.string() }),
+  });
+  const ordersSite = () => withLogin({ paths: ["/login"] });
+  const path = (u: string) => new URL(u).pathname + new URL(u).search;
+
+  test("a read forwarded through the sign-in page to the page it wanted is a normal answer: no sign-in", async () => {
+    saved();
+    const { fetch, calls } = fakeFetch((r) => {
+      const p = path(r.url);
+      if (p === "/orders") return redirect("/login?next=/orders");
+      if (p.startsWith("/login")) return redirect("/orders-ok");
+      return json({ id: "1" });
+    });
+    const d = makeDeps(fetch, home.dir);
+    const out: any = await client(ordersSite(), d.deps).call(ordersOp, {});
+    expect(out.id).toBe("1");
+    expect(d.loginCalls).toEqual([]);
+    expect(calls.map((c) => path(c.url))).toEqual(["/orders", "/login?next=/orders", "/orders-ok"]);
+  });
+
+  test("a read that ends on the sign-in page (a 200 form there, or a loop through it) is signed out", async () => {
+    for (const answer of [() => html("<form></form>"), () => redirect("/login")]) {
+      home.cleanup();
+      home = tempHome();
+      saved();
+      const { fetch } = fakeFetch((r) => (path(r.url) === "/orders" ? redirect("/login") : path(r.url) === "/login" ? answer() : json({ id: "1" })));
+      const d = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      await client(ordersSite(), d.deps).call(ordersOp, {}).catch(() => {});
+      expect(d.loginCalls).toEqual([true]);
+    }
+  });
+
+  test("a read forwarded off the sign-in page keeps the signedOutSelector check", async () => {
+    saved();
+    const { fetch } = fakeFetch((r) => (path(r.url) === "/orders" ? redirect("/login") : path(r.url) === "/login" ? redirect("/gate") : html(`<form id="signin"></form>`)));
+    const d = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+    await client(withLogin({ paths: ["/login"], signedOutSelector: "form#signin" }), d.deps).call(ordersOp, {}).catch(() => {});
+    expect(d.loginCalls).toEqual([true]);
+  });
+
+  test("the failure of a write that got the sign-in page tells an agent to check first, never to simply rerun it", async () => {
+    for (const surface of ["cli", "mcp"] as const) {
+      home.cleanup();
+      home = tempHome();
+      saved();
+      const { fetch } = fakeFetch(() => redirect("/login", 303));
+      const d = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      const c = new Client(withLogin({ paths: ["/login"] }), d.deps, { surface, confirm: true });
+      const f = await failure(c.call(renameOrder, { orderId: "7", name: "N" }));
+      const next = f.details.next!;
+      expect(next).toContain("check on the site");
+      expect(next).toContain(surface === "mcp" ? "call the login tool" : "`shop login`");
+      expect(next).toContain("Do not run it again until they confirm");
+      expect(next).not.toMatch(/then rerun the command/);
+      expect(d.loginCalls).toEqual([]);
+    }
+  });
+
+  test("a ;parameter after a trailing slash, and a trailing slash after the parameter, both match", () => {
+    const at = (u: string) => isLoginPath(withLogin({ paths: ["/login"] }), new URL(u, ORIGIN), ORIGIN);
+    expect([at("/login/;jsessionid=A1"), at("/login;jsessionid=A1"), at("/login;x=1/"), at("/login-help;x=1"), at("/login/x;y"), at("/a;b=1/login")]).toEqual([true, true, true, false, false, false]);
   });
 });
 

@@ -123,6 +123,7 @@ const server = Bun.serve({
     if (url.pathname === "/login")
       return new Response(`<!doctype html><html><body><form id="signin"></form>${url.searchParams.has("forward") ? `<script>setTimeout(() => (location.href = "/orders"), 600)</script>` : ""}</body></html>`, { headers: { "content-type": "text/html" } });
     // A shell page whose scripts mount the sign-in form a moment after load.
+    if (url.pathname === "/contains") return new Response(`<!doctype html><html><body><form id="f">Sign in</form></body></html>`, { headers: { "content-type": "text/html" } });
     if (url.pathname === "/shell")
       return new Response(`<!doctype html><html><body><div id="app"></div><script>setTimeout(() => { document.getElementById("app").innerHTML = '<form id="signin"></form>'; }, 800)</script></body></html>`, { headers: { "content-type": "text/html" } });
     if (url.pathname === "/expired") return Response.redirect(`${url.origin}/login`, 302);
@@ -226,6 +227,27 @@ describe.skipIf(skip)("Chrome", () => {
         expect(await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } })).toBeNull();
         expect([start, Date.now() - t0 < 20_000]).toEqual([start, true]); // not the 30 s timeout
       }
+    }, 90_000);
+
+    test("one way to see a form: :contains() works in the headless sign-in, and check --writes waits for a form that mounts after the trigger threw (review 3)", async () => {
+      const s = ownSite();
+      s.login = { ...s.login!, paths: [], signedOutSelector: "form:contains(Sign in)", startUrl: `${server.url.origin}/contains` };
+      expect(await chromeLogin(s, { headless: true, env: { SITE_CLI_HOME: home.dir } })).toBeNull();
+
+      const op = defineOperation({
+        name: "PATCH /api/orders/:orderId",
+        effect: "write",
+        rest: { method: "PATCH", path: "/api/orders/:orderId", body: (v) => ({ name: v.name }) },
+        variables: z.object({ orderId: z.string(), name: z.string() }),
+        response: z.object({ ok: z.boolean() }),
+        trigger: async (p) => {
+          await p.goto("/shell");
+          await p.waitForTimeout(500);
+          throw new Error("the trigger gave up before the form mounted");
+        },
+      });
+      const err = await chromeWriteChecker(ownSite(), { SITE_CLI_HOME: home.dir })([op], []).catch((e) => e);
+      expect(err?.kind).toBe("session");
     }, 90_000);
 
     test("a valid session that only passes through the sign-in page still signs in", async () => {

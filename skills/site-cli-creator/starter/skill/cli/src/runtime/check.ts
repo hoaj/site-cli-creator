@@ -9,12 +9,11 @@ import type { Client } from "./call";
 import { ContractError, Failure, type DriftEntry } from "./envelope";
 import { driftFingerprint, errorName, operationSegment, zodDiff } from "./fingerprint";
 import { stripNoise, topLevelDefinitions, type GraphqlType } from "./graphql";
-import { closeContext, launch, launchInMemory, profileState } from "./login";
+import { closeContext, launch, launchInMemory, mountsForm, profileState } from "./login";
 import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverCheckedWarning } from "./needs";
 import { forbiddenRequest, neverProblems, neverRuleLabel, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { ensureProfileDir } from "./session";
-import { htmlMatches } from "./html";
 import { effectiveOrigin, isLoginHost, isLoginPath, tokenMatches, type NeverRule, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
@@ -544,9 +543,7 @@ async function checkOne(
   // login.signedOutSelector: a sign-in form rendered in place, with no navigation to tell it by.
   const selector = site.auth === "login" ? site.login?.signedOutSelector : undefined;
   if (!captured && !signedOut && !onLoginPath && selector) {
-    try {
-      if (htmlMatches(await page.content(), selector)) signedOut = true;
-    } catch {}
+    signedOut = await mountsForm(() => page.content(), selector);
   }
   await page.close().catch(() => {});
   await context.unroute("**/*", handler);

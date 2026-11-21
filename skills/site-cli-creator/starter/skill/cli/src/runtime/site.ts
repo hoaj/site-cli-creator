@@ -299,9 +299,9 @@ export function isLoginHost(site: Site, url: string): boolean {
  * (`/login;jsessionid=A1`), without one trailing slash (`/login/` is `/login`; `/` stays), percent-escapes in capitals.
  */
 function plainPath(path: string): string {
-  let p = path.replace(/[?#].*$/s, "").replace(/%[0-9a-f]{2}/gi, (m) => m.toUpperCase());
-  if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
-  return p.replace(/;[^/]*$/, "") || "/";
+  const trim = (p: string) => (p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p);
+  const p = trim(path.replace(/[?#].*$/s, "").replace(/%[0-9a-f]{2}/gi, (m) => m.toUpperCase()));
+  return trim(p.replace(/;[^/]*$/, "") || "/");
 }
 
 /**
