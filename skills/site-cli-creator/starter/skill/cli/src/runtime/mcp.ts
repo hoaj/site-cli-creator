@@ -16,8 +16,13 @@ export type McpTool = {
   /** Validated by `call`; listed as the tool's JSON Schema. */
   schema: z.ZodObject;
   annotations: ToolAnnotations;
-  /** Runs the tool. Never throws: a failure comes back as an error envelope with a non-zero code. */
-  call(args: Record<string, unknown>): Promise<{ output: unknown; code: number }>;
+  /** The JSON Schema of the result (object root only), from the command's `output`; absent when it has none. */
+  outputSchema?: Record<string, unknown>;
+  /**
+   * Runs the tool. Never throws: a failure comes back as an error envelope with a non-zero code.
+   * `matches` is true when the output is one the outputSchema describes (a checked result, a write's dry run).
+   */
+  call(args: Record<string, unknown>): Promise<{ output: unknown; code: number; matches?: boolean }>;
 };
 
 export type ServerInfo = { name: string; version: string; instructions: string };
@@ -36,11 +41,15 @@ export function inputSchema(schema: z.ZodObject): Record<string, unknown> {
 
 /** The tools as `tools/list` shows them (stdio and remote mode alike). */
 export const listedTools = (tools: McpTool[]) =>
-  tools.map((t) => ({ name: t.name, description: t.description, inputSchema: inputSchema(t.schema), annotations: t.annotations }));
+  tools.map((t) => ({ name: t.name, description: t.description, inputSchema: inputSchema(t.schema), ...(t.outputSchema && { outputSchema: t.outputSchema }), annotations: t.annotations }));
 
-/** A tool's output as MCP content: the JSON as text (the CLI's own rendering), an object also as structured content. */
-export function toolResult(output: unknown, code: number) {
-  const structured = output !== null && typeof output === "object" && !Array.isArray(output);
+/**
+ * A tool's output as MCP content: the JSON as text (the CLI's own rendering), an object also as
+ * structured content. A tool with an outputSchema sends structured content only for an output that
+ * matches it (`matches`): an error envelope never claims to.
+ */
+export function toolResult(output: unknown, code: number, tool?: { outputSchema?: unknown }, matches = false) {
+  const structured = output !== null && typeof output === "object" && !Array.isArray(output) && (!tool?.outputSchema || (matches && code === 0));
   return {
     content: [{ type: "text", text: render(output ?? null).trimEnd() }],
     ...(structured && { structuredContent: output }),
@@ -83,8 +92,8 @@ export function createMcpServer(info: ServerInfo, tools: McpTool[]) {
           const args = params.arguments ?? {};
           if (args === null || typeof args !== "object" || Array.isArray(args)) return failure(id, -32602, "arguments must be an object");
           try {
-            const { output, code } = await tool.call(args as Record<string, unknown>);
-            return reply(id, toolResult(output, code));
+            const { output, code, matches } = await tool.call(args as Record<string, unknown>);
+            return reply(id, toolResult(output, code, tool, matches));
           } catch {
             return failure(id, -32603, `${tool.name} failed inside the MCP server`);
           }

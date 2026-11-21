@@ -5,6 +5,7 @@ Fixes one issue filed by a plugin's Feedback skill. The title says which kind:
 | Title | Kind | Example |
 |---|---|---|
 | `plugin:skill:operation:breakType:path:code` | Drift | `yousee:yousee:listFtpdProducts:zod:data.listFtpdProducts[].status:invalid_type` |
+| `plugin:skill:command:output:path:code` | Drift of a command's `output` schema (2a: the command's name, with its space, stands where the Operation does) | `shop:shop:invoice list:output:invoices[].amountDKK:too_small` |
 | `bug: plugin:skill:bug:command:ErrorName:frame` | bug | `bug: yousee:yousee:bug:subscription-show:TypeError:commands/subscription-show.ts#render` |
 | `check: plugin:skill: the daily check failed (<kind>)` | the daily drift check's `check` failed without Drift (label `bug`, no bug key) | `check: shop:shop: the daily check failed (input)` |
 | `bug: plugin:skill:blocked:<blocked>` | a bot block: the site refuses the CLI as automated traffic (label `bug`), see 2c | `bug: shop:shop:blocked:cloudflare` |
@@ -46,7 +47,7 @@ The second search finds the same Operation reported with another break type: one
 
 ## 2a. Drift
 
-The Fingerprint names the skill, the Operation, the break type and the field path. In the path `[]` is an array index and `{}` a record or map key: the key is the site's data, so it is never shown. A `trigger` Fingerprint's path is the locator the trigger waited for.
+The Fingerprint names the skill, the Operation (for break type `output`, the command), the break type and the field path. In the path `[]` is an array index and `{}` a record or map key: the key is the site's data, so it is never shown. A `trigger` Fingerprint's path is the locator the trigger waited for.
 
 1. Re-capture first, so the maintainer signs in once: the Capture's own Chrome profile signs in (the user signs in there if it asks). Re-capture the Task whose command uses the Operation: `grep -l "operations/<file>" <skill>/cli/src/commands/*.ts` names the command files, and the Task's slug is the command's `<noun>-<verb>` folder in `captures/` (or the folder whose Capture holds the Operation's shape file). When several Tasks use it, re-capture each one whose output reads the drifted field, so no `captures/` folder keeps the old shape of that field; the others may keep theirs (a Capture records what the site did then). A Fingerprint with an empty path (`auth`, `http`) names no field: re-capture one Task that uses the Operation. The start page is the origin plus `startPath` in the Task's `captures/<slug>/index.json`; a Task split from `captures/explore/` is re-captured the same way, and `captures/explore/` is left as it is (`draft-contract` never merges it).
    ```sh
@@ -64,11 +65,12 @@ The Fingerprint names the skill, the Operation, the break type and the field pat
    | `auth` | `site.ts`: `login.tokenRequest`, `login.hosts`, `postLogin` or `bootstrap`; a 403 while the new Capture got JSON: `transport: "browser"` (step 2) |
    | `request` | `variables` and the command, from the new Capture of the write |
    | `html` | an HTML Operation's `html.fields` selectors (a `no_match` list: its `each` and `in`), or `html.from`, rewritten from the new Capture's outline ([contracts.md](contracts.md#html-operations)); a missing field is `zod` Drift on the picked object, fixed in `html.fields` the same way |
+   | `output` | the command, not an Operation: the command's result no longer matches its `output` schema at `<path>` (`too_small`: a `.min(1)` or `.positive()` value is now empty or zero; `invalid_type`: a field is missing, null or another type). Run the command, not `check` (`check --op` does not know it), and compare with the new Capture: a field the Contract marks optional or nullable that the site renamed or dropped is fixed in the Operation's `response` and in how `run` maps it. When the site really now sends an empty value for it, loosen `output` (drop the refinement, add `.nullable()`) and say so in the PR: the maintainer decides, since the output's meaning changes |
    | `trigger` | the `trigger`'s locators; or, when the page now waits for a non-GET that changes no data (a token refresh, a post-login call) and `check` aborted it, `readOnlyRequests` in `site.ts` |
 
    **A field whose type changed** (`price` number → string): keep the command's output type when a lossless conversion exists. Accept the new form in the Contract with a format check, so an unexpected format is still Drift rather than wrong data, and convert in the command: `price: z.union([z.number(), z.string().regex(/^-?\d+(\.\d+)?$/)])` and `Number(s.price)`. The new Capture's shape notes a string's format (`"format": "numeric"`, `"date"`); when it gives none, look at what the site's page shows. When no lossless conversion exists, changing the output field's type is a major change, like a rename: the maintainer decides.
 
-4. `cd <skill>/cli && bun src/main.ts check --writes` until it exits 0. Run the affected command and compare its output shape with the command's previous output; a renamed or removed output field, or an output field whose type changed, is a major change the maintainer decides on.
+4. `cd <skill>/cli && bun src/main.ts check --writes` until it exits 0. Run the affected command and compare its output shape with the command's previous output; a renamed or removed output field, or an output field whose type changed, is a major change the maintainer decides on. When the output does change, update the command's `output` schema in the same change, so it still describes what the command prints. A command that has no `output` yet gets one now, written from its current output (nullability as the Contract and the card have it).
 5. Bump, PR, merge (step 3).
 
 ### Unverified

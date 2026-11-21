@@ -101,8 +101,8 @@ function mcpServerFor(info: ServerInfo, tools: McpTool[], serial: <T>(fn: () => 
     const tool = byName.get(req.params.name);
     if (!tool) throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${req.params.name}`);
     // One call at a time, as over stdio, so two calls never refresh one Session together.
-    const { output, code } = await serial(() => tool.call((req.params.arguments ?? {}) as Record<string, unknown>));
-    return toolResult(sessionFailure(output, code, setup), code) as never;
+    const { output, code, matches } = await serial(() => tool.call((req.params.arguments ?? {}) as Record<string, unknown>));
+    return toolResult(sessionFailure(output, code, setup), code, tool, matches) as never;
   });
   return server;
 }

@@ -8,6 +8,11 @@ export default defineCommand({
   summary: "Your subscriptions with monthly price (active ones unless --all)",
   args: z.object({ all: z.boolean().default(false).describe("include terminated and pending subscriptions") }),
   uses: [getAccount, listSubscriptions],
+  output: z.object({
+    customer: z.string().min(1),
+    subscriptions: z.array(z.object({ name: z.string(), status: z.string(), since: z.string().nullable(), monthlyDKK: z.number().nullable() })),
+    monthlyTotalDKK: z.number(),
+  }),
   run: async ({ all }, { call, session }) => {
     const account = (await call(getAccount, { customerId: session.ids.customerId })).data.getAccount;
     const subscriptions = (await call(listSubscriptions, { accountId: account.id })).data.listSubscriptions
