@@ -296,3 +296,81 @@ describe("rejectedFields, review 2", () => {
     expect(out.fields[0].split(".").length).toBeLessThanOrEqual(9);
   });
 });
+
+describe("rejectedFields, review 3", () => {
+  const flat = z.object({ name: z.string() });
+  const nameOf = (body: unknown, schema: unknown = flat) => rejectedFields(body, schema).fields;
+
+  test("a recursive lazy schema neither hangs nor loses fields", () => {
+    const node: z.ZodType = z.lazy(() => z.object({ field: z.string(), left: node.optional(), right: node.optional() }));
+    const filter: z.ZodType = z.lazy(() => z.object({ and: z.array(filter).optional(), or: z.array(filter).optional(), not: filter.optional(), column: z.string().optional() }));
+    const started = performance.now();
+    expect(nameOf({ errors: { field: "x", "left.right.field": "y", "left.left.left.left.nobody@example.test": "z" } }, node)).toEqual(["field", "left.right.field", "{}"]);
+    expect(nameOf({ errors: { column: "x", "and.0.or.1.not.column": "y" } }, filter)).toEqual(["and[].or[].not.column", "column"]);
+    expect(declaredNames(node).size).toBe(3);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
+
+  test("a schema with endless distinct lazies is cut off by the budget", () => {
+    const endless = (n: number): z.ZodType => z.lazy(() => z.object({ name: z.string(), a: endless(n + 1), b: endless(n + 1) }));
+    // lazy() makes a fresh object per call when its getter builds one, but _zod.innerType is memoized per lazy: the tree is still infinite.
+    const started = performance.now();
+    expect(nameOf({ errors: { name: "x", "a.b.a.b.a.b.name": "y" } }, endless(0)).length).toBeGreaterThan(0);
+    expect(performance.now() - started).toBeLessThan(2000);
+  });
+
+  test("a nested per-field error object is the parent's, not a set of children", () => {
+    const customer = z.object({ customer: z.object({ name: z.string() }) });
+    expect(nameOf({ errors: { customer: { name: "ValidatorError", message: "Path `name` is required.", kind: "required", path: "customer" } } }, customer)).toEqual(["customer"]);
+    const address = z.object({ address: z.object({ code: z.string(), street: z.string(), zip: z.string() }) });
+    expect(nameOf({ errors: { address: { code: "required", message: "bad" } } }, address)).toEqual(["address"]);
+    expect(nameOf({ errors: { address: { street: ["bad"], zip: ["bad"] } } }, address)).toEqual(["address.street", "address.zip"]);
+  });
+
+  test("a string path keeps a declared name whole", () => {
+    const dotted = z.object({ "filter[status]": z.string(), "page.size": z.number() });
+    expect(nameOf({ errors: [{ path: "filter[status]" }] }, dotted)).toEqual(["filter[status]"]);
+    expect(nameOf({ errors: [{ path: "page.size" }] }, dotted)).toEqual(["page.size"]);
+  });
+
+  test("arrays of nothing name nothing", () => {
+    expect(nameOf({ errors: { lines: [{}, {}], name: ["bad"] } })).toEqual(["name"]);
+    expect(nameOf({ errors: { name: [""] } })).toEqual([]);
+    expect(nameOf({ errors: { name: [null] } })).toEqual([]);
+    expect(nameOf({ errors: { name: [[], {}] } })).toEqual([]);
+  });
+
+  test("z.preprocess is seen through, and zodDiff paths still hold", () => {
+    const pre = z.preprocess((v) => v, z.object({ name: z.string() }));
+    expect(nameOf({ errors: { name: "x", "kim@example.test": "y" } }, pre)).toEqual(["name", "{}"]);
+    expect(declaredNames(pre).has("name")).toBe(true);
+    expect(fieldPath(["name"], pre)).toBe("name");
+    expect(fieldPath(["kim@example.test"], pre)).toBe("{}");
+    const parsed = pre.safeParse({ name: 1 });
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) expect(zodDiff(parsed.error.issues, { name: 1 }, pre).map((d) => d.path)).toEqual(["name"]);
+    // A transform after a schema still follows the schema before it.
+    const post = z.object({ name: z.string() }).transform((v) => v);
+    expect(fieldPath(["name"], post)).toBe("name");
+  });
+
+  test("a pointer with an empty segment names nothing", () => {
+    const v = z.object({ name: z.string(), data: z.string() });
+    for (const pointer of ["/", "/data/", "/data/attributes/", "//name", "/data//name"]) expect(nameOf({ errors: [{ source: { pointer } }] }, v)).toEqual([]);
+  });
+
+  test("a relationship named data", () => {
+    expect(nameOf({ errors: [{ source: { pointer: "/data/relationships/data/data/id" } }] }, z.object({ data: z.string() }))).toEqual(["data"]);
+    expect(nameOf({ errors: [{ source: { pointer: "/data/relationships/data/data" } }] }, z.object({ data: z.string() }))).toEqual(["data"]);
+  });
+
+  test("a body nested 200,000 deep names nothing and does not throw", () => {
+    let body: unknown = "bad";
+    for (let i = 0; i < 200_000; i++) body = { name: body };
+    expect(nameOf({ errors: body })).toEqual([]);
+    expect(nameOf({ errors: { name: body } })).toEqual([]);
+    let arr: unknown = "bad";
+    for (let i = 0; i < 200_000; i++) arr = [arr];
+    expect(nameOf({ errors: { name: arr } })).toEqual([]);
+  });
+});
