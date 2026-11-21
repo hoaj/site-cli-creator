@@ -30,6 +30,7 @@ export const DRIFTS = [
   "server-error", // data APIs answer 500
   "rate-limit", // data APIs answer 429
   "input-rejected", // calls with variables are rejected with 400 BAD_USER_INPUT
+  "input-rejected-fields", // REST calls with a variable (GET /api/invoices, GET /api/invoices/:id) answer 400 { errorMessages: [], errors: { <variable>: <message> } }, as Jira does
   "bot-wall", // data APIs answer 403 with an HTML challenge page unless the request comes from a browser (Sec-Fetch-Mode) and carries the cookie the front page sets in JavaScript
   "ua-wall", // data APIs answer 403 with an HTML challenge page to a request whose user-agent is not a Chrome one (`Mozilla/5.0 … Chrome/<version>`): Bun/…, missing, or any other; #111
   "html-layout", // GET /notices renders the same notices in a new layout, with no ul.notices (#102)
@@ -232,6 +233,10 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
     if (blocked) return blocked;
     if (drift === "input-rejected") return failure(400, "BAD_USER_INPUT", "Request parameters were rejected.");
     const id = url.pathname.match(/^\/api\/invoices\/([^/]+)$/)?.[1];
+    if (drift === "input-rejected-fields") {
+      const field = id !== undefined ? "id" : "accountId";
+      return json(400, { errorMessages: [], errors: { [field]: "This value is not accepted." } });
+    }
     const visible = anon ? [] : INVOICES;
     if (id !== undefined) {
       if (drift === "remove-rest") return failure(404, "NOT_FOUND", "No such route.");

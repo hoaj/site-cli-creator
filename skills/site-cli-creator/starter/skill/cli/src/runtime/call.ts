@@ -968,10 +968,10 @@ export class Client {
       }
     }
     if (status === 400 || status === 422) {
-      const fields = op.graphql === undefined ? rejectedFields(body, op.variables) : [];
+      const { fields, omitted } = op.graphql === undefined ? rejectedFields(body, op.variables) : { fields: [], omitted: 0 };
       const why = `the site rejected variables that passed the Contract (HTTP ${status})`;
       if (fields.length === 0) return this.fail(op, "input-rejected", "", String(status), why);
-      return this.fail(op, "input-rejected", fields[0], String(status), `${why} at ${fields.join(", ")}`, fields.map((path) => ({ path, code: "rejected" })));
+      return this.fail(op, "input-rejected", fields[0], String(status), `${why} at ${fields.join(", ")}${omitted > 0 ? ` and ${omitted} more` : ""}`, fields.map((path) => ({ path, code: "rejected" })));
     }
     if (status < 200 || status >= 300) return this.fail(op, "http", "", String(status), `unexpected HTTP ${status}`);
     const picked = op.html ? this.pickHtml(op, op.html, res) : body;

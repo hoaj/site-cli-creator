@@ -538,6 +538,18 @@ describe("drift", () => {
       expect(all).not.toContain("kim@example.test");
     });
 
+    test("a wrapped fieldErrors names the field; envelope keys, numbers and a route add nothing; no text leaks", async () => {
+      const f = await reject({ errors: { formErrors: ["Kim Secret"], fieldErrors: { name: ["Kim Secret is too short"] }, message: "Kim Secret", code: 7 } });
+      expect(f.fingerprint).toBe(`${op}:name:400`);
+      expect(f.diff).toEqual([{ path: "name", code: "rejected" }]);
+      expect(JSON.stringify({ m: f.message, d: f.details, diff: f.diff, fp: f.fingerprint })).not.toContain("Kim Secret");
+      for (const body of [{ errors: { message: "Kim Secret", code: "E1", status: 400 } }, { errors: { name: 5 } }, { errors: [{ path: "/api/orders/123" }] }]) {
+        const g = await reject(body);
+        expect(g.fingerprint).toBe(`${op}::400`);
+        expect(g.diff).toEqual([]);
+      }
+    });
+
     test("a 422 works the same", async () => {
       expect((await reject({ errors: { orderId: "no" } }, 422)).fingerprint).toBe(`${op}:orderId:422`);
     });
@@ -574,6 +586,7 @@ describe("drift", () => {
       const { fetch } = fakeFetch(() => json({ errors: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`f${String(i).padStart(2, "0")}`, "x"])) }, 400));
       const f = await failure(client(makeSite(), makeDeps(fetch, home.dir).deps, true).call(many, Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`f${String(i).padStart(2, "0")}`, "v"]))));
       expect(f.diff).toHaveLength(20);
+      expect(f.message).toContain(" and 10 more");
     });
 
     test("a body with no recognizable fields stays generic", async () => {
