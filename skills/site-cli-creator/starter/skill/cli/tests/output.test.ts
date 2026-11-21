@@ -208,8 +208,8 @@ describe("a write that was sent is never reported as if it failed", () => {
     expect(code).toBe(3);
     expect(err(output).writeSent).toBe(true);
     expect(err(output).fingerprint).toBe("acme:shop:item rename:output:name:invalid_type");
-    expect(err(output).next).toMatch(/^The write was sent and the site accepted it/);
-    expect(err(output).next).toContain("not run it again");
+    expect(err(output).next).toMatch(/^The write was sent and the site answered with success, so it may have taken effect\. Check on the site before running it again\./);
+    expect(err(output).next).toContain("Check on the site");
     expect(f.calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
   });
 
@@ -225,7 +225,7 @@ describe("a write that was sent is never reported as if it failed", () => {
     const e = JSON.parse(r.content[0].text).error;
     expect(e.kind).toBe("drift");
     expect(e.writeSent).toBe(true);
-    expect(e.next).toMatch(/^The write was sent and the site accepted it/);
+    expect(e.next).toMatch(/^The write was sent and the site answered with success, so it may have taken effect\. Check on the site before running it again\./);
     expect(e.next).toContain("MCP server");
   });
 });
