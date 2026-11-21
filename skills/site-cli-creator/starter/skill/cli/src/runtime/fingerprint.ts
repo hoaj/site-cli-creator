@@ -30,8 +30,9 @@ export function unwrap(schema: unknown): unknown {
     const def = defOf(schema);
     if (!def) return schema;
     if (["optional", "nullable", "default", "prefault", "catch", "readonly", "nonoptional", "success"].includes(def.type)) schema = def.innerType;
-    else if (def.type === "pipe") schema = def.in;
-    else if (def.type === "lazy") schema = def.getter();
+    else if (def.type === "pipe") schema = defOf(def.in)?.type === "transform" ? def.out : def.in; // z.preprocess: the schema after the transform
+    // Zod memoizes the lazy schema in `_zod.innerType`; `getter()` can build a new one per call, which a recursive schema never finishes walking.
+    else if (def.type === "lazy") schema = (schema as { _zod?: { innerType?: unknown } })._zod?.innerType ?? def.getter();
     else return schema;
   }
   return schema;
@@ -98,6 +99,248 @@ export function fieldPath(path: readonly PropertyKey[], schema?: unknown): strin
     current = next.schema;
   }
   return out;
+}
+
+/** The most schemas `reachable` visits and `resolves` follows at once: a hostile or recursive Contract cannot make a failed call run away. */
+const BUDGET = 2000;
+
+/** Every schema reachable from `schema`, each seen through its wrappers, at any depth (objects, arrays, tuples, sets, unions, intersections, record values). */
+function reachable(schema: unknown): unknown[] {
+  const out: unknown[] = [];
+  const seen = new Set<unknown>();
+  const walk = (s: unknown, depth: number): void => {
+    if (depth > 32 || out.length >= BUDGET || s === undefined || s === null) return;
+    const inner = unwrap(s);
+    if (seen.has(inner)) return;
+    seen.add(inner);
+    out.push(inner);
+    const def = defOf(inner);
+    if (!def) return;
+    const next = (child: unknown) => walk(child, depth + 1);
+    switch (def.type) {
+      case "object":
+        for (const child of Object.values(def.shape ?? {})) next(child);
+        next(def.catchall);
+        break;
+      case "array":
+        next(def.element);
+        break;
+      case "tuple":
+        for (const item of def.items ?? []) next(item);
+        next(def.rest);
+        break;
+      case "union":
+        for (const option of def.options ?? []) next(option);
+        break;
+      case "intersection":
+        next(def.left);
+        next(def.right);
+        break;
+      case "record":
+      case "map":
+      case "set":
+        next(def.valueType);
+        break;
+    }
+  };
+  walk(schema, 0);
+  return out;
+}
+
+/** Every field name a schema declares, at any depth (through objects, arrays, optional, nullable, default, unions and similar wrappers). */
+export function declaredNames(schema: unknown): Set<string> {
+  const names = new Set<string>();
+  for (const s of reachable(schema)) {
+    const def = defOf(s);
+    if (def?.type === "object") for (const key of Object.keys(def.shape ?? {})) names.add(key);
+  }
+  return names;
+}
+
+/** A schema with its unions and intersections opened: the object, array and other schemas it can be. */
+function alternatives(schema: unknown, depth = 0): unknown[] {
+  const s = unwrap(schema);
+  const def = defOf(s);
+  if (!def || depth > 32) return [];
+  if (def.type === "union") return (def.options ?? []).flatMap((o: unknown) => alternatives(o, depth + 1));
+  if (def.type === "intersection") return [...alternatives(def.left, depth + 1), ...alternatives(def.right, depth + 1)];
+  return [s];
+}
+
+/** Whether the names (and `[]` indices) lead from the root, or from any nested object, through declared fields. A record key is site data and stops it. */
+function resolves(segs: readonly string[], variables: unknown): boolean {
+  let frontier = reachable(variables);
+  for (const seg of segs) {
+    const next = new Set<unknown>();
+    for (const s of frontier) {
+      for (const alt of alternatives(s)) {
+        const def = defOf(alt);
+        if (seg === "[]") {
+          if (def?.type === "array") next.add(def.element);
+          else if (def?.type === "tuple") for (const item of [...(def.items ?? []), def.rest]) if (item) next.add(item);
+        } else if (def?.type === "object" && Object.hasOwn(def.shape ?? {}, seg)) next.add(def.shape[seg]);
+      }
+    }
+    if (next.size === 0) return false;
+    frontier = [...next].slice(0, BUDGET);
+  }
+  return true;
+}
+
+/** `a.b[0].c`, `a.0.c`, or a JSON pointer `/data/attributes/a` → segments: a name, or `[]` for an index. */
+function pathSegments(raw: string): string[] {
+  if (raw.startsWith("/")) return raw.split("/").slice(1).map((part) => (/^\d+$/.test(part) ? "[]" : part.replace(/~1/g, "/").replace(/~0/g, "~")));
+  return [...raw.matchAll(/\[(\d*)\]|([^.[\]]+)/g)].map((m) => (m[2] === undefined || /^\d+$/.test(m[2]) ? "[]" : m[2]));
+}
+
+/** Whether a path's names are declared: a bare single name anywhere, everything else by position through the Contract. */
+function declaredPath(segs: readonly string[], variables: unknown, declared: ReadonlySet<string>): boolean {
+  if (!segs.some((s) => s !== "[]")) return false;
+  return segs.length === 1 ? declared.has(segs[0]) : resolves(segs, variables);
+}
+
+/** Segments → a Fingerprint path, or "" when there is nothing to report. What is not declared is the site's data and is written `{}`. */
+function rejectedPath(segs: readonly string[], variables: unknown, declared: ReadonlySet<string>): string {
+  if (!segs.some((s) => s !== "[]")) return "";
+  return declaredPath(segs, variables, declared) ? formatPath(segs) : "{}";
+}
+
+function formatPath(segs: readonly string[]): string {
+  let out = "";
+  for (const s of segs) out += s === "[]" ? "[]" : (out ? "." : "") + s;
+  return out;
+}
+
+/**
+ * A JSON:API pointer without its wrapper: `/data[/i]/attributes|relationships/…` (a relationship's trailing `data[/i][/id]` too) and
+ * `/data[/i]/id|type` are not in the Contract's variables. The wrapper stays only when the pointer resolves through the variables as it is.
+ * `/data` and `/data/<i>` name no field.
+ */
+function stripJsonApi(segs: string[], variables: unknown): string[] {
+  if (segs[0] !== "data" || resolves(segs, variables)) return segs;
+  let rest = segs.slice(1);
+  if (rest[0] === "[]") rest = rest.slice(1);
+  const kind = rest[0];
+  if (rest.length === 0) return [];
+  if ((kind === "id" || kind === "type") && rest.length === 1) return rest;
+  if (kind !== "attributes" && kind !== "relationships") return segs;
+  rest = rest.slice(1);
+  if (kind === "relationships") {
+    const i = rest.indexOf("data", 1);
+    if (i > 0) {
+      const tail = rest.slice(i + 1).filter((s) => s !== "[]");
+      if (tail.length === 0 || (tail.length === 1 && tail[0] === "id")) rest = rest.slice(0, i);
+    }
+  }
+  return rest;
+}
+
+const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+/** Keys of an error object that are the envelope, not a field. */
+const ENVELOPE = new Set(["message", "code", "status", "title", "detail", "type", "error", "formErrors", "fieldErrors", "requestId", "request_id", "traceId", "trace_id", "timestamp", "reason", "errorCode"]);
+
+/** A value that says something: a non-empty string, or an array or object holding something (to 16 levels). `""`, `[]`, `{}` and containers of only those name nothing. */
+function usable(value: unknown, depth = 0): boolean {
+  if (depth > 16) return false; // a body nested deeper names nothing (and cannot overflow the stack)
+  if (typeof value === "string") return value !== "";
+  if (Array.isArray(value)) return value.some((v) => usable(v, depth + 1));
+  if (isPlain(value)) return Object.values(value).some((v) => usable(v, depth + 1));
+  return false;
+}
+
+/** `{}` (the site's data) sorts after every named field, so the first entry is a named field whenever there is one. */
+const byPath = (a: string, b: string): number => Number(a === "{}") - Number(b === "{}") || (a < b ? -1 : a > b ? 1 : 0);
+
+/**
+ * The fields a REST 400/422 body says it rejected, as Fingerprint paths. Never reads a message (it can quote the values sent).
+ * When the body does not clearly name a field it names none: blaming a wrong field is worse than naming none.
+ * Shapes: `{ errors: { <field>: … } }`, `{ errors: { fieldErrors: { … } } }`, `{ fieldErrors: { … } }`,
+ * `{ errors: [{ field | path | source.pointer }] }` (per item, the first of these that gives a path).
+ * Rules (SPEC §10): an entry with an empty value names nothing; an `errors` object holding an envelope key (`message`, `code`, …) that
+ * `variables` does not declare is an error envelope, where only declared non-envelope keys count; a key that is itself a declared
+ * name is used whole (`filter[status]`); a plain-object value is descended (at most 8 levels) to the children that resolve through the
+ * variables. A name `variables` does not declare is the site's data and is written `{}`. Sorted with `{}` last and deduped; past `limit`
+ * the `{}` entry is kept and the rest is counted in `omitted`.
+ */
+export function rejectedFields(body: unknown, variables: unknown, limit = 20): { fields: string[]; omitted: number } {
+  if (!isPlain(body)) return { fields: [], omitted: 0 };
+  const declared = declaredNames(variables);
+  const found = new Set<string>();
+  const add = (path: string): void => {
+    if (path) found.add(path);
+  };
+  const segsOf = (raw: string): string[] => (declared.has(raw) ? [raw] : pathSegments(raw));
+  const descend = (base: readonly string[], value: Record<string, unknown>, depth: number): string[] => {
+    // An object with an envelope key that is no declared field there (`message`, `kind`, `path`, ...) is one field's error object, not a set of children.
+    if (Object.keys(value).some((k) => ENVELOPE.has(k) && !resolves([...base, k], variables))) return [];
+    const out: string[] = [];
+    for (const [key, child] of Object.entries(value)) {
+      if (!usable(child)) continue;
+      const segs = [...base, ...segsOf(key)];
+      if (!resolves(segs, variables)) continue;
+      const deeper = isPlain(child) && depth < 8 ? descend(segs, child, depth + 1) : [];
+      if (deeper.length > 0) out.push(...deeper);
+      else out.push(formatPath(segs));
+    }
+    return out;
+  };
+  const fromKeys = (o: unknown, isErrors: boolean): void => {
+    if (!isPlain(o)) return;
+    const keys = Object.keys(o);
+    const envelope = isErrors && keys.some((k) => ENVELOPE.has(k) && !declared.has(k));
+    for (const key of keys) {
+      const value = o[key];
+      if (!usable(value) || (envelope && ENVELOPE.has(key))) continue;
+      const segs = segsOf(key);
+      const path = rejectedPath(segs, variables, declared);
+      if (path === "" || (envelope && path === "{}")) continue;
+      const children = path !== "{}" && isPlain(value) ? descend(segs, value, 1) : [];
+      if (children.length > 0) for (const c of children) add(c);
+      else add(path);
+    }
+  };
+  const errors = body.errors;
+  if (isPlain(errors) && isPlain(errors.fieldErrors)) fromKeys(errors.fieldErrors, false);
+  else fromKeys(errors, true);
+  fromKeys(body.fieldErrors, false);
+  if (Array.isArray(errors)) {
+    for (const e of errors) {
+      if (!isPlain(e)) continue;
+      const tries: (() => string)[] = [
+        () => (typeof e.field === "string" ? rejectedPath(segsOf(e.field), variables, declared) : ""),
+        () => {
+          if (typeof e.path === "string") {
+            const segs = segsOf(e.path);
+            // A route (`/orders/1`) is no field: a leading slash counts only when it resolves through the Contract.
+            if (e.path.startsWith("/") && !resolves(segs, variables)) return "";
+            return rejectedPath(segs, variables, declared);
+          }
+          if (Array.isArray(e.path)) {
+            const segs = e.path.filter((s): s is string | number => typeof s === "string" || typeof s === "number").map((s) => (typeof s === "number" || /^\d+$/.test(s) ? "[]" : s));
+            return rejectedPath(segs, variables, declared);
+          }
+          return "";
+        },
+        () => {
+          if (!isPlain(e.source) || typeof e.source.pointer !== "string") return "";
+          const segs = pathSegments(e.source.pointer);
+          return segs.some((s) => s === "") ? "" : rejectedPath(stripJsonApi(segs, variables), variables, declared);
+        },
+      ];
+      for (const attempt of tries) {
+        const path = attempt();
+        if (path) {
+          add(path);
+          break;
+        }
+      }
+    }
+  }
+  const all = [...found].sort(byPath);
+  if (all.length <= limit) return { fields: all, omitted: 0 };
+  const named = all.filter((p) => p !== "{}");
+  const fields = found.has("{}") ? [...named.slice(0, limit - 1), "{}"] : named.slice(0, limit);
+  return { fields, omitted: all.length - fields.length };
 }
 
 /** The type name of a value, the only thing about a site's response we ever report. */
