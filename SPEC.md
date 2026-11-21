@@ -51,7 +51,7 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cl
      uses:    getCustomer → listFtpdProducts   (dropped: 4, with reasons)
      effect:  read
    ```
-   Command names are `<noun> <verb>` in English.
+   Command names are `<noun> <verb>` in English. The confirmed `output` is kept in code: the command exports an `output` Zod schema written from the card (a nullable value `.nullable()`, a value the card says cannot be empty `.min(1)` or `.positive()`), which the runtime checks (§8).
 5. **Generate.** The agent writes one Contract per Operation (§6) and the command file. The generator regenerates `registry.ts` and the SKILL.md command table (from `help`), then runs `check`. Only the generator writes the command table, in add-task and fix. The release build never rewrites committed files.
 
 ## 4. Generated plugin layout
@@ -259,7 +259,12 @@ The envelope is everything the Feedback skill needs, and the CLI is responsible 
   - **The Deploy skill** (`skills/<plugin>-deploy/`, one per plugin, covering every CLI skill) states the contract and points at the host guides (`hosts/railway.md` holds every Railway step; a later host adds `hosts/<host>.md`, and its config file, if it needs one, goes next to it), offers to generate the Owner password (shown once, a hash recommended), then guides the Session upload and the claude.ai connector. It is private use: the Owner deploys from their own checkout.
   - **Railway reads no config file** ([#74](https://github.com/hoaj/site-cli-creator/issues/74), [#75](https://github.com/hoaj/site-cli-creator/issues/75)): `railway.json` is ignored for every service created today (Config as Code is closed to new services), and its replacement, the IaC file `.railway/railway.ts`, needs the npm package `railway` and owns the whole project (omitted resources are deleted), so it is rejected. Railway's defaults give a root `Dockerfile` build, one replica and restart on failure; the health check is a step in `hosts/railway.md` (Railway's MCP server `update-service`, or the dashboard).
   - **Always included:** `new` writes the Deploy skill and `add-skill` copies the deploy files, since the remote-mode code is in every binary.
-- **Not yet:** no output schemas (a command declares no output schema).
+- **Output schemas** (decided in [an output schema per Task command](https://github.com/hoaj/site-cli-creator/issues/96)): Contracts check each response, but not how a command maps responses to what it prints. A field the Contract marks optional or nullable that disappears would print `null` or `0` and give the agent a wrong answer with no Drift. So a command may export `output`, a Zod schema of its result, written from the confirmed Task card.
+  - **Optional in the type,** since plugins made before it have commands without one; such a command behaves as before, and `regen` hints at it. `add-task` always writes one and `fix` updates it when a Task's output changes.
+  - **Checked before printing,** on the CLI and the MCP surface alike. What prints is the command's own value, never Zod's parsed copy, so extra keys stay and nothing is stripped or transformed. A transform in an output schema is refused (it cannot be written as JSON Schema): an output schema describes the printed value.
+  - **A failure is always Drift,** breakType `output`, even when no Operation changed: the Contract passing does not prove the site did not change. Fingerprint: `plugin:skill:<command name>:output:<path>:<Zod issue code>`. Only paths and issue codes reach the envelope, the diff and a filed issue, never a value or a Zod message.
+  - **Not checked:** a write's dry run (`call` throws it before the command returns) and every failure envelope; they are not the command's result.
+  - **Discovery:** `help` lists each command's output shape compactly. An MCP tool with an object output carries `outputSchema` (`z.toJSONSchema(output, { io: "input" })`, without `additionalProperties: false`, since the printed value may carry keys the schema does not name); a write tool's schema also admits its dry run. A tool whose output is not an object has none, and an error result never carries `structuredContent` where an `outputSchema` is advertised.
 
 **SKILL.md** (about 45–60 lines):
 1. Frontmatter with only `name` and `description`. The version goes in an HTML comment below it, because a `version:` key breaks Copilot.
@@ -314,6 +319,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 **Classification:** the CLI classifies every failure deterministically, and the agent never guesses.
 - **drift:** any of
   - a Zod parse failure;
+  - a command's result that no longer matches its `output` schema (breakType `output`, §8);
   - a GraphQL validation error;
   - a 404 or 405 on a known REST path;
   - a write request whose shape changed, or a `trigger(page)` that can't find its element;
@@ -344,7 +350,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
 - **input:** fails the variables or flag schema, so no call is made.
 - **bug:** a request `site.never` forbids (§6), refused before it leaves, and anything else thrown.
 
-**Fingerprint:** `plugin:skill:operation:breakType:path:code`, with array indices written as `[]`. `code` is the Zod issue code, the HTTP status or the GraphQL error code, and it may be empty. For example, `yousee:yousee:listFtpdProducts:zod:data.listFtpdProducts[].status:invalid_type`.
+**Fingerprint:** `plugin:skill:operation:breakType:path:code`, with array indices written as `[]`. For breakType `output` the command's name takes the operation's place and the path is a field of its `output` schema (§8). `code` is the Zod issue code, the HTTP status or the GraphQL error code, and it may be empty. For example, `yousee:yousee:listFtpdProducts:zod:data.listFtpdProducts[].status:invalid_type`.
 
 **`check`:**
 - Calls every **read** Operation live, in chain order, and validates it against its Contract. Plain `check` never launches Chrome.

@@ -679,6 +679,11 @@ for (const auth of ["none", "login"] as const) {
         ["notice list", false],
         ["subscription show", false],
       ]);
+      // Every expected command exports an output schema (#96): help shows its shape.
+      const shapes = Object.fromEntries(help.out.commands.map((c: { name: string; output?: string }) => [c.name, c.output]));
+      expect(shapes["subscription show"]).toBe("{customer: string, subscriptions: [{name: string, status: string, since: string|null, monthlyDKK: number|null}], monthlyTotalDKK: number}");
+      expect(shapes["note add"]).toBe("{note: {id: string, text: string, createdAt: string}}");
+      for (const [name, shape] of Object.entries(shapes)) expect(shape, name).toStartWith("{");
       expect(help.out.exitCodes.map((e: { code: number; kind: string }) => `${e.code}:${e.kind}`)).toEqual(["0:ok", "1:bug", "2:input", "3:drift", "4:session", "5:network"]);
       const builtins = help.out.builtins.map((b: { name: string }) => b.name);
       expect(builtins).toEqual(auth === "login" ? ["help", "login", "check", "doctor", "version", "mcp"] : ["help", "check", "doctor", "version", "mcp"]);
@@ -721,6 +726,12 @@ for (const auth of ["none", "login"] as const) {
         "check",
         "doctor",
       ]);
+      // Each Task tool advertises its output schema (#96); a write's also admits its dry run.
+      const listed = Object.fromEntries(r.byId.get(2).result.tools.map((t: { name: string }) => [t.name, t]));
+      expect(listed.subscription_show.outputSchema.properties.customer).toEqual({ type: "string", minLength: 1 });
+      expect(JSON.stringify(listed.subscription_show.outputSchema)).not.toContain("additionalProperties");
+      expect(listed.note_add.outputSchema.anyOf).toHaveLength(2);
+      expect(listed.check.outputSchema).toBeUndefined();
       const shown = r.byId.get(3).result;
       expect(shown.isError, JSON.stringify(shown)).toBeUndefined();
       expect(shown.structuredContent).toEqual((await cli(["subscription", "show", "--all"])).out);
@@ -730,8 +741,11 @@ for (const auth of ["none", "login"] as const) {
       const drifted = await withDrift("type-change", () => mcp([init, call(5, "subscription_show")]));
       const failed = drifted.byId.get(5).result;
       expect(failed.isError).toBe(true);
-      expect(failed.structuredContent.error).toMatchObject({ kind: "drift", fingerprint: `${prefix}listSubscriptions:zod:data.listSubscriptions[].price:invalid_type` });
-      expect(failed.structuredContent.error.next).toContain(`${PLUGIN}-feedback`);
+      // An error result never claims to match the advertised outputSchema: no structuredContent, the envelope is in the text (#96).
+      expect(failed.structuredContent).toBeUndefined();
+      const failure = JSON.parse(failed.content[0].text).error;
+      expect(failure).toMatchObject({ kind: "drift", fingerprint: `${prefix}listSubscriptions:zod:data.listSubscriptions[].price:invalid_type` });
+      expect(failure.next).toContain(`${PLUGIN}-feedback`);
       expect(leaks(drifted.stdout)).toEqual([]);
     }, 120_000);
 
@@ -828,8 +842,9 @@ for (const auth of ["none", "login"] as const) {
           const gone = await call("tools/call", { name: "subscription_show" });
           bodies.push(gone.raw);
           expect(gone.isError).toBe(true);
-          expect(gone.structuredContent.error.kind).toBe("session");
-          expect(gone.structuredContent.error.next).toContain("/setup");
+          const goneError = JSON.parse(gone.content[0].text).error;
+          expect(goneError.kind).toBe("session");
+          expect(goneError.next).toContain("/setup");
         }
         failed = false;
       } finally {

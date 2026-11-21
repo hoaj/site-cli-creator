@@ -82,7 +82,7 @@ type HelpFlag = {
   value: string;
   description?: string;
 };
-type HelpCommand = { name: string; summary: string; flags: HelpFlag[]; write: boolean };
+type HelpCommand = { name: string; summary: string; flags: HelpFlag[]; write: boolean; output?: string };
 
 function normalizeFlag(raw: unknown, key?: string): HelpFlag | null {
   if (typeof raw !== "object" || raw === null) return null;
@@ -119,7 +119,15 @@ export function helpCommands(help: unknown): HelpCommand[] {
       summary: typeof c.summary === "string" ? c.summary : "",
       flags: flagsOf(c.flags),
       write: c.write === true,
+      ...(typeof c.output === "string" && c.output ? { output: c.output } : {}),
     }));
+}
+
+/** The hint for Task commands that export no `output` schema (#96): not an error, existing plugins have such commands. */
+export function missingOutputHint(commands: HelpCommand[]): string | undefined {
+  const missing = commands.filter((c) => !c.output).map((c) => c.name);
+  if (missing.length === 0) return undefined;
+  return `no output schema on: ${missing.join(", ")}. An \`output\` Zod schema (what the command prints, with .min(1) or .positive() where a value cannot be empty) turns a renamed field that now prints null or 0 into Drift, and shows agents the shape in help and MCP. Add one to each (add-task step 5, fix).`;
 }
 
 function cell(text: string): string {
