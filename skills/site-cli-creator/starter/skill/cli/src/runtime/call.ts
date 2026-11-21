@@ -824,8 +824,13 @@ export class Client {
           : this.site.bootstrap ? "rerunning bootstrap" : "a call without login";
       throw this.drift(op, "auth", "", res.loginRedirect ? "redirect" : String(res.status), `the site refused the request (HTTP ${res.status}) after ${after}`);
     }
-    return this.classify(op, res);
+    const out = this.classify(op, res);
+    if (op.effect === "write") this.writeSent = true;
+    return out;
   }) as Call;
+
+  /** A write Operation was sent and the site accepted it (main.ts: an output Drift after it must say so). */
+  writeSent = false;
 
   /**
    * With a never list: the request this Operation sends with these variables (built once, the

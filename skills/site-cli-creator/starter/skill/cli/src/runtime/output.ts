@@ -8,19 +8,64 @@ import { driftFingerprint, unwrap, zodDiff } from "./fingerprint";
 
 type Names = { plugin: string; skill: string };
 
+/** What each kind of wrapper holds that may carry a schema: the keys to walk. */
+const CHILDREN: Record<string, string[]> = {
+  array: ["element"],
+  tuple: ["items", "rest"],
+  union: ["options"],
+  intersection: ["left", "right"],
+  record: ["keyType", "valueType"],
+  map: ["keyType", "valueType"],
+  set: ["valueType"],
+  optional: ["innerType"],
+  nullable: ["innerType"],
+  readonly: ["innerType"],
+  nonoptional: ["innerType"],
+};
+
+/** The first thing in the schema that changes the value it checks (so the schema would not describe what prints), or undefined. */
+function valueChanger(schema: unknown, seen = new Set<unknown>()): string | undefined {
+  if (!schema || typeof schema !== "object" || seen.has(schema)) return undefined;
+  seen.add(schema);
+  const def = (schema as { _zod?: { def?: any } })._zod?.def;
+  if (!def) return undefined;
+  if (["catch", "default", "prefault", "transform"].includes(def.type)) return `.${def.type}()`;
+  if (def.type === "pipe") return "a pipe (.pipe(), .transform() or z.preprocess())";
+  if (def.coerce === true) return `z.coerce.${def.type}()`;
+  if ((def.checks ?? []).some((c: any) => c?._zod?.def?.check === "overwrite")) return "an overwrite (.trim(), .toLowerCase() or the like)";
+  const inner: unknown[] = [];
+  if (def.type === "object") inner.push(...Object.values(def.shape ?? {}), def.catchall);
+  else if (def.type === "lazy") inner.push(def.getter());
+  else for (const key of CHILDREN[def.type] ?? []) inner.push(...[def[key]].flat());
+  for (const child of inner) {
+    const found = valueChanger(child, seen);
+    if (found) return found;
+  }
+  return undefined;
+}
+
 /**
- * Throws a ContractError when the schema cannot be advertised as JSON Schema (a transform, a date,
- * a custom type): an output schema says what is printed, so it must describe the value as it is.
- * The message is the runtime's own and names no value.
+ * Throws a ContractError when the schema would not describe what the command prints: it changes the
+ * value (a transform, pipe, preprocess, coerce, default, catch or overwrite such as .trim()), or it
+ * cannot be written as JSON Schema (a date, a custom type). Refinements (.min, .positive, .refine)
+ * are fine. The message is the runtime's own and names no value.
  */
 export function assertOutputSchema(command: Pick<Command, "name" | "output">): void {
   if (!command.output) return;
-  try {
-    z.toJSONSchema(command.output, { io: "output" });
-  } catch (e) {
+  const changer = valueChanger(command.output);
+  if (changer) {
     throw new ContractError(
-      `${command.name}: its output schema cannot be written as JSON Schema (${(e as Error).message}). An output schema describes what the command prints, so it takes no transform, date or custom type: print the value the way the schema says, and convert in run().`,
+      `${command.name}: its output schema uses ${changer}, which changes the value it checks. An output schema describes what the command prints, so conversions and fallbacks belong in run(): print the value the way the schema says. Refinements such as .min(1) and .positive() are fine.`,
     );
+  }
+  for (const io of ["output", "input"] as const) {
+    try {
+      z.toJSONSchema(command.output, { io });
+    } catch (e) {
+      throw new ContractError(
+        `${command.name}: its output schema cannot be written as JSON Schema (${(e as Error).message}). An output schema describes what the command prints, so it takes no date or custom type: print a string or number, and convert in run().`,
+      );
+    }
   }
 }
 
@@ -41,26 +86,24 @@ export function checkOutput(site: Names, command: Pick<Command, "name" | "output
   });
 }
 
-/** What a write command prints without --confirm (main.ts failed()): the schema of that dry run. */
-const DRY_RUN_SCHEMA = {
-  type: "object",
-  properties: { dryRun: { const: true }, would: { type: "object", properties: { operation: { type: "string" }, variables: {} }, required: ["operation"] } },
-  required: ["dryRun", "would"],
-} as const;
-
 /**
  * The command's output as the JSON Schema of an MCP tool's `outputSchema`, or undefined when there
- * is none or its root is no object (MCP needs `type: "object"`; the result then prints as before).
+ * is none, its root is no object (MCP needs `type: "object"`; the result then prints as before), or
+ * it cannot be written (the tool is still listed; calling it reports the bug from checkOutput).
  * `io: "input"` leaves out `additionalProperties: false`: the printed value may carry keys the
  * schema does not name, and a strict client validates structuredContent against this. A write
- * command may also print its dry run, so its schema admits that too.
+ * command gets none (main.ts): its dry run is not its output.
  */
-export function outputJsonSchema(command: Pick<Command, "name" | "output">, write: boolean): Record<string, unknown> | undefined {
+export function outputJsonSchema(command: Pick<Command, "name" | "output">): Record<string, unknown> | undefined {
   if (!command.output) return undefined;
-  assertOutputSchema(command);
+  try {
+    assertOutputSchema(command);
+  } catch (e) {
+    if (e instanceof ContractError) return undefined;
+    throw e;
+  }
   const { $schema: _, ...json } = z.toJSONSchema(command.output, { io: "input" }) as Record<string, unknown>;
-  if (json.type !== "object") return undefined;
-  return write ? { type: "object", anyOf: [json, DRY_RUN_SCHEMA] } : json;
+  return json.type === "object" ? json : undefined;
 }
 
 const KEEPS_SHAPE = ["optional", "nullable", "default", "prefault", "catch", "readonly", "nonoptional", "success"];

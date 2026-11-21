@@ -21,6 +21,11 @@ export type FailureDetails = {
    * that did it (a vendor name such as "cloudflare", or "captcha"). Never a value the site sent.
    */
   blocked?: string;
+  /**
+   * kind drift from a command's `output` check only: the command had already sent a write the site
+   * accepted, so the failure is in the mapping and the write must not be run again.
+   */
+  writeSent?: boolean;
   /** Replaces the kind's fixed `next`, when that sentence would be wrong here (the MCP login tool's own failures). */
   next?: string;
 };
@@ -71,7 +76,8 @@ export type EnvelopeSite = { plugin: string; skill: string; version: string; rep
 /** Who reads the envelope: an agent running the CLI, or an MCP client calling the `mcp` server's tools. */
 export type Surface = "cli" | "mcp";
 
-export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, surface: Surface = "cli", blocked = false): string {
+export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, surface: Surface = "cli", blocked = false, writeSent = false): string {
+  if (writeSent && kind === "drift") return `The write was sent and the site accepted it, so do not run it again. ${nextStep(kind, site, hasAccounts, surface, blocked)}`;
   const feedback = `${site.plugin}-feedback`;
   if (blocked) {
     // Not an outage and not Drift: the site may block the CLI every time. That is a bug in the plugin
@@ -147,9 +153,10 @@ export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface =
       ...(d.stack !== undefined && { stack: d.stack }),
       ...(d.accounts !== undefined && { accounts: d.accounts }),
       ...(d.blocked !== undefined && { blocked: d.blocked }),
+      ...(d.writeSent && { writeSent: true }),
       version: site.version,
       os: osName(),
-      next: d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined),
+      next: d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined, d.writeSent === true),
     },
   };
 }
