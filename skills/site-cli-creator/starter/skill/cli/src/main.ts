@@ -16,6 +16,7 @@ import { findChrome } from "./runtime/chrome";
 import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
 import { neverList, neverNext, NeverSent } from "./runtime/never";
+import { checkOutput, outputJsonSchema } from "./runtime/output";
 import { hashPassword, MIN_PASSWORD_LENGTH, remoteConfig, type RemoteConfig } from "./runtime/remote-config";
 import { selftest } from "./runtime/selftest";
 import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir, type Session } from "./runtime/session";
@@ -232,7 +233,7 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
     if (!command) throw input(`unknown command "${words.join(" ") || flags[0]}"; run \`${site.skill} help\``);
     commandName = command.name;
     if (words.length > 2) throw input(`unexpected argument "${words[2]}"`);
-    return ok(await runTask(app, client, deps, command, parseArgs(command, flags), account));
+    return ok((await runTask(app, client, deps, command, parseArgs(command, flags), account)).value);
   } catch (e) {
     return failed(e, site, commandName);
   } finally {
@@ -242,8 +243,17 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
 
 const ok = (output: unknown): RunResult => ({ output, code: EXIT.ok });
 
-/** One Task with its parsed args: the CLI and the MCP server both end here. */
-async function runTask(app: App, client: Client, deps: Deps, command: Command, args: unknown, account: string | undefined) {
+/** A result that passed the command's `output` schema: the MCP surface may send it as structuredContent. */
+class Checked {
+  constructor(readonly value: unknown, readonly valid: boolean) {}
+}
+
+/**
+ * One Task with its parsed args: the CLI and the MCP server both end here. The result is checked
+ * against the command's `output` schema, if it has one, and returned as the command gave it. A dry
+ * run is thrown by `call` before the command returns, so it is never checked against `output`.
+ */
+async function runTask(app: App, client: Client, deps: Deps, command: Command, args: unknown, account: string | undefined): Promise<Checked> {
   if (app.site.auth === "login") await client.ensureSession();
   const chosen = await client.resolveAccount(account);
   deps.note(`${command.name}: ${command.uses.map((o) => o.name).join(" → ") || "no Operations"}`);
@@ -254,7 +264,9 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
     account: chosen,
     note: deps.note,
   }));
-  return result ?? null;
+  const value = result ?? null;
+  checkOutput(app.site, command, value);
+  return new Checked(value, command.output !== undefined);
 }
 
 /** What a run that threw prints: the dry run, the classified Failure's envelope, or a bug. */
@@ -355,18 +367,22 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
     }
   };
 
-  const tool = (name: string, description: string, schema: z.ZodObject, annotations: McpTool["annotations"], commandName: string, body: (args: any) => Promise<unknown>): McpTool => ({
+  const tool = (name: string, description: string, schema: z.ZodObject, annotations: McpTool["annotations"], commandName: string, body: (args: any) => Promise<unknown>, outputSchema?: Record<string, unknown>): McpTool => ({
     name,
     description,
     schema,
     annotations,
+    ...(outputSchema && { outputSchema }),
     async call(raw) {
       try {
         const r = schema.safeParse(raw);
         if (!r.success) throw input(r.error.issues.map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; "));
-        return ok(await body(r.data));
+        const out = await body(r.data);
+        // Only a result that passed `output` is promised to match outputSchema.
+        return out instanceof Checked ? { ...ok(out.value), matches: out.valid } : ok(out);
       } catch (e) {
-        return failed(e, site, commandName, "mcp");
+        // A write's dry run is the other thing its outputSchema admits (runtime/output.ts).
+        return { ...failed(e, site, commandName, "mcp"), ...(e instanceof DryRun && { matches: true }) };
       } finally {
         await deps.release?.(); // no Chrome stays open between tool calls
       }
@@ -386,6 +402,7 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
         notWhileSigningIn();
         return runTask(app, new Client(site, deps, { confirm: confirm === true, surface: "mcp" }), deps, command, args, account);
       },
+      outputJsonSchema(command, write),
     );
   });
 

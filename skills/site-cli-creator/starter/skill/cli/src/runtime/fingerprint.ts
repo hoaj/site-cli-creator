@@ -3,11 +3,14 @@
 //         map keys written {} because they are the site's data, e.g. an email or a phone number;
 //         REST params in the operation written {param}, so the only colons are separators:
 //         shop:shop:GET /api/invoices/{id}:http::404)
+//         output Drift (a command's result no longer matches its `output` schema) puts the command's
+//         name where the operation goes, a path from the output schema and the Zod issue code:
+//         shop:shop:invoice list:output:invoices[].amountDKK:too_small
 // Bug:    plugin:skill:bug:<command-with-dashes>:<ErrorName>:<frame>
 //         <frame> = first stack frame inside src/, as relative/path.ts#function, no line/col.
 import type { DiffEntry } from "./envelope";
 
-export type BreakType = "zod" | "graphql" | "http" | "auth" | "input-rejected" | "request" | "trigger" | "html";
+export type BreakType = "zod" | "graphql" | "http" | "auth" | "input-rejected" | "request" | "trigger" | "html" | "output";
 type Names = { plugin: string; skill: string };
 
 export function driftFingerprint(site: Names, operation: string, breakType: BreakType, path = "", code = ""): string {

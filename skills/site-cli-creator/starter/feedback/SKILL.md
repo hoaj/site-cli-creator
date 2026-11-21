@@ -47,7 +47,7 @@ gh issue list --repo __REPO__ --state all --search "\"$key\" in:title" --json nu
 #@shared gh issue list --repo __REPO__ --state open --search '"feature: <skill>:" in:title' --json number,title,url
 ```
 
-GitHub's search is fuzzy: for Drift and bug, a match is only an issue whose title is exactly the title step 3 would write (the Fingerprint, `bug: <bug key>`, or the block title). For Drift, also note open issues whose title starts with the same `<plugin>:<skill>:<operation>:` (the same Operation, seen another way, such as by `check` instead of a command); they are not matches, but the body names them (step 3). When `gh` is missing or not logged in, skip the search and go to step 3; step 4 gives the user a link instead.
+GitHub's search is fuzzy: for Drift and bug, a match is only an issue whose title is exactly the title step 3 would write (the Fingerprint, `bug: <bug key>`, or the block title). For Drift, also note open issues whose title starts with the same `<plugin>:<skill>:<operation>:` (the same Operation, seen another way, such as by `check` instead of a command; for Drift whose Fingerprint has `:output:`, the command's name stands where the Operation does, and a command's output Drift is only ever seen by running it); they are not matches, but the body names them (step 3). When `gh` is missing or not logged in, skip the search and go to step 3; step 4 gives the user a link instead.
 
 ### 2. Decide what to do
 

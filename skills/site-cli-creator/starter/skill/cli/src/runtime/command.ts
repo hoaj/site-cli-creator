@@ -23,6 +23,14 @@ export type Command<A extends z.ZodObject = z.ZodObject> = {
   /** Flags (kebab-case on the command line, camelCase keys here). Booleans are presence flags. */
   args: A;
   uses: Operation[];
+  /**
+   * What the command prints, as a Zod schema written from the Task card (add `.min(1)` or
+   * `.positive()` where a value cannot be empty). The result is checked against it before it is
+   * printed; a mismatch is Drift (breakType "output"). The result prints as `run` returned it, so
+   * the schema may name fewer keys than it has. No transform: it describes the value as printed.
+   * Optional so a command written without one still runs; `regen` hints at those.
+   */
+  output?: z.ZodType;
   run(args: z.output<A>, ctx: CommandCtx): Promise<unknown>;
 };
 
