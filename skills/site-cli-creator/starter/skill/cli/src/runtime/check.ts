@@ -9,12 +9,12 @@ import type { Client } from "./call";
 import { ContractError, Failure, type DriftEntry } from "./envelope";
 import { driftFingerprint, errorName, operationSegment, zodDiff } from "./fingerprint";
 import { stripNoise, topLevelDefinitions, type GraphqlType } from "./graphql";
-import { closeContext, launch, launchInMemory, profileState } from "./login";
+import { closeContext, launch, launchInMemory, mountsForm, profileState } from "./login";
 import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverCheckedWarning } from "./needs";
 import { forbiddenRequest, neverProblems, neverRuleLabel, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { ensureProfileDir } from "./session";
-import { effectiveOrigin, isLoginHost, tokenMatches, type NeverRule, type Site } from "./site";
+import { effectiveOrigin, isLoginHost, isLoginPath, tokenMatches, type NeverRule, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
 /**
@@ -508,6 +508,8 @@ async function checkOne(
 ): Promise<DriftEntry | null> {
   let captured: Captured | undefined;
   let signedOut = false;
+  /** Whether the top frame is on a login.paths page now: a later navigation off it clears this (a pass-through is not signed out). */
+  let onLoginPath = false;
   /** Labels of the site.never rules this trigger's requests broke, each reported once. */
   const forbidden = new Map<string, string>();
   const handler = async (route: Route) => {
@@ -523,7 +525,13 @@ async function checkOne(
   await context.route("**/*", handler);
   const page = await context.newPage();
   page.on("framenavigated", (frame) => {
-    if (!frame.parentFrame() && site.auth === "login" && isLoginHost(site, frame.url())) signedOut = true;
+    if (frame.parentFrame() || site.auth !== "login") return;
+    if (isLoginHost(site, frame.url())) signedOut = true;
+    try {
+      onLoginPath = isLoginPath(site, new URL(frame.url()), origin);
+    } catch {
+      onLoginPath = false;
+    }
   });
   let triggerError: unknown;
   try {
@@ -532,12 +540,17 @@ async function checkOne(
     triggerError = e;
   }
   for (let waited = 0; !captured && triggerError === undefined && waited < REQUEST_WAIT_MS; waited += 100) await Bun.sleep(100);
+  // login.signedOutSelector: a sign-in form rendered in place, with no navigation to tell it by.
+  const selector = site.auth === "login" ? site.login?.signedOutSelector : undefined;
+  if (!captured && !signedOut && !onLoginPath && selector) {
+    signedOut = await mountsForm(() => page.content(), selector);
+  }
   await page.close().catch(() => {});
   await context.unroute("**/*", handler);
   for (const [label, why] of forbidden) {
     warn(`${op.name}'s trigger sent a request site.never forbids (${label}: ${why}); it was aborted. Change the trigger so it stops before that request.`);
   }
-  if (!captured && signedOut) {
+  if (!captured && (signedOut || onLoginPath)) {
     throw new Failure("session", `${signIn[0]!.toUpperCase()}${signIn.slice(1)} is signed out of ${site.origin}, so ${op.name} could not be checked.`);
   }
   return compareWrite(site, op, captured, triggerError, [...forbidden.keys()]);
