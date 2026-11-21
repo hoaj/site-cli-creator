@@ -149,7 +149,7 @@ await runTool(async () => {
 
   const commands = helpCommands(runHelp(paths.cli, paths.main));
   const skill = typeof site.skill === "string" ? site.skill : basename(skillDir);
-  const outputHint = missingOutputHint(commands);
+  const outputHint = missingOutputHint(commands, existsSync(paths.outputRuntime));
   if (outputHint) progress(`hint: ${outputHint}`);
   const table = commandsTable(skill, commands);
   writeFileSync(paths.skillMd, replaceCommandsBlock(withNever ?? skillMd, table));

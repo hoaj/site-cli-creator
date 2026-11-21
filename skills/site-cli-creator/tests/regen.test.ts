@@ -199,11 +199,22 @@ describe("regen.ts", () => {
     const skill = fakeSkill("no-output", "none", { getAccount: "read", addNote: "write" });
     const shown = join(skill, "cli/src/commands/subscription-show.ts");
     writeFileSync(shown, readFileSync(shown, "utf8").replace("run:", 'output: "{customer: string}", run:'));
+    // An older plugin (no runtime/output.ts): adding output would do nothing until the runtime is ported.
+    const old = regen(skill);
+    expect(old.code).toBe(0);
+    expect(old.out.hints).toHaveLength(1);
+    expect(old.out.hints[0]).toContain("note add");
+    expect(old.out.hints[0]).toContain("predates output schemas");
+    expect(old.out.hints[0]).toContain("runtime/output.ts");
+    expect(old.out.hints[0]).not.toContain("Add one to each");
+    // A plugin whose runtime has it: the hint to add one.
+    write(join(skill, "cli/src/runtime/output.ts"), "export {};\n");
     const r = regen(skill);
     expect(r.code).toBe(0);
     expect(r.out.hints).toHaveLength(1);
     expect(r.out.hints[0]).toContain("note add");
     expect(r.out.hints[0]).not.toContain("subscription show");
+    expect(r.out.hints[0]).not.toContain("predates");
     expect(r.stderr).toContain("hint: no output schema on: note add");
     const added = join(skill, "cli/src/commands/note-add.ts");
     writeFileSync(added, readFileSync(added, "utf8").replace("run:", 'output: "{ok: boolean}", run:'));
