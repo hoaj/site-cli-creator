@@ -131,6 +131,29 @@ describe("what is checked is what prints", () => {
   });
 });
 
+describe("with the memoizing unwrap (main 0.19.1)", () => {
+  test("a recursive lazy schema whose getter builds a new schema per call ends in a ContractError, never a hang or a crash; the shape terminates", () => {
+    const make = (): z.ZodType => z.object({ name: z.string().min(1), children: z.array(z.lazy(() => make())) });
+    const output = make();
+    expect(() => assertOutputSchema({ name: "item show", output })).toThrow(ContractError); // Zod cannot write it as JSON Schema either
+    expect(outputShape(output)).toStartWith("{name: string, children: [{name: string");
+  });
+
+  test("a z.preprocess is still refused, and its help shape is the schema after it", () => {
+    const output = z.object({ a: z.preprocess((x) => x, z.string()) });
+    expect(() => assertOutputSchema({ name: "item show", output })).toThrow(ContractError);
+    expect(outputShape(output)).toBe("{a?: string}");
+  });
+
+  test("output Drift on a nested path reports paths and codes only", async () => {
+    const SECRET = "tok_planted_4e1b";
+    const { app } = appOf([quiet("item show", z.object({ rows: z.array(z.object({ n: z.number() })) }), () => ({ rows: [{ n: SECRET }] }))]);
+    const r = await run(["item", "show"], app);
+    expect(err(r.output).fingerprint).toBe("acme:shop:item show:output:rows[].n:invalid_type");
+    expect(JSON.stringify(r.output)).not.toContain(SECRET);
+  });
+});
+
 describe("help never breaks on a shape", () => {
   test("a BigInt literal is written 1n", () => {
     expect(outputShape(z.object({ n: z.literal(1n) }))).toBe("{n: 1n}");
