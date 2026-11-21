@@ -545,11 +545,24 @@ describe("drift switches", () => {
     expect((await fetch(url, { headers: chrome })).status).toBe(200);
   });
 
+  test("input-rejected-fields: REST calls with a variable answer 400 with errors keyed by that variable", async () => {
+    const site = startFixtureSite({ auth: "login" });
+    sites.push(site);
+    const h = await loginHeaders(site);
+    site.setDrift("input-rejected-fields");
+    const list = await fetch(`${site.url}/api/invoices?accountId=${ACCOUNT.id}`, { headers: h });
+    expect(list.status).toBe(400);
+    expect(await list.json()).toEqual({ errorMessages: [], errors: { accountId: "This value is not accepted." } });
+    const one = await fetch(`${site.url}/api/invoices/${INVOICES[0]!.id}`, { headers: h });
+    expect(one.status).toBe(400);
+    expect(((await one.json()) as any).errors).toEqual({ id: "This value is not accepted." });
+  });
+
   test("unknown switches are refused", () => {
     const site = startFixtureSite({ auth: "none" });
     sites.push(site);
     expect(() => site.setDrift("nope" as Drift)).toThrow(/unknown drift/);
-    expect(DRIFTS.length).toBe(13);
+    expect(DRIFTS.length).toBe(14);
   });
 });
 
