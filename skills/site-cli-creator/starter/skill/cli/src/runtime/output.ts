@@ -39,7 +39,8 @@ function valueChanger(schema: unknown, seen = new Set<unknown>()): string | unde
   if (def.type === "object") inner.push(...Object.values(def.shape ?? {}), def.catchall);
   else if (def.type === "lazy") {
     try {
-      inner.push(def.getter());
+      // Zod memoizes the lazy schema in `_zod.innerType`; a getter that builds a new schema per call would never finish walking.
+      inner.push((schema as { _zod?: { innerType?: unknown } })._zod?.innerType ?? def.getter());
     } catch {} // a getter that throws: the JSON Schema conversion below reports it
   }
   else for (const key of CHILDREN[def.type] ?? []) inner.push(...[def[key]].flat());
@@ -158,7 +159,7 @@ export function outputShape(schema: unknown, depth = 0): string {
       return `{${fields.join(", ")}}`;
     }
     default:
-      return KEEPS_SHAPE.includes(def.type) ? next(def.innerType) : def.type === "pipe" ? next(def.in) : def.type === "lazy" ? next(unwrap(schema)) : "any";
+      return KEEPS_SHAPE.includes(def.type) ? next(def.innerType) : def.type === "pipe" ? next(unwrap(schema)) : def.type === "lazy" ? next(unwrap(schema)) : "any";
   }
 }
 
