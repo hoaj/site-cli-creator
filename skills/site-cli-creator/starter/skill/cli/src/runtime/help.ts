@@ -3,7 +3,7 @@ import type { z } from "zod";
 import type { Command } from "./command";
 import { EXIT, nextStep, type Kind } from "./envelope";
 import { neverList } from "./never";
-import { assertOutputSchema, outputShape } from "./output";
+import { outputShape } from "./output";
 import { unwrap } from "./fingerprint";
 import type { Site } from "./site";
 
@@ -94,10 +94,7 @@ export function help(site: Site, commands: Command[]) {
     version: site.version,
     auth: site.auth,
     usage: `${site.skill} <command> [flags]`,
-    commands: commands.map((c) => {
-      assertOutputSchema(c);
-      return { name: c.name, summary: c.summary, write: isWriteCommand(c), flags: flagSpecs(c.args), ...(c.output && { output: outputShape(c.output) }) };
-    }),
+    commands: commands.map((c) => ({ name: c.name, summary: c.summary, write: isWriteCommand(c), flags: flagSpecs(c.args), ...(c.output && { output: outputShape(c.output) }) })),
     builtins,
     globalFlags: GLOBAL_FLAGS,
     // site.never: what the CLI never does, whatever the flags; the user does it on the site.

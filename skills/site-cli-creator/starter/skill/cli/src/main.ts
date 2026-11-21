@@ -16,7 +16,7 @@ import { findChrome } from "./runtime/chrome";
 import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
 import { neverList, neverNext, NeverSent } from "./runtime/never";
-import { checkOutput, outputJsonSchema } from "./runtime/output";
+import { assertOutputSchema, checkOutput, outputJsonSchema } from "./runtime/output";
 import { hashPassword, MIN_PASSWORD_LENGTH, remoteConfig, type RemoteConfig } from "./runtime/remote-config";
 import { selftest } from "./runtime/selftest";
 import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir, type Session } from "./runtime/session";
@@ -193,7 +193,10 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
       if (builtin === "doctor") return ok(await doctor(site, { env: deps.env, exec: app.exec, compiled: compiled() }));
       // Hidden built-in for the generator's platform smoke test (SPEC §9); not listed by help.
       if (builtin === "selftest") return ok(await selftest({ url: f.url as string | undefined, chrome: !f["no-chrome"], fetch: deps.fetch, env: deps.env }));
-      if (builtin === "check") return ok(await check(client, app.operations, { op: f.op as string | undefined, writes: !!f.writes, account }, app.checkWrites));
+      if (builtin === "check") {
+        assertOutputSchemas(app);
+        return ok(await check(client, app.operations, { op: f.op as string | undefined, writes: !!f.writes, account }, app.checkWrites));
+      }
       if (builtin === "mcp") {
         if (account !== undefined || confirm) throw input("mcp takes no --account or --confirm; account and confirm are arguments of each tool call");
         if (f["hash-password"]) {
@@ -243,6 +246,14 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
 
 const ok = (output: unknown): RunResult => ({ output, code: EXIT.ok });
 
+/**
+ * `check` refuses a command whose output schema is broken before it calls any Operation, so
+ * add-task and fix catch it while authoring (a bug envelope naming the command).
+ */
+function assertOutputSchemas(app: App): void {
+  for (const command of app.commands) assertOutputSchema(command);
+}
+
 /** A result that passed the command's `output` schema: the MCP surface may send it as structuredContent. */
 class Checked {
   constructor(readonly value: unknown, readonly valid: boolean) {}
@@ -265,8 +276,16 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
     note: deps.note,
   }));
   const value = result ?? null;
-  checkOutput(app.site, command, value);
-  return new Checked(value, command.output !== undefined);
+  // An undefined result the schema accepts is fine; otherwise what prints (null) is what is checked.
+  const skip = result === undefined && command.output?.safeParse(undefined).success === true;
+  try {
+    if (!skip) checkOutput(app.site, command, value);
+  } catch (e) {
+    // The mapping failed after a write the site accepted: never let the agent take it for a failed write.
+    if (e instanceof Failure && client.writeSent) throw new Failure(e.kind, e.message, { ...e.details, writeSent: true });
+    throw e;
+  }
+  return new Checked(value, command.output !== undefined && !skip);
 }
 
 /** What a run that threw prints: the dry run, the classified Failure's envelope, or a bug. */
@@ -402,7 +421,7 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
         notWhileSigningIn();
         return runTask(app, new Client(site, deps, { confirm: confirm === true, surface: "mcp" }), deps, command, args, account);
       },
-      outputJsonSchema(command, write),
+      write ? undefined : outputJsonSchema(command),
     );
   });
 
@@ -447,6 +466,7 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
     tool("check", options.remote ? "Call every read Operation live and validate it against its Contract, to tell whether the site changed" : "Call every read Operation live and validate it against its Contract, to tell whether the site changed; writes: true also checks writes without sending them", checkSchema, { readOnlyHint: true, openWorldHint: true }, "check",
       ({ op, writes, account }) => {
         notWhileSigningIn();
+        assertOutputSchemas(app);
         // A write is checked by driving its page in Chrome, which a remote server does not have.
         if (options.remote && op !== undefined && findOperation(app.operations, op).effect === "write") {
           throw input("checking a write needs Chrome, which a remote server does not have; check reads only");

@@ -4,6 +4,8 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { mcpServer, run } from "../src/main";
 import { defineCommand } from "../src/runtime/command";
+import { ContractError } from "../src/runtime/envelope";
+import { assertOutputSchema } from "../src/runtime/output";
 import { defineOperation } from "../src/runtime/operation";
 import { fakeFetch, json, makeApp, makeDeps, makeSite, tempHome, type Recorded } from "./helpers";
 
@@ -155,12 +157,146 @@ describe("running a command with an output schema", () => {
     expect(err(drifted.output).fingerprint).toBe("acme:shop:item rename:output:name:invalid_type");
   });
 
-  test("an output schema with a transform is refused with a clear message (a bug, exit 1)", async () => {
+  test("an output schema with a transform is refused with a clear message (a bug, exit 1) when its command runs", async () => {
     const { output, code } = await run(["item", "show"], app(itemShow(z.object({ id: z.string().transform((s) => s.length) }))));
     expect(code).toBe(1);
-    expect(err(output).message).toMatch(/item show.*output.*transform/i);
-    expect((await run(["help"], app(itemShow(z.object({ id: z.string().transform((s) => s.length) }))))).code).toBe(1);
+    expect(err(output).message).toMatch(/item show.*output.*transform|item show.*output.*conver/i);
   });
+
+  test("a result of undefined is skipped when the schema accepts undefined, else checked as the printed null", async () => {
+    const none = (output: z.ZodType) => defineCommand({ name: "item none", summary: "x", args: z.object({}), uses: [], output, run: async () => undefined });
+    const ok = await run(["item", "none"], makeApp(makeSite(), makeDeps(fakeFetch(site).fetch, home.dir).deps, { commands: [none(z.undefined())] }));
+    expect(ok.code).toBe(0);
+    const bad = await run(["item", "none"], makeApp(makeSite(), makeDeps(fakeFetch(site).fetch, home.dir).deps, { commands: [none(z.object({ a: z.string() }))] }));
+    expect(bad.code).toBe(3);
+    expect(err(bad.output).fingerprint).toBe("acme:shop:item none:output::invalid_type");
+  });
+});
+
+describe("one bad schema does not break the rest of the CLI", () => {
+  const bad = z.object({ id: z.string().transform((s) => s.length) });
+
+  test("help, <command> --help and the other commands work; only the broken command fails, as a bug naming it", async () => {
+    const a = () => app(itemShow(bad), itemList);
+    const help = await run(["help"], a());
+    expect(help.code).toBe(0);
+    expect((help.output as any).commands[1].output).toBe("[{id: string}]");
+    expect((await run(["item", "list", "--help"], a())).code).toBe(0);
+    expect((await run(["version"], a())).code).toBe(0);
+    expect((await run(["item", "list"], a())).code).toBe(0);
+    const broken = await run(["item", "show"], a());
+    expect(broken.code).toBe(1);
+    expect(err(broken.output).message).toContain("item show");
+  });
+
+  test("check refuses it before any Operation runs, so authoring catches it", async () => {
+    const f = fakeFetch(site);
+    const r = await run(["check"], makeApp(makeSite(), makeDeps(f.fetch, home.dir).deps, { commands: [itemShow(bad)], operations: [getItem] }));
+    expect(r.code).toBe(1);
+    expect(err(r.output).message).toContain("item show");
+    expect(f.calls).toHaveLength(0);
+  });
+});
+
+describe("a write that was sent is never reported as if it failed", () => {
+  const drifting = () => itemRename(z.object({ renamed: z.literal(true), name: z.number() }));
+
+  test("CLI: output Drift after a sent write carries writeSent and a next that says not to run it again", async () => {
+    const f = fakeFetch(site);
+    const a = makeApp(makeSite(), makeDeps(f.fetch, home.dir).deps, { commands: [drifting()], operations: [getItem, renameItem] });
+    const { output, code } = await run(["--confirm", "item", "rename", "--name", "N"], a);
+    expect(code).toBe(3);
+    expect(err(output).writeSent).toBe(true);
+    expect(err(output).fingerprint).toBe("acme:shop:item rename:output:name:invalid_type");
+    expect(err(output).next).toMatch(/^The write was sent and the site accepted it/);
+    expect(err(output).next).toContain("not run it again");
+    expect(f.calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+  });
+
+  test("a read's output Drift has no writeSent, and neither has a dry run", async () => {
+    item = { id: "I1" };
+    expect(err((await run(["item", "show"], app(itemShow(SHOW)))).output).writeSent).toBeUndefined();
+  });
+
+  test("MCP: the same, with a tool-worded next", async () => {
+    const server = mcpServer(app(drifting()));
+    const r: any = ((await server.handle({ jsonrpc: "2.0", id: 90, method: "tools/call", params: { name: "item_rename", arguments: { name: "N", confirm: true } } })) as any).result;
+    expect(r.isError).toBe(true);
+    const e = JSON.parse(r.content[0].text).error;
+    expect(e.kind).toBe("drift");
+    expect(e.writeSent).toBe(true);
+    expect(e.next).toMatch(/^The write was sent and the site accepted it/);
+    expect(e.next).toContain("MCP server");
+  });
+});
+
+describe("schemas that would change the value are refused", () => {
+  const refused: [string, z.ZodType][] = [
+    ["catch", z.object({ a: z.string().catch("x") })],
+    ["default", z.object({ a: z.string().default("x") })],
+    ["prefault", z.object({ a: z.string().prefault("x") })],
+    ["transform", z.object({ a: z.string().transform((s) => s.length) })],
+    ["preprocess", z.object({ a: z.preprocess((x) => x, z.string()) })],
+    ["pipe", z.object({ a: z.string().pipe(z.string()) })],
+    ["coerce number", z.object({ a: z.coerce.number() })],
+    ["coerce string", z.object({ a: z.coerce.string() })],
+    ["coerce boolean", z.object({ a: z.coerce.boolean() })],
+    ["trim (overwrite)", z.object({ a: z.string().trim() })],
+    ["toLowerCase (overwrite)", z.object({ a: z.string().toLowerCase() })],
+    ["in an array", z.array(z.object({ a: z.string().default("x") }))],
+    ["in a tuple item", z.tuple([z.string().catch("x")])],
+    ["in a tuple rest", z.tuple([z.string()], z.string().catch("x"))],
+    ["in a union", z.union([z.string(), z.object({ a: z.string().default("x") })])],
+    ["in an intersection", z.intersection(z.object({ a: z.string() }), z.object({ b: z.string().default("x") }))],
+    ["in a record", z.record(z.string(), z.string().default("x"))],
+    ["in a map", z.map(z.string(), z.string().default("x"))],
+    ["in a set", z.set(z.string().trim())],
+    ["in a catchall", z.object({ a: z.string() }).catchall(z.string().default("x"))],
+    ["under optional", z.object({ a: z.string().default("x").optional() })],
+    ["under nullable", z.object({ a: z.string().trim().nullable() })],
+    ["under readonly", z.object({ a: z.string().trim().readonly() })],
+    ["under nonoptional", z.object({ a: z.string().trim().optional().pipe(z.string()).nonoptional() })],
+    ["under lazy", z.object({ a: z.lazy(() => z.string().default("x")) })],
+  ];
+  for (const [name, schema] of refused) {
+    test(`${name}`, () => {
+      expect(() => assertOutputSchema({ name: "item show", output: schema })).toThrow(ContractError);
+      expect(() => assertOutputSchema({ name: "item show", output: schema })).toThrow(/item show/);
+    });
+  }
+
+  test("refinements and plain wrappers stay allowed, and a recursive schema terminates", () => {
+    type Tree = { name: string; children: Tree[] };
+    const tree: z.ZodType<Tree> = z.object({ name: z.string().min(1), children: z.array(z.lazy(() => tree)) });
+    for (const schema of [SHOW, z.object({ a: z.number().positive(), b: z.string().refine((s) => s !== "x"), c: z.string().nullable().optional() }), tree]) {
+      expect(() => assertOutputSchema({ name: "item show", output: schema })).not.toThrow();
+    }
+  });
+
+  test("the message says conversions and fallbacks belong in run()", () => {
+    expect(() => assertOutputSchema({ name: "item show", output: z.object({ a: z.string().default("x") }) })).toThrow(/run\(\)/);
+  });
+});
+
+describe("a schema that cannot be written as JSON Schema does not crash the server", () => {
+  const broken: [string, z.ZodType][] = [
+    ["date piped to any", z.date().pipe(z.any())],
+    ["custom piped to a string", z.custom(() => true).pipe(z.string())],
+    ["a date", z.object({ when: z.date() })],
+    ["a custom type", z.object({ x: z.custom(() => true) })],
+  ];
+  for (const [name, schema] of broken) {
+    test(`${name}: mcp starts, the tool has no outputSchema, calling it is the bug envelope`, async () => {
+      const server = mcpServer(app(itemShow(schema)));
+      const res: any = await server.handle({ jsonrpc: "2.0", id: 91, method: "tools/list" });
+      const tool = res.result.tools.find((t: any) => t.name === "item_show");
+      expect(tool).toBeDefined();
+      expect("outputSchema" in tool).toBe(false);
+      const r: any = ((await server.handle({ jsonrpc: "2.0", id: 92, method: "tools/call", params: { name: "item_show", arguments: {} } })) as any).result;
+      expect(r.isError).toBe(true);
+      expect(JSON.parse(r.content[0].text).error.kind).toBe("bug");
+    });
+  }
 });
 
 describe("help", () => {
@@ -219,17 +355,15 @@ describe("MCP", () => {
     expect(JSON.stringify(r)).not.toContain(SECRET);
   });
 
-  test("a write's dry run is not validated, and its schema admits it so strict clients accept the result", async () => {
+  test("a write tool advertises no outputSchema: its dry run and result are sent as before, the result still checked", async () => {
     const server = mcpServer(app(itemRename(z.object({ renamed: z.literal(true), name: z.string() }))));
-    const tool = (await listed(server)).item_rename;
-    const check = z.fromJSONSchema(tool.outputSchema);
+    expect("outputSchema" in (await listed(server)).item_rename).toBe(false);
     const dry = await call(server, "tools/call", { name: "item_rename", arguments: { name: "N" } });
     expect(dry.isError).toBeUndefined();
     expect(text(dry).dryRun).toBe(true);
-    expect(check.safeParse(dry.structuredContent).success).toBe(true);
+    expect(dry.structuredContent).toEqual(text(dry));
     const sent = await call(server, "tools/call", { name: "item_rename", arguments: { name: "N", confirm: true } });
     expect(sent.structuredContent).toEqual({ renamed: true, name: "N" });
-    expect(check.safeParse(sent.structuredContent).success).toBe(true);
   });
 
   test("a tool without an output schema keeps its structuredContent as before", async () => {

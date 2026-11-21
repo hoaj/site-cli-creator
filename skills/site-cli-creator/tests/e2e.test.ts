@@ -726,11 +726,11 @@ for (const auth of ["none", "login"] as const) {
         "check",
         "doctor",
       ]);
-      // Each Task tool advertises its output schema (#96); a write's also admits its dry run.
+      // Each read Task tool advertises its output schema (#96); a write tool advertises none.
       const listed = Object.fromEntries(r.byId.get(2).result.tools.map((t: { name: string }) => [t.name, t]));
       expect(listed.subscription_show.outputSchema.properties.customer).toEqual({ type: "string", minLength: 1 });
       expect(JSON.stringify(listed.subscription_show.outputSchema)).not.toContain("additionalProperties");
-      expect(listed.note_add.outputSchema.anyOf).toHaveLength(2);
+      expect("outputSchema" in listed.note_add).toBe(false); // a write tool: its dry run is not its output
       expect(listed.check.outputSchema).toBeUndefined();
       const shown = r.byId.get(3).result;
       expect(shown.isError, JSON.stringify(shown)).toBeUndefined();
