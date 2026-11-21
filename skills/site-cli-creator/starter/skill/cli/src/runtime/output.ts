@@ -32,10 +32,16 @@ function valueChanger(schema: unknown, seen = new Set<unknown>()): string | unde
   if (["catch", "default", "prefault", "transform"].includes(def.type)) return `.${def.type}()`;
   if (def.type === "pipe") return "a pipe (.pipe(), .transform() or z.preprocess())";
   if (def.coerce === true) return `z.coerce.${def.type}()`;
-  if ((def.checks ?? []).some((c: any) => c?._zod?.def?.check === "overwrite")) return "an overwrite (.trim(), .toLowerCase() or the like)";
+  const checks: any[] = def.checks ?? [];
+  if (checks.some((c) => c?._zod?.def?.check === "overwrite")) return "an overwrite (.trim(), .toLowerCase() or the like)";
+  if (checks.some((c) => c?._zod?.def?.fn?.constructor?.name === "AsyncFunction")) return "an async refinement (the check is synchronous: await in run(), refine on the result)";
   const inner: unknown[] = [];
   if (def.type === "object") inner.push(...Object.values(def.shape ?? {}), def.catchall);
-  else if (def.type === "lazy") inner.push(def.getter());
+  else if (def.type === "lazy") {
+    try {
+      inner.push(def.getter());
+    } catch {} // a getter that throws: the JSON Schema conversion below reports it
+  }
   else for (const key of CHILDREN[def.type] ?? []) inner.push(...[def[key]].flat());
   for (const child of inner) {
     const found = valueChanger(child, seen);
@@ -58,6 +64,7 @@ export function assertOutputSchema(command: Pick<Command, "name" | "output">): v
       `${command.name}: its output schema uses ${changer}, which changes the value it checks. An output schema describes what the command prints, so conversions and fallbacks belong in run(): print the value the way the schema says. Refinements such as .min(1) and .positive() are fine.`,
     );
   }
+  if (isRootNothing(command.output)) return; // prints nothing: a valid output, though not an MCP outputSchema
   for (const io of ["output", "input"] as const) {
     try {
       z.toJSONSchema(command.output, { io });
@@ -69,6 +76,9 @@ export function assertOutputSchema(command: Pick<Command, "name" | "output">): v
   }
 }
 
+/** A root `z.void()` or `z.undefined()`: the command prints nothing. */
+const isRootNothing = (schema: unknown) => ["void", "undefined"].includes((schema as { _zod?: { def?: { type?: string } } })._zod?.def?.type ?? "");
+
 /**
  * Checks the value a command is about to print. A failure is Drift of breakType "output": the
  * Fingerprint and `diff` hold field paths and Zod issue codes only, never a value or a Zod message.
@@ -76,9 +86,19 @@ export function assertOutputSchema(command: Pick<Command, "name" | "output">): v
 export function checkOutput(site: Names, command: Pick<Command, "name" | "output">, value: unknown): void {
   if (!command.output) return;
   assertOutputSchema(command);
-  const parsed = command.output.safeParse(value);
+  // What is checked is what prints: JSON drops a key whose value is undefined. The value itself still prints as it is.
+  let printed = value;
+  try {
+    printed = JSON.parse(JSON.stringify(value));
+  } catch {}
+  let parsed: ReturnType<z.ZodType["safeParse"]>;
+  try {
+    parsed = command.output.safeParse(printed);
+  } catch (e) {
+    throw new ContractError(`${command.name}: its output schema could not be checked (${(e as Error).message}). A refinement must be synchronous: await in run() instead.`);
+  }
   if (parsed.success) return;
-  const diff = zodDiff(parsed.error.issues, value, command.output);
+  const diff = zodDiff(parsed.error.issues, printed, command.output);
   const first = diff[0] ?? { path: "", code: "" };
   throw new Failure("drift", `${command.name}: the output no longer matches the command's output schema at ${first.path || "(root)"} (${first.code}).`, {
     fingerprint: driftFingerprint(site, command.name, "output", first.path, first.code),
@@ -95,7 +115,7 @@ export function checkOutput(site: Names, command: Pick<Command, "name" | "output
  * command gets none (main.ts): its dry run is not its output.
  */
 export function outputJsonSchema(command: Pick<Command, "name" | "output">): Record<string, unknown> | undefined {
-  if (!command.output) return undefined;
+  if (!command.output || isRootNothing(command.output)) return undefined;
   try {
     assertOutputSchema(command);
   } catch (e) {
@@ -121,7 +141,7 @@ export function outputShape(schema: unknown, depth = 0): string {
     case "bigint": return "number";
     case "null": return "null";
     case "undefined": case "void": return "undefined";
-    case "literal": return (def.values as unknown[]).map((v) => JSON.stringify(v)).join("|");
+    case "literal": return (def.values as unknown[]).map((v) => (typeof v === "bigint" ? `${v}n` : JSON.stringify(v))).join("|");
     case "enum": return Object.values(def.entries).map((v) => JSON.stringify(v)).join("|");
     case "array": return `[${next(def.element)}]`;
     case "tuple": return `[${(def.items as unknown[]).map(next).join(", ")}]`;

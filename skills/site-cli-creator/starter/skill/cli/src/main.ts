@@ -254,6 +254,9 @@ function assertOutputSchemas(app: App): void {
   for (const command of app.commands) assertOutputSchema(command);
 }
 
+/** Thrown objects that came after a write the site accepted; `failed()` marks their envelope `writeSent`. */
+const afterWrite = new WeakSet<object>();
+
 /** A result that passed the command's `output` schema: the MCP surface may send it as structuredContent. */
 class Checked {
   constructor(readonly value: unknown, readonly valid: boolean) {}
@@ -268,35 +271,39 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
   if (app.site.auth === "login") await client.ensureSession();
   const chosen = await client.resolveAccount(account);
   deps.note(`${command.name}: ${command.uses.map((o) => o.name).join(" → ") || "no Operations"}`);
-  // A refusal the command caught (a fallback) still ends it: the user does that step on the site.
-  const result = await client.withRefusals(() => command.run(args as never, {
-    call: client.call,
-    session: { get ids() { return client.peek()?.ids ?? {}; } },
-    account: chosen,
-    note: deps.note,
-  }));
-  const value = result ?? null;
-  // An undefined result the schema accepts is fine; otherwise what prints (null) is what is checked.
-  const skip = result === undefined && command.output?.safeParse(undefined).success === true;
+  // Before anything is sent: a broken output schema must not follow a write the site then accepts.
+  assertOutputSchema(command);
   try {
+    // A refusal the command caught (a fallback) still ends it: the user does that step on the site.
+    const result = await client.withRefusals(() => command.run(args as never, {
+      call: client.call,
+      session: { get ids() { return client.peek()?.ids ?? {}; } },
+      account: chosen,
+      note: deps.note,
+    }));
+    const value = result ?? null;
+    // An undefined result the schema accepts is fine; otherwise what prints (null) is what is checked.
+    const skip = result === undefined && command.output?.safeParse(undefined).success === true;
     if (!skip) checkOutput(app.site, command, value);
+    return new Checked(value, command.output !== undefined && !skip);
   } catch (e) {
-    // The mapping failed after a write the site accepted: never let the agent take it for a failed write.
-    if (e instanceof Failure && client.writeSent) throw new Failure(e.kind, e.message, { ...e.details, writeSent: true });
+    // Whatever fails after a write the site accepted (a later call, the mapping, a bug) must not read as a failed write.
+    if (client.writeSent && e instanceof Object && !(e instanceof DryRun)) afterWrite.add(e);
     throw e;
   }
-  return new Checked(value, command.output !== undefined && !skip);
 }
 
 /** What a run that threw prints: the dry run, the classified Failure's envelope, or a bug. */
 function failed(e: unknown, site: Site, commandName: string, surface: Surface = "cli"): RunResult {
   if (e instanceof DryRun) return ok({ dryRun: true, would: { operation: e.operation, variables: e.variables } });
-  if (e instanceof Failure) return { output: errorEnvelope(e, site, surface), code: EXIT[e.kind] };
+  const writeSent = e instanceof Object && afterWrite.has(e);
+  if (e instanceof Failure) return { output: errorEnvelope(writeSent ? new Failure(e.kind, e.message, { ...e.details, writeSent }) : e, site, surface), code: EXIT[e.kind] };
   const stack = e instanceof Error ? e.stack : undefined;
   const what = e instanceof ContractError ? e.message : `${errorName(e)} in ${bugFrame(stack)}`;
   const bug = new Failure("bug", what, {
     fingerprint: bugKey(site, commandName, e),
     stack: redactStack(e),
+    ...(writeSent && { writeSent }),
     // A Task that tried it: the user does it on the site. check's own refusal is a plain bug in the plugin.
     ...(e instanceof NeverSent && commandName !== "check" && { next: neverNext(e.rule, site, surface) }),
   });
@@ -400,8 +407,7 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
         // Only a result that passed `output` is promised to match outputSchema.
         return out instanceof Checked ? { ...ok(out.value), matches: out.valid } : ok(out);
       } catch (e) {
-        // A write's dry run is the other thing its outputSchema admits (runtime/output.ts).
-        return { ...failed(e, site, commandName, "mcp"), ...(e instanceof DryRun && { matches: true }) };
+        return failed(e, site, commandName, "mcp");
       } finally {
         await deps.release?.(); // no Chrome stays open between tool calls
       }

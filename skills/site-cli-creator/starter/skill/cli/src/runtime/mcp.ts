@@ -20,7 +20,7 @@ export type McpTool = {
   outputSchema?: Record<string, unknown>;
   /**
    * Runs the tool. Never throws: a failure comes back as an error envelope with a non-zero code.
-   * `matches` is true when the output is one the outputSchema describes (a checked result, a write's dry run).
+   * `matches` is true when the output is a result that passed the command's `output` check.
    */
   call(args: Record<string, unknown>): Promise<{ output: unknown; code: number; matches?: boolean }>;
 };

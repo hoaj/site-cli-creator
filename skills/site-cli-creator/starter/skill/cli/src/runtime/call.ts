@@ -824,9 +824,9 @@ export class Client {
           : this.site.bootstrap ? "rerunning bootstrap" : "a call without login";
       throw this.drift(op, "auth", "", res.loginRedirect ? "redirect" : String(res.status), `the site refused the request (HTTP ${res.status}) after ${after}`);
     }
-    const out = this.classify(op, res);
-    if (op.effect === "write") this.writeSent = true;
-    return out;
+    // Accepted: 2xx, and for GraphQL no errors. Set before classify, whose Contract check may still fail.
+    if (op.effect === "write" && res.status >= 200 && res.status < 300 && (op.graphql === undefined || gqlErrors(res.body).length === 0)) this.writeSent = true;
+    return this.classify(op, res);
   }) as Call;
 
   /** A write Operation was sent and the site accepted it (main.ts: an output Drift after it must say so). */

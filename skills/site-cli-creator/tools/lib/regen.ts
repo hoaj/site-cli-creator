@@ -124,9 +124,13 @@ export function helpCommands(help: unknown): HelpCommand[] {
 }
 
 /** The hint for Task commands that export no `output` schema (#96): not an error, existing plugins have such commands. */
-export function missingOutputHint(commands: HelpCommand[]): string | undefined {
+export function missingOutputHint(commands: HelpCommand[], runtimeChecksOutput: boolean): string | undefined {
   const missing = commands.filter((c) => !c.output).map((c) => c.name);
   if (missing.length === 0) return undefined;
+  // A plugin made before 0.21.0 has no runtime/output.ts: an `output` there is never checked, listed or advertised.
+  if (!runtimeChecksOutput) {
+    return `no output schema on: ${missing.join(", ")}. This plugin's Starter runtime predates output schemas, so adding \`output\` has no effect until runtime/output.ts and runTask are ported from the Starter code (starter/skill/cli/src/runtime/output.ts, and runTask, assertOutputSchemas and the afterWrite marks in main.ts, with the output field of runtime/command.ts and runtime/help.ts, the writeSent parts of runtime/envelope.ts and runtime/call.ts, and runtime/mcp.ts and remote.ts).`;
+  }
   return `no output schema on: ${missing.join(", ")}. An \`output\` Zod schema (what the command prints, with .min(1) or .positive() where a value cannot be empty) turns a renamed field that now prints null or 0 into Drift, and shows agents the shape in help and MCP. Add one to each (add-task step 5, fix).`;
 }
 
@@ -189,6 +193,7 @@ export function cliPaths(skillDir: string) {
     registry: join(cli, "src", "registry.ts"),
     site: join(cli, "src", "site.ts"),
     main: join(cli, "src", "main.ts"),
+    outputRuntime: join(cli, "src", "runtime", "output.ts"),
     skillMd: join(skillDir, "SKILL.md"),
   };
 }
