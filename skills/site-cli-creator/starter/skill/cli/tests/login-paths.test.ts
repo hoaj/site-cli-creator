@@ -242,6 +242,35 @@ describe("a write is never sent twice (review 1)", () => {
   }
 });
 
+describe("a write is never resent, on any answer (review 2)", () => {
+  test("a PATCH that gets 401, is renewed, and then gets 303 /login: two requests, no further sign-in", async () => {
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
+    const s = withLogin({
+      paths: ["/login"],
+      refresh: { renew: async (ctx: any) => ({ headers: { ...ctx.headers, authorization: "Bearer new" }, refresh: { token: "r2" } }) },
+    });
+    const { fetch, calls } = fakeFetch((r) => (r.headers.authorization === "Bearer new" ? redirect("/login", 303) : json({}, 401)));
+    const d = makeDeps(fetch, home.dir, [{ authorization: "Bearer newer" }]);
+    const f = await failure(client(s, d.deps, true).call(renameOrder, { orderId: "7", name: "N" }));
+    expect(f.kind).toBe("session");
+    expect(f.message).toContain("may have taken effect");
+    expect(calls.map((c) => c.method)).toEqual(["PATCH", "PATCH"]);
+    expect(d.loginCalls).toEqual([]);
+  });
+});
+
+describe("path normalization (review 2)", () => {
+  const at = (paths: string[], u: string) => isLoginPath(withLogin({ paths }), new URL(u, ORIGIN), ORIGIN);
+
+  test("percent-escape case does not matter, on either side", () => {
+    expect([at(["/log-på"], "/log-p%c3%a5"), at(["/log-p%c3%a5"], "/log-p%C3%A5"), at(["/log-p%C3%A5"], "/log-p%c3%a5"), at(["/log-på"], "/log-p%C3%A5")]).toEqual([true, true, true, true]);
+  });
+
+  test("a ;parameter on the last segment is ignored, a longer name is not", () => {
+    expect([at(["/login"], "/login;jsessionid=A1"), at(["/login"], "/login;x=1/"), at(["/login"], "/login-help;x=1"), at(["/login"], "/a;b=1/login"), at(["/login"], "/login/x;y")]).toEqual([true, true, false, false, false]);
+  });
+});
+
 describe("encoded paths and content types (review 1)", () => {
   test("an entry with a non-ASCII letter or a space matches the encoded Location", () => {
     const s = withLogin({ paths: ["/log-på", "/sign in"] });

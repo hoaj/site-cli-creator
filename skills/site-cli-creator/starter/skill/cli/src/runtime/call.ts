@@ -808,16 +808,20 @@ export class Client {
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
     await this.ensureSession();
     await this.probeSession();
-    let res = await this.send(op, v.data, built?.req);
-    // A write answered with the site's own sign-in page (login.paths, login.signedOutSelector) is never sent again: a POST's
-    // redirect to /login or a 200 form cannot be told from a success that landed there, so it may have taken effect.
-    if (res.signedOut && op.effect !== "read") {
-      const how = res.signedOut === "path" ? "a redirect to its sign-in page" : "its sign-in form";
-      throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`);
-    }
+    // A write answered with the site's own sign-in page (login.paths, login.signedOutSelector) is never sent again, whichever
+    // answer it is (the first, or the resend after a renew): a POST's redirect to /login or a 200 form cannot be told from a
+    // success that landed there, so it may have taken effect.
+    const neverResend = (r: Response_): Response_ => {
+      if (r.signedOut && op.effect !== "read") {
+        const how = r.signedOut === "path" ? "a redirect to its sign-in page" : "its sign-in form";
+        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`);
+      }
+      return r;
+    };
+    let res = neverResend(await this.send(op, v.data, built?.req));
     // Renew, then sign in (or rerun bootstrap): each at most once a run, so this ends. A bot wall
     // is no sign-out: no sign-in gets past it, so none is spent on it.
-    while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data, built?.req);
+    while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = neverResend(await this.send(op, v.data, built?.req));
     if (res.blocked) throw this.blockedFailure(op, res.blocked);
     if (this.isAuthFailure(op, res)) {
       // Renew met a bot wall and no Chrome sign-in followed (the Setup page's check): the wall, not Drift.
