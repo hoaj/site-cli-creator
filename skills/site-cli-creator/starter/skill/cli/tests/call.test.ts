@@ -518,6 +518,81 @@ describe("drift", () => {
     }
   });
 
+  describe("REST 400/422 that names the rejected fields", () => {
+    const reject = async (body: unknown, status = 400) => {
+      const { fetch } = fakeFetch(() => json(body, status));
+      return failure(client(makeSite(), makeDeps(fetch, home.dir).deps, true).call(renameOrder, { orderId: "1", name: "x" }));
+    };
+    const op = "acme:shop:PATCH /api/orders/{orderId}:input-rejected";
+
+    test("errors object: declared fields are named, other keys are {}, messages never leak", async () => {
+      const f = await reject({ errorMessages: [], errors: { name: 'Value "Kim Secret" is invalid', "kim@example.test": "x" } });
+      expect(f.fingerprint).toBe(`${op}:name:400`);
+      expect(f.diff).toEqual([
+        { path: "name", code: "rejected" },
+        { path: "{}", code: "rejected" },
+      ]);
+      expect(f.message).toContain("at name, {}");
+      const all = JSON.stringify({ m: f.message, d: f.details, diff: f.diff, fp: f.fingerprint });
+      expect(all).not.toContain("Kim Secret");
+      expect(all).not.toContain("kim@example.test");
+    });
+
+    test("a 422 works the same", async () => {
+      expect((await reject({ errors: { orderId: "no" } }, 422)).fingerprint).toBe(`${op}:orderId:422`);
+    });
+
+    test("errors array with field, path (string and array) and JSON:API pointer", async () => {
+      expect((await reject({ errors: [{ field: "name", message: "Kim Secret" }] })).fingerprint).toBe(`${op}:name:400`);
+      expect((await reject({ errors: [{ path: "name" }] })).fingerprint).toBe(`${op}:name:400`);
+      expect((await reject({ errors: [{ path: ["orderId", 0] }] })).fingerprint).toBe(`${op}:orderId[]:400`);
+      expect((await reject({ errors: [{ source: { pointer: "/data/attributes/name" } }] })).fingerprint).toBe(`${op}:name:400`);
+      const mixed = await reject({ errors: [{ field: "name" }, { field: "name" }, { field: "nobody@example.test" }, { path: "name.first" }, 7, null] });
+      expect(mixed.diff).toEqual([
+        { path: "name", code: "rejected" },
+        { path: "{}", code: "rejected" },
+      ]);
+    });
+
+    test("fieldErrors object", async () => {
+      const f = await reject({ fieldErrors: { name: ["too short"], other: ["x"] } });
+      expect(f.fingerprint).toBe(`${op}:name:400`);
+    });
+
+    test("a nested path needs every segment declared; indices are []", async () => {
+      const nested = defineOperation({ ...renameOrder, variables: z.object({ orderId: z.string(), lines: z.array(z.object({ sku: z.string() })).optional() }) });
+      const { fetch } = fakeFetch(() => json({ errors: [{ path: ["lines", 3, "sku"] }, { field: "lines[2].sku" }, { field: "lines.nope" }] }, 400));
+      const f = await failure(client(makeSite(), makeDeps(fetch, home.dir).deps, true).call(nested, { orderId: "1" }));
+      expect(f.diff).toEqual([
+        { path: "lines[].sku", code: "rejected" },
+        { path: "{}", code: "rejected" },
+      ]);
+    });
+
+    test("at most 20 fields are reported", async () => {
+      const many = defineOperation({ ...renameOrder, rest: { method: "PATCH", path: "/api/x" }, variables: z.object(Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`f${String(i).padStart(2, "0")}`, z.string()]))) });
+      const { fetch } = fakeFetch(() => json({ errors: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`f${String(i).padStart(2, "0")}`, "x"])) }, 400));
+      const f = await failure(client(makeSite(), makeDeps(fetch, home.dir).deps, true).call(many, Object.fromEntries(Array.from({ length: 30 }, (_, i) => [`f${String(i).padStart(2, "0")}`, "v"]))));
+      expect(f.diff).toHaveLength(20);
+    });
+
+    test("a body with no recognizable fields stays generic", async () => {
+      for (const body of [{ error: "bad" }, { errors: [] }, { errors: "bad" }, { errors: {} }, "nope", null]) {
+        const f = await reject(body);
+        expect(f.fingerprint).toBe(`${op}::400`);
+        expect(f.diff).toEqual([]);
+        expect(f.message).not.toContain(" at ");
+      }
+    });
+
+    test("a GraphQL 400 is unchanged, even with an errors object", async () => {
+      const { fetch } = fakeFetch(() => json({ errors: { customerId: "no" } }, 400));
+      const f = await failure(client(makeSite(), makeDeps(fetch, home.dir).deps).call(listProducts, { customerId: "C" }));
+      expect(f.fingerprint).toBe("acme:shop:listProducts:input-rejected::400");
+      expect(f.diff).toEqual([]);
+    });
+  });
+
   test("response failing Zod → drift zod, [] indices, type names only", async () => {
     const { fetch } = fakeFetch(() => json({ data: { listProducts: [{ id: "P1", status: "active" }, { id: "P2", status: { code: "SECRET-VALUE" } }] } }));
     const f = await failure(client(makeSite(), makeDeps(fetch, home.dir).deps).call(listProducts, { customerId: "C" }));

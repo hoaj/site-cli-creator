@@ -320,6 +320,7 @@ Decided in [Drift classification vs other failures](https://github.com/hoaj/site
   - an HTML Operation's answer that is no longer HTML, a list container that is gone, or inline JSON that no longer parses (§6);
   - a 401 or 403 right after a fresh login, or, for `auth: "none"`, after a rerun of `bootstrap`;
   - the server rejecting input that passed the variables schema.
+    - **Which fields:** a REST 400 or 422 whose body names them (`errors` as an object keyed by field, `fieldErrors`, or `errors` as a list of `field`, `path` or JSON:API `source.pointer`) reports them: the Fingerprint path is the first, `diff` has one `rejected` entry per field (at most 20), and the message says `at <fields>`. A name the variables do not declare is the site's data and is written `{}`; messages are never read, since they quote values. A body naming none, and any GraphQL answer, stays generic.
 - **session:** a 401, a 403, a redirect to login, or a session probe that does not answer 2xx (handled as in §7). Only for `auth: "login"`.
 - **network:** 5xx responses, 429 and transport errors, retried 1–2 times.
 - **network, `blocked`:** a bot protection refused the request as automated traffic. Decided in [report a bot block as its own failure, not as Drift](https://github.com/hoaj/site-cli-creator/issues/95).

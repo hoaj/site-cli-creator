@@ -100,6 +100,98 @@ export function fieldPath(path: readonly PropertyKey[], schema?: unknown): strin
   return out;
 }
 
+/** Every field name a schema declares, at any depth (objects, arrays, tuples, sets, unions, intersections, record values, and the wrappers `unwrap` sees through). */
+export function declaredNames(schema: unknown): Set<string> {
+  const names = new Set<string>();
+  const seen = new Set<unknown>();
+  const walk = (s: unknown, depth: number): void => {
+    if (depth > 32 || s === undefined || s === null) return;
+    const inner = unwrap(s);
+    if (seen.has(inner)) return;
+    seen.add(inner);
+    const def = defOf(inner);
+    if (!def) return;
+    const next = (child: unknown) => walk(child, depth + 1);
+    switch (def.type) {
+      case "object":
+        for (const [key, child] of Object.entries(def.shape ?? {})) {
+          names.add(key);
+          next(child);
+        }
+        next(def.catchall);
+        break;
+      case "array":
+        next(def.element);
+        break;
+      case "tuple":
+        for (const item of def.items ?? []) next(item);
+        next(def.rest);
+        break;
+      case "union":
+        for (const option of def.options ?? []) next(option);
+        break;
+      case "intersection":
+        next(def.left);
+        next(def.right);
+        break;
+      case "record":
+      case "map":
+      case "set":
+        next(def.valueType);
+        break;
+    }
+  };
+  walk(schema, 0);
+  return names;
+}
+
+/** `a.b[0].c` or a JSON pointer `/data/attributes/a` → segments: a name, or `[]` for an index. */
+function pathSegments(raw: string): string[] {
+  if (raw.startsWith("/")) return raw.split("/").slice(1).map((part) => (/^\d+$/.test(part) ? "[]" : part.replace(/~1/g, "/").replace(/~0/g, "~")));
+  return [...raw.matchAll(/\[(\d*)\]|([^.[\]]+)/g)].map((m) => (m[2] === undefined ? "[]" : m[2]));
+}
+
+/**
+ * Segments → a Fingerprint path. Every named segment must be declared, else the whole path is `{}` (it may be the site's data).
+ * A JSON:API pointer's leading `data`/`attributes`/`relationships` wrap the Contract's variables and are dropped when not declared.
+ */
+function rejectedPath(segments: readonly (string | number)[], declared: ReadonlySet<string>, pointer = false): string {
+  let segs = segments.map((s) => (typeof s === "number" ? "[]" : s));
+  if (pointer) while (segs.length > 1 && ["data", "attributes", "relationships"].includes(segs[0]) && !declared.has(segs[0])) segs = segs.slice(1);
+  if (segs.every((s) => s === "[]")) return "";
+  if (!segs.every((s) => s === "[]" || declared.has(s))) return "{}";
+  let out = "";
+  for (const s of segs) out += s === "[]" ? "[]" : (out ? "." : "") + s;
+  return out;
+}
+
+const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
+
+/**
+ * The fields a REST 400/422 body says it rejected, as Fingerprint paths. Never reads a message (it can quote the values sent).
+ * Shapes: `{ errors: { <field>: … } }`, `{ fieldErrors: { <field>: … } }`, `{ errors: [{ field | path | source.pointer }] }`.
+ * A named segment that `variables` does not declare is the site's data: the path is written `{}`. Sorted, deduped, at most `limit`.
+ */
+export function rejectedFields(body: unknown, variables: unknown, limit = 20): string[] {
+  if (!isPlain(body)) return [];
+  const declared = declaredNames(variables);
+  const found = new Set<string>();
+  const add = (path: string): void => {
+    if (path) found.add(path);
+  };
+  for (const o of [body.errors, body.fieldErrors]) if (isPlain(o)) for (const key of Object.keys(o)) add(rejectedPath(pathSegments(key), declared));
+  if (Array.isArray(body.errors)) {
+    for (const e of body.errors) {
+      if (!isPlain(e)) continue;
+      if (typeof e.field === "string") add(rejectedPath(pathSegments(e.field), declared));
+      else if (typeof e.path === "string") add(rejectedPath(pathSegments(e.path), declared));
+      else if (Array.isArray(e.path)) add(rejectedPath(e.path.filter((s): s is string | number => typeof s === "string" || typeof s === "number"), declared));
+      else if (isPlain(e.source) && typeof e.source.pointer === "string") add(rejectedPath(pathSegments(e.source.pointer), declared, true));
+    }
+  }
+  return [...found].sort().slice(0, limit);
+}
+
 /** The type name of a value, the only thing about a site's response we ever report. */
 export function typeName(value: unknown): string {
   if (value === null) return "null";
