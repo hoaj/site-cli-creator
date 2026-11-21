@@ -325,6 +325,12 @@ const VALIDATION_CODES = new Set(["GRAPHQL_VALIDATION_FAILED", "GRAPHQL_PARSE_FA
 const VALIDATION_MESSAGE = /^(Cannot query field|Unknown argument|Unknown type|Unknown fragment|Unknown operation|Unknown directive|Syntax Error|Variable "\$\w+" of (required )?type|Field "[^"]+" argument "[^"]+" of type|Field "[^"]+" of type "[^"]+" must have a selection|Field "[^"]+" must not have a selection|Argument "[^"]+" has invalid value)/;
 const INPUT_CODES = new Set(["BAD_USER_INPUT", "BAD_REQUEST"]);
 
+/** A GraphQL answer whose `data` is an object with at least one non-null root field: part of it may have taken effect. */
+function hasRootData(body: unknown): boolean {
+  const data = (body as { data?: unknown } | null | undefined)?.data;
+  return typeof data === "object" && data !== null && !Array.isArray(data) && Object.values(data).some((v) => v !== null && v !== undefined);
+}
+
 function gqlErrors(body: unknown): GqlError[] {
   const errors = (body as { errors?: unknown } | null | undefined)?.errors;
   return Array.isArray(errors) ? errors.filter((e) => e && typeof e === "object") : [];
@@ -845,12 +851,13 @@ export class Client {
           : this.site.bootstrap ? "rerunning bootstrap" : "a call without login";
       throw this.drift(op, "auth", "", res.loginRedirect ? "redirect" : String(res.status), `the site refused the request (HTTP ${res.status}) after ${after}`);
     }
-    // Accepted: 2xx, and for GraphQL no errors. Set before classify, whose Contract check may still fail.
-    if (op.effect === "write" && res.status >= 200 && res.status < 300 && (op.graphql === undefined || gqlErrors(res.body).length === 0)) this.writeSent = true;
+    // Answered with success: 2xx, and for GraphQL no errors or a data object with a non-null root field (partial success).
+    // Set before classify, whose Contract check may still fail. A 2xx may also be a page that is no answer to the write.
+    if (op.effect === "write" && res.status >= 200 && res.status < 300 && (op.graphql === undefined || gqlErrors(res.body).length === 0 || hasRootData(res.body))) this.writeSent = true;
     return this.classify(op, res);
   }) as Call;
 
-  /** A write Operation was sent and the site accepted it (main.ts: an output Drift after it must say so). */
+  /** A write Operation was sent and the site answered with success (main.ts: any failure after it must say so). */
   writeSent = false;
 
   /**

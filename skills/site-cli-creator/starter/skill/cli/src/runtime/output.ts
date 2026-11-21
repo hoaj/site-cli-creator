@@ -23,13 +23,19 @@ const CHILDREN: Record<string, string[]> = {
   nonoptional: ["innerType"],
 };
 
+/** Most schemas the walk visits: a recursive factory that builds a new schema at every level never ends otherwise. */
+const WALK_BUDGET = 2000;
+
+class TooLarge extends Error {}
+
 /** The first thing in the schema that changes the value it checks (so the schema would not describe what prints), or undefined. */
 function valueChanger(schema: unknown, seen = new Set<unknown>()): string | undefined {
   if (!schema || typeof schema !== "object" || seen.has(schema)) return undefined;
   seen.add(schema);
+  if (seen.size > WALK_BUDGET) throw new TooLarge();
   const def = (schema as { _zod?: { def?: any } })._zod?.def;
   if (!def) return undefined;
-  if (["catch", "default", "prefault", "transform"].includes(def.type)) return `.${def.type}()`;
+  if (["catch", "default", "prefault", "transform", "success"].includes(def.type)) return `.${def.type}()`;
   if (def.type === "pipe") return "a pipe (.pipe(), .transform() or z.preprocess())";
   if (def.coerce === true) return `z.coerce.${def.type}()`;
   const checks: any[] = def.checks ?? [];
@@ -59,7 +65,15 @@ function valueChanger(schema: unknown, seen = new Set<unknown>()): string | unde
  */
 export function assertOutputSchema(command: Pick<Command, "name" | "output">): void {
   if (!command.output) return;
-  const changer = valueChanger(command.output);
+  let changer: string | undefined;
+  try {
+    changer = valueChanger(command.output);
+  } catch (e) {
+    if (!(e instanceof TooLarge || e instanceof RangeError)) throw e;
+    throw new ContractError(
+      `${command.name}: its output schema is too large or builds itself without end (more than ${WALK_BUDGET} nested schemas). Define a recursive schema once and let z.lazy return that same schema, instead of a function that builds a new one at every level.`,
+    );
+  }
   if (changer) {
     throw new ContractError(
       `${command.name}: its output schema uses ${changer}, which changes the value it checks. An output schema describes what the command prints, so conversions and fallbacks belong in run(): print the value the way the schema says. Refinements such as .min(1) and .positive() are fine.`,
@@ -96,7 +110,8 @@ export function checkOutput(site: Names, command: Pick<Command, "name" | "output
   try {
     parsed = command.output.safeParse(printed);
   } catch (e) {
-    throw new ContractError(`${command.name}: its output schema could not be checked (${(e as Error).message}). A refinement must be synchronous: await in run() instead.`);
+    // Only the error's name: its message may quote the value being checked.
+    throw new ContractError(`${command.name}: a refinement in its output schema threw (${e instanceof Error ? e.name : typeof e}) while the result was checked. A refinement must return false for a value it rejects, never throw.`);
   }
   if (parsed.success) return;
   const diff = zodDiff(parsed.error.issues, printed, command.output);
@@ -123,8 +138,14 @@ export function outputJsonSchema(command: Pick<Command, "name" | "output">): Rec
     if (e instanceof ContractError) return undefined;
     throw e;
   }
-  const { $schema: _, ...json } = z.toJSONSchema(command.output, { io: "input" }) as Record<string, unknown>;
-  return json.type === "object" ? json : undefined;
+  // A root that accepts undefined (an optional object) may print nothing: no schema it might not satisfy.
+  try {
+    if (command.output.safeParse(undefined).success) return undefined;
+    const { $schema: _, ...json } = z.toJSONSchema(command.output, { io: "input" }) as Record<string, unknown>;
+    return json.type === "object" ? json : undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const KEEPS_SHAPE = ["optional", "nullable", "default", "prefault", "catch", "readonly", "nonoptional", "success"];

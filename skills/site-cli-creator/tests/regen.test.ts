@@ -203,7 +203,9 @@ describe("regen.ts", () => {
     const old = regen(skill);
     expect(old.code).toBe(0);
     expect(old.out.hints).toHaveLength(1);
-    expect(old.out.hints[0]).toContain("note add");
+    expect(old.out.hints[0]).not.toContain("note add"); // it did not forget a schema: no command is named
+    expect(old.out.hints[0]).not.toContain("subscription show");
+    expect(old.out.hints[0]).toContain("do not add one");
     expect(old.out.hints[0]).toContain("predates output schemas");
     expect(old.out.hints[0]).toContain("runtime/output.ts");
     expect(old.out.hints[0]).not.toContain("Add one to each");

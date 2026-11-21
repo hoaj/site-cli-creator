@@ -7,6 +7,7 @@ import { defineCommand } from "../src/runtime/command";
 import { ContractError } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
 import { assertOutputSchema, outputJsonSchema } from "../src/runtime/output";
+import { saveSession } from "../src/runtime/session";
 import { fakeFetch, json, loginSite, makeApp, makeDeps, makeSite, tempHome, type Recorded } from "./helpers";
 
 let home: ReturnType<typeof tempHome>;
@@ -140,6 +141,67 @@ describe("a recursive factory cannot hang", () => {
     type Tree = { name: string; children: Tree[] };
     const tree: z.ZodType<Tree> = z.object({ name: z.string().min(1), children: z.array(z.lazy(() => tree)) });
     expect(() => assertOutputSchema({ name: "item show", output: tree })).not.toThrow();
+  });
+});
+
+describe("with neverResend from main 0.20.0", () => {
+  const signedInSite = () => loginSite({ login: { ...loginSite().login!, paths: ["/login"] } });
+  const redirect = () => new Response(null, { status: 302, headers: { location: "/login" } });
+  const twoWrites = defineCommand({
+    name: "item rename",
+    summary: "x",
+    args: z.object({ twice: z.boolean().default(false) }),
+    uses: [renameItem],
+    output: z.object({ ok: z.boolean() }),
+    run: async ({ twice }, { call }) => {
+      await call(renameItem, { id: "I1", name: "A" });
+      if (twice) await call(renameItem, { id: "I1", name: "B" });
+      return { ok: true };
+    },
+  });
+  const sessionFor = () => saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" } });
+
+  test("a write stopped by neverResend is not marked writeSent, and its own next stays intact", async () => {
+    sessionFor();
+    const { app } = appOf([twoWrites], () => redirect(), [renameItem], signedInSite());
+    const r = await run(["--confirm", "item", "rename"], app);
+    expect(err(r.output).kind).toBe("session");
+    expect(err(r.output).writeSent).toBeUndefined();
+    expect(err(r.output).next).toStartWith("Tell the user the write may already have taken effect");
+    expect(err(r.output).next).not.toContain("answered with success");
+  });
+
+  test("a 2xx write followed by a write that neverResend stops still carries writeSent, the prefix in front of that failure's next", async () => {
+    sessionFor();
+    let n = 0;
+    const { app } = appOf([twoWrites], () => (n++ === 0 ? json({ ok: true }) : redirect()), [renameItem], signedInSite());
+    const r = await run(["--confirm", "item", "rename", "--twice"], app);
+    expect(err(r.output).kind).toBe("session");
+    expect(err(r.output).writeSent).toBe(true);
+    expect(err(r.output).next).toStartWith(PREFIX);
+    expect(err(r.output).next).toContain("Tell the user the write may already have taken effect");
+  });
+
+  test("a 2xx write followed by a read that fails carries writeSent in front of that failure's next", async () => {
+    const getThing = defineOperation({ name: "GET /api/things", effect: "read", rest: { method: "GET", path: "/api/things" }, variables: z.object({}), response: z.object({ n: z.number() }) });
+    const cmd = defineCommand({
+      name: "item rename",
+      summary: "x",
+      args: z.object({}),
+      uses: [renameItem, getThing],
+      output: z.object({ ok: z.boolean() }),
+      run: async (_a, { call }) => {
+        await call(renameItem, { id: "I1", name: "A" });
+        await call(getThing, {});
+        return { ok: true };
+      },
+    });
+    const { app } = appOf([cmd], (req) => (req.method === "PATCH" ? json({ ok: true }) : json({ message: "down" }, 503)), [renameItem, getThing]);
+    const r = await run(["--confirm", "item", "rename"], app);
+    expect(r.code).toBe(5);
+    expect(err(r.output).writeSent).toBe(true);
+    expect(err(r.output).next).toStartWith(PREFIX);
+    expect(err(r.output).next).toContain("isn't responding");
   });
 });
 
