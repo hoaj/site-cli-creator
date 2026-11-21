@@ -6,7 +6,8 @@ import type { SignedIn } from "./call";
 import { chromeLaunchOptions, chromeNotFound, findChrome } from "./chrome";
 import { ContractError, Failure, ProfileUnavailable } from "./envelope";
 import { ensureProfileDir } from "./session";
-import { effectiveOrigin, isLoginHost, isTest, loginHostName, onSiteDomain, rebase, siteDomain, tokenMatches, type Env, type Site } from "./site";
+import { htmlMatches } from "./html";
+import { effectiveOrigin, isLoginHost, isLoginPath, isTest, loginHostName, onSiteDomain, rebase, siteDomain, tokenMatches, type Env, type Site } from "./site";
 
 const REFRESH_TIMEOUT_MS = 30_000;
 /** How long a headless refresh may sit on a login host before it counts as logged out (SSO hops pass through). */
@@ -206,10 +207,32 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
         if (!headers.authorization) finish(res.request());
       });
       if (options.headless) {
+        // Each top-frame navigation clears the timer, so a valid session that passes through a sign-in page still signs in;
+        // `navigation` lets a content check that started on an earlier page see it is stale.
+        let navigation = 0;
+        const signedOutAfterGrace = () => (grace = setTimeout(() => finish("logged-out"), LOGIN_HOST_GRACE_MS));
         context.on("framenavigated", (frame) => {
           if (frame.parentFrame()) return;
+          const mine = ++navigation;
           clearTimeout(grace);
-          if (isLoginHost(site, frame.url())) grace = setTimeout(() => finish("logged-out"), LOGIN_HOST_GRACE_MS);
+          let onLoginPath = false;
+          try {
+            onLoginPath = isLoginPath(site, new URL(frame.url()), origin);
+          } catch {}
+          if (isLoginHost(site, frame.url()) || onLoginPath) {
+            signedOutAfterGrace();
+            return;
+          }
+          const selector = login.signedOutSelector;
+          if (!selector) return;
+          // login.signedOutSelector: a sign-in form rendered in place, seen once the page has loaded.
+          void frame
+            .waitForLoadState("domcontentloaded")
+            .then(() => frame.content())
+            .then((html) => {
+              if (mine === navigation && htmlMatches(html, selector)) signedOutAfterGrace();
+            })
+            .catch(() => {});
         });
       }
     });

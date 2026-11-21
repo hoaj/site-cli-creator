@@ -23,7 +23,7 @@
 import { existsSync } from "node:fs";
 import type { Call } from "./command";
 import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
-import { extractHtml, htmlMatches, type HtmlContract } from "./html";
+import { extractHtml, htmlMatches, isHtmlType, type HtmlContract } from "./html";
 import { driftFingerprint, errorName, fieldPath, zodDiff, type BreakType } from "./fingerprint";
 import { withSiteHeaders } from "./browser-headers";
 import { forbiddenOperation, forbiddenRequest, guardFetch, NeverSent } from "./never";
@@ -809,6 +809,12 @@ export class Client {
     await this.ensureSession();
     await this.probeSession();
     let res = await this.send(op, v.data, built?.req);
+    // A write answered with the site's own sign-in page (login.paths, login.signedOutSelector) is never sent again: a POST's
+    // redirect to /login or a 200 form cannot be told from a success that landed there, so it may have taken effect.
+    if (res.signedOut && op.effect !== "read") {
+      const how = res.signedOut === "path" ? "a redirect to its sign-in page" : "its sign-in form";
+      throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`);
+    }
     // Renew, then sign in (or rerun bootstrap): each at most once a run, so this ends. A bot wall
     // is no sign-out: no sign-in gets past it, so none is spent on it.
     while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await this.send(op, v.data, built?.req);
@@ -965,7 +971,7 @@ export class Client {
   /** Whether a 2xx HTML answer shows login.signedOutSelector's element. */
   private signedOutPage(status: number, contentType: string | undefined, bytes: Uint8Array): boolean {
     const selector = this.site.auth === "login" ? this.site.login?.signedOutSelector : undefined;
-    if (!selector || status < 200 || status >= 300 || !/html/i.test(contentType ?? "")) return false;
+    if (!selector || status < 200 || status >= 300 || !isHtmlType(contentType)) return false;
     return htmlMatches(decodeBody(bytes, contentType), selector);
   }
 

@@ -14,7 +14,8 @@ import { isConstantNeed, isPickNeed, isSessionNeed, neverCheckable, neverChecked
 import { forbiddenRequest, neverProblems, neverRuleLabel, NeverSent } from "./never";
 import type { Operation } from "./operation";
 import { ensureProfileDir } from "./session";
-import { effectiveOrigin, isLoginHost, tokenMatches, type NeverRule, type Site } from "./site";
+import { htmlMatches } from "./html";
+import { effectiveOrigin, isLoginHost, isLoginPath, tokenMatches, type NeverRule, type Site } from "./site";
 
 export type CheckRow = { operation: string; effect: "read" | "write"; status: "ok" | "skipped" | "failed"; reason?: string };
 /**
@@ -523,7 +524,11 @@ async function checkOne(
   await context.route("**/*", handler);
   const page = await context.newPage();
   page.on("framenavigated", (frame) => {
-    if (!frame.parentFrame() && site.auth === "login" && isLoginHost(site, frame.url())) signedOut = true;
+    if (frame.parentFrame() || site.auth !== "login") return;
+    if (isLoginHost(site, frame.url())) signedOut = true;
+    try {
+      if (isLoginPath(site, new URL(frame.url()), origin)) signedOut = true;
+    } catch {}
   });
   let triggerError: unknown;
   try {
@@ -532,6 +537,13 @@ async function checkOne(
     triggerError = e;
   }
   for (let waited = 0; !captured && triggerError === undefined && waited < REQUEST_WAIT_MS; waited += 100) await Bun.sleep(100);
+  // login.signedOutSelector: a sign-in form rendered in place, with no navigation to tell it by.
+  const selector = site.auth === "login" ? site.login?.signedOutSelector : undefined;
+  if (!captured && !signedOut && selector) {
+    try {
+      if (htmlMatches(await page.content(), selector)) signedOut = true;
+    } catch {}
+  }
   await page.close().catch(() => {});
   await context.unroute("**/*", handler);
   for (const [label, why] of forbidden) {

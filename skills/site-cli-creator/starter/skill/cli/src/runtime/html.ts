@@ -130,6 +130,12 @@ function value(scope: Doc | Element, field: { css: string; attr?: string; all?: 
   return read(first(scope, field.css));
 }
 
+/** Whether a content-type header names HTML: `text/html` or `application/xhtml+xml` (parameters ignored). */
+export function isHtmlType(contentType: string | null | undefined): boolean {
+  const type = (contentType ?? "").split(";")[0]!.trim().toLowerCase();
+  return type === "text/html" || type === "application/xhtml+xml";
+}
+
 /** Whether `css` parses, as css-select reads it: undefined when it does, else the parser's message. */
 export function selectorProblem(css: string): string | undefined {
   try {
