@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { z } from "zod";
-import { bugFrame, bugKey, declaredNames, driftFingerprint, fieldPath, operationSegment, redactStack, srcRelative, typeName, zodDiff } from "../src/runtime/fingerprint";
+import { bugFrame, bugKey, declaredNames, driftFingerprint, rejectedFields, fieldPath, operationSegment, redactStack, srcRelative, typeName, zodDiff } from "../src/runtime/fingerprint";
 
 const site = { plugin: "yousee", skill: "yousee" };
 
@@ -130,5 +130,80 @@ describe("declaredNames", () => {
     const schema = z.object({ a: z.string().optional(), b: z.array(z.object({ c: z.number().nullable() })), d: z.union([z.object({ e: z.string() }), z.object({ f: z.string() })]).default({ e: "x" }), g: z.record(z.string(), z.object({ h: z.string() })) });
     expect([...declaredNames(schema)].sort()).toEqual(["a", "b", "c", "d", "e", "f", "g", "h"]);
     expect(declaredNames(undefined).size).toBe(0);
+  });
+});
+
+describe("rejectedFields", () => {
+  const flat = z.object({ orderId: z.string(), name: z.string() });
+  const fields = (body: unknown, schema: unknown = flat) => rejectedFields(body, schema).fields;
+
+  test("a wrapped fieldErrors (a flattened Zod error) is read, not the wrapper's keys", () => {
+    expect(fields({ errors: { formErrors: ["bad"], fieldErrors: { name: ["Kim Secret is too short"] } } })).toEqual(["name"]);
+  });
+
+  test("only keys whose value is a string, array or object count; envelope keys only when declared", () => {
+    expect(fields({ errors: { name: 5, orderId: true, other: null } })).toEqual([]);
+    expect(fields({ errors: { message: "x", code: "E1", status: 400, title: "t", detail: "d", type: "t", error: "e" } })).toEqual([]);
+    expect(fields({ errors: { title: "x", name: "y" } })).toEqual(["name"]);
+    expect(fields({ errors: { message: "can't be blank" } }, z.object({ message: z.string() }))).toEqual(["message"]);
+  });
+
+  test("all-digit segments are indices, in dotted strings and in array paths", () => {
+    const lines = z.object({ lines: z.array(z.object({ sku: z.string() })) });
+    expect(fields({ errors: [{ field: "lines.0.sku" }] }, lines)).toEqual(["lines[].sku"]);
+    expect(fields({ errors: [{ path: ["lines", "0", "sku"] }] }, lines)).toEqual(["lines[].sku"]);
+    expect(fields({ errors: [{ path: ["lines", 12, "sku"] }] }, lines)).toEqual(["lines[].sku"]);
+    expect(fields({ errors: { "lines.3.sku": "x" } }, lines)).toEqual(["lines[].sku"]);
+  });
+
+  test("JSON:API pointers lose their wrapper unless data is declared", () => {
+    const v = z.object({ name: z.string(), customer: z.string() });
+    expect(fields({ errors: [{ source: { pointer: "/data/attributes/name" } }] }, v)).toEqual(["name"]);
+    expect(fields({ errors: [{ source: { pointer: "/data/0/attributes/name" } }] }, v)).toEqual(["name"]);
+    expect(fields({ errors: [{ source: { pointer: "/data/relationships/customer/data/id" } }] }, v)).toEqual(["customer"]);
+    expect(fields({ errors: [{ source: { pointer: "/data/relationships/customer/data" } }] }, v)).toEqual(["customer"]);
+    expect(fields({ errors: [{ source: { pointer: "/data/relationships/customer/data/0/id" } }] }, v)).toEqual(["customer"]);
+    expect(fields({ errors: [{ source: { pointer: "/data/attributes/nobody@example.test" } }] }, v)).toEqual(["{}"]);
+  });
+
+  test("a route in path is no field", () => {
+    expect(fields({ errors: [{ path: "/api/orders/123" }] })).toEqual([]);
+    expect(fields({ errors: [{ path: "/name" }] })).toEqual(["name"]);
+  });
+
+  test("per item the first source that gives a path wins", () => {
+    expect(fields({ errors: [{ field: 5, path: ["name"] }] })).toEqual(["name"]);
+    expect(fields({ errors: [{ path: "/api/x", source: { pointer: "/data/attributes/name" } }] })).toEqual(["name"]);
+    expect(fields({ errors: [{ field: "nobody@example.test", path: "name" }] })).toEqual(["{}"]);
+  });
+
+  test("a single name matches at any depth; several names must resolve by position", () => {
+    const nested = z.object({ fields: z.object({ assignee: z.object({ id: z.string() }) }) });
+    expect(fields({ errors: { assignee: "x" } }, nested)).toEqual(["assignee"]);
+    expect(fields({ errors: { "assignee.id": "x" } }, nested)).toEqual(["assignee.id"]);
+    expect(fields({ errors: { "fields.assignee.id": "x" } }, nested)).toEqual(["fields.assignee.id"]);
+    const parts = z.object({ shipping: z.object({ name: z.string() }), billing: z.object({ street: z.string() }) });
+    expect(fields({ errors: { "billing.name": "x" } }, parts)).toEqual(["{}"]);
+    expect(fields({ errors: { "shipping.name": "x" } }, parts)).toEqual(["shipping.name"]);
+    expect(fields({ errors: { name: "x" } }, parts)).toEqual(["name"]);
+  });
+
+  test("a record key is site data, through unions and wrappers too", () => {
+    const v = z.object({ byId: z.record(z.string(), z.object({ qty: z.number() })), pick: z.union([z.object({ a: z.object({ b: z.string() }) }), z.string()]).optional() });
+    expect(fields({ errors: { "byId.99812345.qty": "x" } }, v)).toEqual(["{}"]);
+    expect(fields({ errors: { "pick.a.b": "x" } }, v)).toEqual(["pick.a.b"]);
+  });
+
+  test("past the cap {} is kept and the rest is counted", () => {
+    const names = Array.from({ length: 25 }, (_, i) => `f${String(i).padStart(2, "0")}`);
+    const schema = z.object(Object.fromEntries(names.map((n) => [n, z.string()])));
+    const errors = Object.fromEntries(names.map((n) => [n, "x"]));
+    const plain = rejectedFields({ errors }, schema);
+    expect(plain.fields).toHaveLength(20);
+    expect(plain.omitted).toBe(5);
+    const withData = rejectedFields({ errors: { ...errors, "kim@example.test": "x" } }, schema);
+    expect(withData.fields).toHaveLength(20);
+    expect(withData.fields).toContain("{}");
+    expect(withData.omitted).toBe(6);
   });
 });
