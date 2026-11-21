@@ -1,6 +1,7 @@
 // The site config every CLI skill declares in src/site.ts.
 import type { Call } from "./command";
 import type { Account } from "./envelope";
+import { selectorProblem } from "./html";
 import { neverListProblems } from "./never";
 import type { Method } from "./operation";
 
@@ -50,6 +51,20 @@ export type LoginConfig = {
    * answer other than 2xx (5xx and 429 aside) means "signed out", so it signs in again.
    */
   sessionProbe?: string;
+  /**
+   * Paths on the origin of the site's own sign-in page (`["/login"]`), for a site that answers an
+   * expired session with a redirect to its own host instead of a login host. A redirect hop to one
+   * of them (exact pathname, one trailing slash and any query or fragment ignored) means "signed
+   * out", like a redirect to a host in `hosts`; so does a sessionProbe redirected there.
+   */
+  paths?: string[];
+  /**
+   * CSS selector of an element only a signed-out page has (the sign-in form, `form#login`), for a
+   * site that answers an expired session with 200 and its sign-in form in place. Checked on an HTML
+   * answer before `html.fields`, and on an HTML sessionProbe answer; a match means "signed out".
+   * Never applied to a JSON answer.
+   */
+  signedOutSelector?: string;
   timeoutMs?: number;
   /** Derives chain-root ids after login. Returns ids to store, never personal data. */
   postLogin?: (ctx: SiteCtx) => Promise<Record<string, string>>;
@@ -189,6 +204,18 @@ export function siteProblems(site: Site): string[] {
   if (probe !== undefined && !(typeof probe === "string" && /^\/(?![/\\])/.test(probe))) {
     out.push("login.sessionProbe must be a path on the origin, starting with a single /");
   }
+  const paths = site.login?.paths;
+  if (paths !== undefined && !(Array.isArray(paths) && paths.every((p) => typeof p === "string" && /^\/(?![/\\])/.test(p)))) {
+    out.push("login.paths must be a list of paths on the origin, each starting with a single /");
+  }
+  const sel = site.login?.signedOutSelector;
+  if (sel !== undefined) {
+    if (typeof sel !== "string" || sel.trim() === "") out.push("login.signedOutSelector must be a non-empty CSS selector");
+    else {
+      const bad = selectorProblem(sel);
+      if (bad !== undefined) out.push(`login.signedOutSelector is not a CSS selector the parser reads (${bad})`);
+    }
+  }
   const refresh = site.login?.refresh;
   if (refresh !== undefined) {
     if (typeof refresh?.renew !== "function") out.push("login.refresh needs a renew function");
@@ -265,4 +292,28 @@ export function isLoginHost(site: Site, url: string): boolean {
   } catch {
     return false;
   }
+}
+
+/** A path without its query or fragment and without one trailing slash (`/login/` is `/login`; `/` stays). */
+function plainPath(path: string): string {
+  const p = path.replace(/[?#].*$/s, "");
+  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+}
+
+/**
+ * Whether `url` (already resolved, so a relative Location works) is on `origin` and its pathname is
+ * one of login.paths: the exact path, so `/login` is not `/login-help`.
+ */
+export function isLoginPath(site: Site, url: URL, origin: string): boolean {
+  const paths = site.login?.paths;
+  if (!Array.isArray(paths) || paths.length === 0) return false;
+  let on: string;
+  try {
+    on = new URL(origin).origin;
+  } catch {
+    return false;
+  }
+  if (url.origin !== on) return false;
+  const here = plainPath(url.pathname);
+  return paths.some((p) => typeof p === "string" && plainPath(p) === here);
 }
