@@ -30,8 +30,9 @@ export function unwrap(schema: unknown): unknown {
     const def = defOf(schema);
     if (!def) return schema;
     if (["optional", "nullable", "default", "prefault", "catch", "readonly", "nonoptional", "success"].includes(def.type)) schema = def.innerType;
-    else if (def.type === "pipe") schema = def.in;
-    else if (def.type === "lazy") schema = def.getter();
+    else if (def.type === "pipe") schema = defOf(def.in)?.type === "transform" ? def.out : def.in; // z.preprocess: the schema after the transform
+    // Zod memoizes the lazy schema in `_zod.innerType`; `getter()` can build a new one per call, which a recursive schema never finishes walking.
+    else if (def.type === "lazy") schema = (schema as { _zod?: { innerType?: unknown } })._zod?.innerType ?? def.getter();
     else return schema;
   }
   return schema;
@@ -100,12 +101,15 @@ export function fieldPath(path: readonly PropertyKey[], schema?: unknown): strin
   return out;
 }
 
+/** The most schemas `reachable` visits and `resolves` follows at once: a hostile or recursive Contract cannot make a failed call run away. */
+const BUDGET = 2000;
+
 /** Every schema reachable from `schema`, each seen through its wrappers, at any depth (objects, arrays, tuples, sets, unions, intersections, record values). */
 function reachable(schema: unknown): unknown[] {
   const out: unknown[] = [];
   const seen = new Set<unknown>();
   const walk = (s: unknown, depth: number): void => {
-    if (depth > 32 || s === undefined || s === null) return;
+    if (depth > 32 || out.length >= BUDGET || s === undefined || s === null) return;
     const inner = unwrap(s);
     if (seen.has(inner)) return;
     seen.add(inner);
@@ -178,7 +182,7 @@ function resolves(segs: readonly string[], variables: unknown): boolean {
       }
     }
     if (next.size === 0) return false;
-    frontier = [...next];
+    frontier = [...next].slice(0, BUDGET);
   }
   return true;
 }
@@ -222,7 +226,7 @@ function stripJsonApi(segs: string[], variables: unknown): string[] {
   if (kind !== "attributes" && kind !== "relationships") return segs;
   rest = rest.slice(1);
   if (kind === "relationships") {
-    const i = rest.indexOf("data");
+    const i = rest.indexOf("data", 1);
     if (i > 0) {
       const tail = rest.slice(i + 1).filter((s) => s !== "[]");
       if (tail.length === 0 || (tail.length === 1 && tail[0] === "id")) rest = rest.slice(0, i);
@@ -235,11 +239,12 @@ const isPlain = (v: unknown): v is Record<string, unknown> => typeof v === "obje
 /** Keys of an error object that are the envelope, not a field. */
 const ENVELOPE = new Set(["message", "code", "status", "title", "detail", "type", "error", "formErrors", "fieldErrors", "requestId", "request_id", "traceId", "trace_id", "timestamp", "reason", "errorCode"]);
 
-/** A value that says something: a non-empty string or array, or an object holding something. `""`, `[]`, `{}` and objects of only those name nothing. */
-function usable(value: unknown): boolean {
+/** A value that says something: a non-empty string, or an array or object holding something (to 16 levels). `""`, `[]`, `{}` and containers of only those name nothing. */
+function usable(value: unknown, depth = 0): boolean {
+  if (depth > 16) return false; // a body nested deeper names nothing (and cannot overflow the stack)
   if (typeof value === "string") return value !== "";
-  if (Array.isArray(value)) return value.length > 0;
-  if (isPlain(value)) return Object.values(value).some(usable);
+  if (Array.isArray(value)) return value.some((v) => usable(v, depth + 1));
+  if (isPlain(value)) return Object.values(value).some((v) => usable(v, depth + 1));
   return false;
 }
 
@@ -266,6 +271,8 @@ export function rejectedFields(body: unknown, variables: unknown, limit = 20): {
   };
   const segsOf = (raw: string): string[] => (declared.has(raw) ? [raw] : pathSegments(raw));
   const descend = (base: readonly string[], value: Record<string, unknown>, depth: number): string[] => {
+    // An object with an envelope key that is no declared field there (`message`, `kind`, `path`, ...) is one field's error object, not a set of children.
+    if (Object.keys(value).some((k) => ENVELOPE.has(k) && !resolves([...base, k], variables))) return [];
     const out: string[] = [];
     for (const [key, child] of Object.entries(value)) {
       if (!usable(child)) continue;
@@ -303,7 +310,7 @@ export function rejectedFields(body: unknown, variables: unknown, limit = 20): {
         () => (typeof e.field === "string" ? rejectedPath(segsOf(e.field), variables, declared) : ""),
         () => {
           if (typeof e.path === "string") {
-            const segs = pathSegments(e.path);
+            const segs = segsOf(e.path);
             // A route (`/orders/1`) is no field: a leading slash counts only when it resolves through the Contract.
             if (e.path.startsWith("/") && !resolves(segs, variables)) return "";
             return rejectedPath(segs, variables, declared);
@@ -314,7 +321,11 @@ export function rejectedFields(body: unknown, variables: unknown, limit = 20): {
           }
           return "";
         },
-        () => (isPlain(e.source) && typeof e.source.pointer === "string" ? rejectedPath(stripJsonApi(pathSegments(e.source.pointer), variables), variables, declared) : ""),
+        () => {
+          if (!isPlain(e.source) || typeof e.source.pointer !== "string") return "";
+          const segs = pathSegments(e.source.pointer);
+          return segs.some((s) => s === "") ? "" : rejectedPath(stripJsonApi(segs, variables), variables, declared);
+        },
       ];
       for (const attempt of tries) {
         const path = attempt();
