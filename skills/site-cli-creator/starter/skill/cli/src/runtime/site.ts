@@ -294,10 +294,14 @@ export function isLoginHost(site: Site, url: string): boolean {
   }
 }
 
-/** A path without its query or fragment and without one trailing slash (`/login/` is `/login`; `/` stays). */
+/**
+ * A path as login.paths compares it: without its query or fragment, without a `;parameter` on the last segment
+ * (`/login;jsessionid=A1`), without one trailing slash (`/login/` is `/login`; `/` stays), percent-escapes in capitals.
+ */
 function plainPath(path: string): string {
-  const p = path.replace(/[?#].*$/s, "");
-  return p.length > 1 && p.endsWith("/") ? p.slice(0, -1) : p;
+  let p = path.replace(/[?#].*$/s, "").replace(/%[0-9a-f]{2}/gi, (m) => m.toUpperCase());
+  if (p.length > 1 && p.endsWith("/")) p = p.slice(0, -1);
+  return p.replace(/;[^/]*$/, "") || "/";
 }
 
 /**

@@ -509,6 +509,8 @@ async function checkOne(
 ): Promise<DriftEntry | null> {
   let captured: Captured | undefined;
   let signedOut = false;
+  /** Whether the top frame is on a login.paths page now: a later navigation off it clears this (a pass-through is not signed out). */
+  let onLoginPath = false;
   /** Labels of the site.never rules this trigger's requests broke, each reported once. */
   const forbidden = new Map<string, string>();
   const handler = async (route: Route) => {
@@ -527,8 +529,10 @@ async function checkOne(
     if (frame.parentFrame() || site.auth !== "login") return;
     if (isLoginHost(site, frame.url())) signedOut = true;
     try {
-      if (isLoginPath(site, new URL(frame.url()), origin)) signedOut = true;
-    } catch {}
+      onLoginPath = isLoginPath(site, new URL(frame.url()), origin);
+    } catch {
+      onLoginPath = false;
+    }
   });
   let triggerError: unknown;
   try {
@@ -539,7 +543,7 @@ async function checkOne(
   for (let waited = 0; !captured && triggerError === undefined && waited < REQUEST_WAIT_MS; waited += 100) await Bun.sleep(100);
   // login.signedOutSelector: a sign-in form rendered in place, with no navigation to tell it by.
   const selector = site.auth === "login" ? site.login?.signedOutSelector : undefined;
-  if (!captured && !signedOut && selector) {
+  if (!captured && !signedOut && !onLoginPath && selector) {
     try {
       if (htmlMatches(await page.content(), selector)) signedOut = true;
     } catch {}
@@ -549,7 +553,7 @@ async function checkOne(
   for (const [label, why] of forbidden) {
     warn(`${op.name}'s trigger sent a request site.never forbids (${label}: ${why}); it was aborted. Change the trigger so it stops before that request.`);
   }
-  if (!captured && signedOut) {
+  if (!captured && (signedOut || onLoginPath)) {
     throw new Failure("session", `${signIn[0]!.toUpperCase()}${signIn.slice(1)} is signed out of ${site.origin}, so ${op.name} could not be checked.`);
   }
   return compareWrite(site, op, captured, triggerError, [...forbidden.keys()]);

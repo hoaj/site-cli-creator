@@ -6,7 +6,6 @@ import type { SignedIn } from "./call";
 import { chromeLaunchOptions, chromeNotFound, findChrome } from "./chrome";
 import { ContractError, Failure, ProfileUnavailable } from "./envelope";
 import { ensureProfileDir } from "./session";
-import { htmlMatches } from "./html";
 import { effectiveOrigin, isLoginHost, isLoginPath, isTest, loginHostName, onSiteDomain, rebase, siteDomain, tokenMatches, type Env, type Site } from "./site";
 
 const REFRESH_TIMEOUT_MS = 30_000;
@@ -225,12 +224,13 @@ export async function chromeLogin(site: Site, options: LoginOptions): Promise<Si
           }
           const selector = login.signedOutSelector;
           if (!selector) return;
-          // login.signedOutSelector: a sign-in form rendered in place, seen once the page has loaded.
+          // login.signedOutSelector: a sign-in form rendered in place, in the page or mounted by its scripts (waited for up to
+          // the grace period, then the grace period itself runs).
           void frame
             .waitForLoadState("domcontentloaded")
-            .then(() => frame.content())
-            .then((html) => {
-              if (mine === navigation && htmlMatches(html, selector)) signedOutAfterGrace();
+            .then(() => frame.waitForSelector(`css=${selector}`, { state: "attached", timeout: LOGIN_HOST_GRACE_MS }))
+            .then(() => {
+              if (mine === navigation) signedOutAfterGrace();
             })
             .catch(() => {});
         });
