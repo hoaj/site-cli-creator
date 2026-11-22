@@ -8,7 +8,7 @@ name: site-cli-creator
 # full matrix on the branch: gh workflow run site-cli-creator.yml --ref <branch>.
 # A manual run (workflow_dispatch) runs the tests and then all five smoke targets. Tests run with
 # --parallel=3. SITE_CLI_FULL_GENERATED=1 (a push to main, or any manual run) makes the scaffold test
-# run a generated plugin's Chrome tests too, so the pre-merge matrix runs the full suite; PR runs skip
+# run a generated plugin's Chrome tests too (Linux only), so the pre-merge matrix runs the full suite; PR runs skip
 # them there, since the generator's own run already covers them.
 on:
   push:
