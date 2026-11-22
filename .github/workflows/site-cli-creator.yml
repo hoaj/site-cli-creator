@@ -6,6 +6,12 @@ name: site-cli-creator
 # (pull_request; `push` is main only) and only on linux-x64; main and workflow_dispatch run all
 # five targets. Before merging a change to build.ts, install.sh, release.yml or main.ts, run the
 # full matrix on the branch: gh workflow run site-cli-creator.yml --ref <branch>.
+# A manual run (workflow_dispatch) does not repeat a green `test` job: its first step asks the
+# check-runs API whether this commit already has a `test` check run that succeeded, and skips every
+# later step if so (the job still succeeds, so `smoke` runs). A failed API call counts as not green.
+# push and pull_request always test. Tests run with --parallel=3. SITE_CLI_FULL_GENERATED=1 (push to
+# main only) makes the scaffold test run a generated plugin's Chrome tests too; elsewhere the
+# generator's own run already covers them.
 on:
   push:
     branches: [main]
@@ -30,6 +36,7 @@ on:
 
 permissions:
   contents: read
+  checks: read
 
 concurrency:
   group: site-cli-creator-${{ github.ref }}
@@ -45,11 +52,26 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Look for a green test run on this commit
+        id: prior
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          green=false
+          if names=$(gh api --paginate "repos/${{ github.repository }}/commits/${{ github.sha }}/check-runs" --jq '.check_runs[] | select(.name == "test" and .conclusion == "success") | .name'); then
+            if [ -n "$names" ]; then green=true; fi
+          fi
+          echo "green=$green" >> "$GITHUB_OUTPUT"
+          echo "prior green test run on this commit: $green"
       - uses: actions/checkout@v7
+        if: steps.prior.outputs.green != 'true'
       - uses: oven-sh/setup-bun@v2
+        if: steps.prior.outputs.green != 'true'
         with:
           bun-version: ${{ env.BUN_VERSION }}
       - name: Install Google Chrome if missing
+        if: steps.prior.outputs.green != 'true'
         run: |
           if [ ! -x /opt/google/chrome/chrome ]; then
             curl -fsSLo chrome.deb https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
@@ -59,15 +81,21 @@ jobs:
           fi
           /opt/google/chrome/chrome --version
       - run: bun install --frozen-lockfile
+        if: steps.prior.outputs.green != 'true'
         working-directory: ${{ env.GENERATOR }}
       - name: Type-check the generator (tools, tests, fixture site, Starter plugin scripts)
+        if: steps.prior.outputs.green != 'true'
         run: bun x tsc --noEmit -p .
         working-directory: ${{ env.GENERATOR }}
       - name: Type-check the Starter CLI
+        if: steps.prior.outputs.green != 'true'
         run: bun x tsc --noEmit -p .
         working-directory: ${{ env.SKILL_DIR }}/starter/skill/cli
-      - run: bun test
+      - run: bun test --parallel=3
+        if: steps.prior.outputs.green != 'true'
         working-directory: ${{ env.GENERATOR }}
+        env:
+          SITE_CLI_FULL_GENERATED: ${{ github.event_name == 'push' && '1' || '' }}
 
   # Per target, on that target's own runner: scaffold a plugin with the generator's own tools
   # (scaffold-fixture.sh), build its CLI, then run the binary with no node_modules: help,

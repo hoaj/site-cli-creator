@@ -10,6 +10,7 @@ import { join, resolve } from "node:path";
 import { chromium, type Browser, type Page } from "playwright-core";
 import type { z } from "zod";
 import { copyExpected, fillTokens, OPERATION_NAMES } from "../fixtures/expected/copy";
+import { findChrome } from "../starter/skill/cli/src/runtime/chrome";
 import { extractHtml } from "../starter/skill/cli/src/runtime/html";
 import { ACCOUNT, INVOICES, NOTICES, USER } from "../fixtures/site/data";
 import { loginOriginFor } from "../fixtures/site/hosts";
@@ -19,8 +20,8 @@ import type { Site } from "../starter/skill/cli/src/runtime/site";
 
 const PLUGIN_ROOT = resolve(import.meta.dir, "../../..");
 const STARTER_CLI = resolve(import.meta.dir, "../starter/skill/cli");
-const CHROME = process.env.SITE_CLI_CHROME ?? "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
-const HAS_CHROME = existsSync(CHROME);
+const CHROME = findChrome(process.env).path;
+const HAS_CHROME = CHROME !== undefined;
 
 // ---- plain HTTP clients for both auth modes ---------------------------------
 
@@ -892,7 +893,7 @@ describe.skipIf(!HAS_CHROME)("expected code on the Starter runtime against the f
         site = startFixtureSite({ auth });
         const scaffold = scaffoldWithRuntime(auth, site.url);
         dir = scaffold.dir;
-        env = { SITE_CLI_TEST: "1", SITE_CLI_HOME: join(dir, "state"), SITE_CLI_CHROME: CHROME };
+        env = { SITE_CLI_TEST: "1", SITE_CLI_HOME: join(dir, "state"), SITE_CLI_CHROME: CHROME! };
         const r = (m: string) => import(join(scaffold.src, "runtime", `${m}.ts`));
         const [call, check, login, envelope] = await Promise.all([r("call"), r("check"), r("login"), r("envelope")]);
         rt = { Client: call.Client, check: check.check, chromeLogin: login.chromeLogin, DryRun: envelope.DryRun };
@@ -1089,7 +1090,7 @@ describe.skipIf(!HAS_CHROME)("expected code on the Starter runtime against the f
 describe.skipIf(!HAS_CHROME)("frontend in headless Chrome", () => {
   let browser: Browser;
   beforeAll(async () => {
-    browser = await chromium.launch({ executablePath: CHROME, headless: true });
+    browser = await chromium.launch({ executablePath: CHROME!, headless: true });
   });
   afterAll(() => browser?.close());
 

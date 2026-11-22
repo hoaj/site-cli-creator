@@ -465,8 +465,12 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     const dir = join(work, "full");
     const env = { STARTER_DIR: REAL_STARTER };
     expect(run(NEW, newArgs(dir, ["--no-labels"]), env).code).toBe(0);
+    // The generator's own run already drives Chrome through the Starter's browser tests, so the nested
+    // suites skip them unless SITE_CLI_FULL_GENERATED=1 (CI sets it on main only). cleanEnv() strips SITE_CLI_*.
+    const full = process.env.SITE_CLI_FULL_GENERATED === "1";
     const sh = (cmd: string[], cwd: string) => {
-      const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe", env: cleanEnv() });
+      const env = cmd[1] === "test" && !full ? { ...cleanEnv(), SITE_CLI_SKIP_BROWSER: "1" } : cleanEnv();
+      const p = Bun.spawnSync(cmd, { cwd, stdout: "pipe", stderr: "pipe", env });
       return { code: p.exitCode, out: (p.stdout.toString() + p.stderr.toString()).replace(/\x1b\[[0-9;]*m/g, "") };
     };
     for (const auth of ["none", "login"] as const) {
