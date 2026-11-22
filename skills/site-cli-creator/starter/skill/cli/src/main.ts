@@ -16,6 +16,7 @@ import { findChrome } from "./runtime/chrome";
 import { chromeLogin } from "./runtime/login";
 import { createMcpServer, serveStdio, toolName, type McpTool, type ServerInfo } from "./runtime/mcp";
 import { neverList, neverNext, NeverSent } from "./runtime/never";
+import { assertOutputSchema, checkOutput, outputJsonSchema } from "./runtime/output";
 import { hashPassword, MIN_PASSWORD_LENGTH, remoteConfig, type RemoteConfig } from "./runtime/remote-config";
 import { selftest } from "./runtime/selftest";
 import { ensureStateDir, legacyStateDir, migrateStateDir, stateDir, type Session } from "./runtime/session";
@@ -192,7 +193,10 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
       if (builtin === "doctor") return ok(await doctor(site, { env: deps.env, exec: app.exec, compiled: compiled() }));
       // Hidden built-in for the generator's platform smoke test (SPEC §9); not listed by help.
       if (builtin === "selftest") return ok(await selftest({ url: f.url as string | undefined, chrome: !f["no-chrome"], fetch: deps.fetch, env: deps.env }));
-      if (builtin === "check") return ok(await check(client, app.operations, { op: f.op as string | undefined, writes: !!f.writes, account }, app.checkWrites));
+      if (builtin === "check") {
+        assertOutputSchemas(app);
+        return ok(await check(client, app.operations, { op: f.op as string | undefined, writes: !!f.writes, account }, app.checkWrites));
+      }
       if (builtin === "mcp") {
         if (account !== undefined || confirm) throw input("mcp takes no --account or --confirm; account and confirm are arguments of each tool call");
         if (f["hash-password"]) {
@@ -232,7 +236,7 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
     if (!command) throw input(`unknown command "${words.join(" ") || flags[0]}"; run \`${site.skill} help\``);
     commandName = command.name;
     if (words.length > 2) throw input(`unexpected argument "${words[2]}"`);
-    return ok(await runTask(app, client, deps, command, parseArgs(command, flags), account));
+    return ok((await runTask(app, client, deps, command, parseArgs(command, flags), account)).value);
   } catch (e) {
     return failed(e, site, commandName);
   } finally {
@@ -242,30 +246,67 @@ export async function run(argv: string[], app: App): Promise<RunResult> {
 
 const ok = (output: unknown): RunResult => ({ output, code: EXIT.ok });
 
-/** One Task with its parsed args: the CLI and the MCP server both end here. */
-async function runTask(app: App, client: Client, deps: Deps, command: Command, args: unknown, account: string | undefined) {
+/**
+ * `check` refuses a command whose output schema is broken before it calls any Operation, so
+ * add-task and fix catch it while authoring (a bug envelope naming the command).
+ */
+function assertOutputSchemas(app: App): void {
+  for (const command of app.commands) assertOutputSchema(command);
+}
+
+/** Whatever was thrown after a write the site answered with success (any value); `failed()` unwraps it and marks the envelope `writeSent`. */
+class AfterWrite {
+  constructor(readonly cause: unknown) {}
+}
+
+/** A result that passed the command's `output` schema: the MCP surface may send it as structuredContent. */
+class Checked {
+  constructor(readonly value: unknown, readonly valid: boolean) {}
+}
+
+/**
+ * One Task with its parsed args: the CLI and the MCP server both end here. The result is checked
+ * against the command's `output` schema, if it has one, and returned as the command gave it. A dry
+ * run is thrown by `call` before the command returns, so it is never checked against `output`.
+ */
+async function runTask(app: App, client: Client, deps: Deps, command: Command, args: unknown, account: string | undefined): Promise<Checked> {
+  // First of all: no sign-in, account step or request for a command whose output schema is broken.
+  assertOutputSchema(command);
   if (app.site.auth === "login") await client.ensureSession();
   const chosen = await client.resolveAccount(account);
   deps.note(`${command.name}: ${command.uses.map((o) => o.name).join(" → ") || "no Operations"}`);
-  // A refusal the command caught (a fallback) still ends it: the user does that step on the site.
-  const result = await client.withRefusals(() => command.run(args as never, {
-    call: client.call,
-    session: { get ids() { return client.peek()?.ids ?? {}; } },
-    account: chosen,
-    note: deps.note,
-  }));
-  return result ?? null;
+  try {
+    // A refusal the command caught (a fallback) still ends it: the user does that step on the site.
+    const result = await client.withRefusals(() => command.run(args as never, {
+      call: client.call,
+      session: { get ids() { return client.peek()?.ids ?? {}; } },
+      account: chosen,
+      note: deps.note,
+    }));
+    const value = result ?? null;
+    // An undefined result the schema accepts is fine; otherwise what prints (null) is what is checked.
+    const skip = result === undefined && command.output?.safeParse(undefined).success === true;
+    if (!skip) checkOutput(app.site, command, value);
+    return new Checked(value, command.output !== undefined && !skip);
+  } catch (e) {
+    // Whatever fails after a write the site answered with success (a later call, the mapping, a bug) must not read as a failed write.
+    if (client.writeSent && !(e instanceof DryRun)) throw new AfterWrite(e);
+    throw e;
+  }
 }
 
 /** What a run that threw prints: the dry run, the classified Failure's envelope, or a bug. */
 function failed(e: unknown, site: Site, commandName: string, surface: Surface = "cli"): RunResult {
   if (e instanceof DryRun) return ok({ dryRun: true, would: { operation: e.operation, variables: e.variables } });
-  if (e instanceof Failure) return { output: errorEnvelope(e, site, surface), code: EXIT[e.kind] };
+  const writeSent = e instanceof AfterWrite;
+  if (e instanceof AfterWrite) e = e.cause;
+  if (e instanceof Failure) return { output: errorEnvelope(writeSent ? new Failure(e.kind, e.message, { ...e.details, writeSent }) : e, site, surface), code: EXIT[e.kind] };
   const stack = e instanceof Error ? e.stack : undefined;
   const what = e instanceof ContractError ? e.message : `${errorName(e)} in ${bugFrame(stack)}`;
   const bug = new Failure("bug", what, {
     fingerprint: bugKey(site, commandName, e),
     stack: redactStack(e),
+    ...(writeSent && { writeSent }),
     // A Task that tried it: the user does it on the site. check's own refusal is a plain bug in the plugin.
     ...(e instanceof NeverSent && commandName !== "check" && { next: neverNext(e.rule, site, surface) }),
   });
@@ -355,16 +396,19 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
     }
   };
 
-  const tool = (name: string, description: string, schema: z.ZodObject, annotations: McpTool["annotations"], commandName: string, body: (args: any) => Promise<unknown>): McpTool => ({
+  const tool = (name: string, description: string, schema: z.ZodObject, annotations: McpTool["annotations"], commandName: string, body: (args: any) => Promise<unknown>, outputSchema?: Record<string, unknown>): McpTool => ({
     name,
     description,
     schema,
     annotations,
+    ...(outputSchema && { outputSchema }),
     async call(raw) {
       try {
         const r = schema.safeParse(raw);
         if (!r.success) throw input(r.error.issues.map((i) => `${i.path.join(".") || "arguments"}: ${i.message}`).join("; "));
-        return ok(await body(r.data));
+        const out = await body(r.data);
+        // Only a result that passed `output` is promised to match outputSchema.
+        return out instanceof Checked ? { ...ok(out.value), matches: out.valid } : ok(out);
       } catch (e) {
         return failed(e, site, commandName, "mcp");
       } finally {
@@ -386,6 +430,7 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
         notWhileSigningIn();
         return runTask(app, new Client(site, deps, { confirm: confirm === true, surface: "mcp" }), deps, command, args, account);
       },
+      write ? undefined : outputJsonSchema(command),
     );
   });
 
@@ -430,6 +475,7 @@ export function mcpTools(app: App, options: McpOptions = {}): { info: ServerInfo
     tool("check", options.remote ? "Call every read Operation live and validate it against its Contract, to tell whether the site changed" : "Call every read Operation live and validate it against its Contract, to tell whether the site changed; writes: true also checks writes without sending them", checkSchema, { readOnlyHint: true, openWorldHint: true }, "check",
       ({ op, writes, account }) => {
         notWhileSigningIn();
+        assertOutputSchemas(app);
         // A write is checked by driving its page in Chrome, which a remote server does not have.
         if (options.remote && op !== undefined && findOperation(app.operations, op).effect === "write") {
           throw input("checking a write needs Chrome, which a remote server does not have; check reads only");

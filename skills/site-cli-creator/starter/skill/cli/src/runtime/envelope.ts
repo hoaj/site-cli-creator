@@ -21,6 +21,11 @@ export type FailureDetails = {
    * that did it (a vendor name such as "cloudflare", or "captcha"). Never a value the site sent.
    */
   blocked?: string;
+  /**
+   * Any kind, from a command that had already sent a write the site answered with success: the failure came
+   * after it (a later call, a mapping, a bug in run), so the write must not be run again.
+   */
+  writeSent?: boolean;
   /** Replaces the kind's fixed `next`, when that sentence would be wrong here (the MCP login tool's own failures). */
   next?: string;
 };
@@ -70,6 +75,9 @@ export type EnvelopeSite = { plugin: string; skill: string; version: string; rep
 
 /** Who reads the envelope: an agent running the CLI, or an MCP client calling the `mcp` server's tools. */
 export type Surface = "cli" | "mcp";
+
+/** First in `next` of any failure after a write the site answered with success (details.writeSent), on both surfaces. */
+export const WRITE_SENT = "The write was sent and the site answered with success, so it may have taken effect. Check on the site before running it again.";
 
 export function nextStep(kind: Kind, site: EnvelopeSite, hasAccounts = false, surface: Surface = "cli", blocked = false): string {
   const feedback = `${site.plugin}-feedback`;
@@ -147,9 +155,10 @@ export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface =
       ...(d.stack !== undefined && { stack: d.stack }),
       ...(d.accounts !== undefined && { accounts: d.accounts }),
       ...(d.blocked !== undefined && { blocked: d.blocked }),
+      ...(d.writeSent && { writeSent: true }),
       version: site.version,
       os: osName(),
-      next: d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined),
+      next: `${d.writeSent ? `${WRITE_SENT} ` : ""}${d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined)}`,
     },
   };
 }

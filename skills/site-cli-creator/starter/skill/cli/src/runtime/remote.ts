@@ -9,6 +9,7 @@ import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelconte
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { Failure } from "./envelope";
+import { WRITE_SENT } from "./envelope";
 import { listedTools, toolResult, type McpTool, type ServerInfo } from "./mcp";
 import { OAuthStore, OwnerProvider, failedPage, returningPage, signedInPage } from "./owner-auth";
 import { redirectAllowed, type RemoteConfig } from "./remote-config";
@@ -88,7 +89,7 @@ function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknow
   if (before.state !== "missing") {
     checkedStatus(setup.dir, new Date(setup.now()).toISOString(), "expired", before.uploadedAt, String(error.message ?? ""));
   }
-  const next = `Ask the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json). Do not retry until they have.`;
+  const next = `${(error as { writeSent?: boolean }).writeSent ? `${WRITE_SENT} ` : ""}Ask the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json). Do not retry until they have.`;
   return { error: { ...error, next } };
 }
 
@@ -101,8 +102,8 @@ function mcpServerFor(info: ServerInfo, tools: McpTool[], serial: <T>(fn: () => 
     const tool = byName.get(req.params.name);
     if (!tool) throw new McpError(ErrorCode.InvalidParams, `Unknown tool: ${req.params.name}`);
     // One call at a time, as over stdio, so two calls never refresh one Session together.
-    const { output, code } = await serial(() => tool.call((req.params.arguments ?? {}) as Record<string, unknown>));
-    return toolResult(sessionFailure(output, code, setup), code) as never;
+    const { output, code, matches } = await serial(() => tool.call((req.params.arguments ?? {}) as Record<string, unknown>));
+    return toolResult(sessionFailure(output, code, setup), code, tool, matches) as never;
   });
   return server;
 }

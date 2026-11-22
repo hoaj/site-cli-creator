@@ -7,6 +7,17 @@ export default defineCommand({
   summary: "Service notices (planned work and outages), optionally for one area",
   args: z.object({ area: z.string().min(1).optional().describe("only notices for this area, as the site names it (Aarhus C)") }),
   uses: [listNotices],
+  output: z.object({
+    notices: z.array(
+      z.object({
+        id: z.string().min(1),
+        title: z.string().min(1),
+        area: z.string().min(1),
+        startsAt: z.string().nullable(),
+        when: z.string().nullable(),
+      }),
+    ),
+  }),
   run: async ({ area }, { call }) => {
     const { notices } = await call(listNotices, { area });
     return {

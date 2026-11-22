@@ -9,6 +9,15 @@ export default defineCommand({
   summary: "One invoice with its lines",
   args: z.object({ id: z.string().min(1).describe("invoice id, as listed by `invoice list`") }),
   uses: [getAccount, listInvoices, getInvoice],
+  output: z.object({
+    id: z.string().min(1),
+    number: z.string().min(1),
+    issued: z.string(),
+    due: z.string().nullable(),
+    amountDKK: z.number().positive(),
+    status: z.string(),
+    lines: z.array(z.object({ text: z.string(), amountDKK: z.number() })),
+  }),
   run: async ({ id }, { call }) => {
     // The id comes from the user: check it against the list first, so a typo is an input error
     // (exit 2) and a 404 from GET /api/invoices/:id stays what it is, Drift.

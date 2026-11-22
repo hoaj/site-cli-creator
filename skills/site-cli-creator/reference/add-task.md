@@ -101,7 +101,7 @@ Task 1: "see my subscription and price"
   effect:  read
 ```
 
-`output` is the command's JSON with the nullability you decided. `effect` is `write` if any used Operation writes; a write command prints a dry run unless `--confirm` is passed.
+`output` is the command's JSON with the nullability you decided, and it becomes the command's `output` Zod schema (step 5), so mark every value that can never be empty or zero (a name, an id, an amount above 0) as such on the card: the schema turns that into `.min(1)` or `.positive()`. `effect` is `write` if any used Operation writes; a write command prints a dry run unless `--confirm` is passed.
 
 ## 5. Generate
 
@@ -111,7 +111,7 @@ For each new Operation, draft its Contract into its file with `--out` (an Operat
 bun <gen>/tools/draft-contract.ts <skill>/captures/<slug>/<operation>.shape.json --out <skill>/cli/src/operations/<file>.ts
 ```
 
-Write `<skill>/cli/src/commands/<noun>-<verb>.ts`. [contracts.md](contracts.md) has the format, the cutting rules and examples. Then:
+Write `<skill>/cli/src/commands/<noun>-<verb>.ts`, with an `output` Zod schema written from the confirmed card (except in an older plugin, below; nullability as decided, `.min(1)` or `.positive()` where the card says a value cannot be empty). Where `cli/src/runtime/output.ts` is missing (`regen` says so), do **not** write `output`: the plugin's runtime predates output schemas, its older `Command` type rejects the field and the typecheck fails. Tell the user, and offer to port `runtime/output.ts` and `runTask` from the Starter code as a separate change; never port them unasked. (A plugin whose `main.ts` already imports `./runtime/output` but lacks the file is broken, not older: restore the file from the Starter code.) Run `check --writes` afterwards (in a plugin that has the runtime): it refuses a command whose `output` schema would change the value (`transform`, `pipe`, `coerce`, `default`, `catch`, `.trim()`) or cannot be written as JSON Schema (a date, a custom type) before any Operation runs, while `help` and the other commands keep working. The runtime checks the command's result against it, so a field that vanishes and prints `null` or `0` is Drift instead of a wrong answer; `help` and the MCP tool show it. [contracts.md](contracts.md) has the format, the cutting rules and examples. Then:
 
 ```sh
 bun <gen>/tools/regen.ts --skill-dir <skill>

@@ -185,6 +185,7 @@ One file per Task: `cli/src/commands/<noun>-<verb>.ts`, `export default defineCo
 - `name` is `<noun> <verb>` in English and matches the file name. `summary` becomes the command's row in SKILL.md; `regen.ts` marks writes (`**Write.**`) and adds "Dry run unless `--confirm`" itself, so don't say either in `summary`.
 - `args` is a `z.object`: camelCase keys, kebab-case flags (`invoiceId` is `--invoice-id`), booleans are presence flags. Add `.describe("…")` to each flag; `help` prints it.
 - `uses` lists every Operation `run` calls.
+- `output` is a Zod schema of what `run` returns, written from the confirmed card, with the card's nullability: `.nullable()` where the card says `|null`, and `.min(1)` (a string or an array) or `.positive()` (a number) where it says a value cannot be empty. The runtime checks the result against it before printing, on the CLI and over MCP, and a mismatch is `output` Drift. It is what catches a field that disappeared and now prints `null`, `0` or `[]` through a fallback in `run`. The result still prints as `run` returned it, so `output` may leave out keys the command prints. Take nothing that changes the value (`transform`, `pipe`, `z.preprocess`, `z.coerce`, `default`, `catch`, `.trim()`, `.toLowerCase()`) and no date or custom type: the schema describes what is printed, so conversions and fallbacks belong in `run()`. A command with such a schema fails with a message saying so, and `check` refuses it before any Operation runs. Name the shape, never a value (no `z.literal` of a site's data).
 - `run(args, { call, session, account, note })` returns exactly the card's `output`: rename and reshape freely, and the CLI prints it as JSON. `session.ids` holds the chain-root ids, `account` the selected account, `note()` writes progress to stderr.
 - Call writes with `call` like reads. Without `--confirm`, `call` stops at the first write and the CLI prints the dry run, so build the write's full variables before calling it.
 - **A value the user supplies that names something on the site** (an id, a number): check it against the list Operation before calling the lookup, and end with `inputFailure` when it is not there. A 404 on a known REST path is Drift (exit 3, "stop and file it"); a typo must be exit 2 instead.
@@ -200,6 +201,7 @@ export default defineCommand({
   summary: "One invoice with its lines",
   args: z.object({ id: z.string().min(1).describe("invoice id, as listed by `invoice list`") }),
   uses: [listInvoices, getInvoice],
+  output: z.object({ id: z.string().min(1), due: z.string().nullable(), amountDKK: z.number().positive() }),
   run: async ({ id }, { call, session }) => {
     const { invoices } = await call(listInvoices, { accountId: session.ids.accountId });
     if (!invoices.some((i) => i.id === id)) inputFailure("No invoice with that --id: run `invoice list` to see the ids.");
