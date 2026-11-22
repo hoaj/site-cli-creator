@@ -86,7 +86,7 @@ Every PR that changes the plugin bumps its version: patch for fixes, minor for f
 
 Commit one issue per commit (`site-cli-creator: <summary> (#n)`), push, open a PR titled `site-cli-creator <version>: <summary>`. The body lists each issue as `Fixes #n` with one line on what changed, the cold-read result, and **Starter code reach**: a Starter code change reaches only plugins created after the release, so list the generated plugins whose `generated.json` `generatedWith` is older (the maintainer knows their repos; `gh search code generatedWith --owner <owner> --filename generated.json` finds the ones on GitHub) and whether they should port the change by hand. No Starter change: write "Starter code reach: none".
 
-Watch CI: `gh run watch <id> --repo hoaj/site-cli-creator --exit-status`. All jobs must be green. A PR runs the smoke test on linux-x64 only; the five-platform matrix runs on main and on `workflow_dispatch`. Which changes need it on the branch, and when: CLAUDE.md, step 3 (once, on the commit that merges).
+Watch CI: `gh run watch <id> --repo hoaj/site-cli-creator --exit-status`. All jobs must be green. A PR runs the smoke test on linux-x64 only; the five-platform matrix runs on main and on `workflow_dispatch`. Which changes need it on the branch, and when: CLAUDE.md, step 3 (once, on the PR's head commit).
 
 Review and merge it with the procedure in the repo's CLAUDE.md (Pull requests): it holds the maintainer's standing yes, the review loop and the merge commands.
 
@@ -98,6 +98,6 @@ After the merge, in the one report CLAUDE.md step 4 asks for, tell the maintaine
 
 - **Windows binaries:** `import.meta.main` is false in a binary built with the `Bun.build` API's `compile` option on Windows. The Starter `main.ts` guards with `isEntry()`. Keep it, and keep the smoke job on windows-latest green.
 - **No real site data in this repo.** Reports carry shapes only; tests use the fixture site's fake data or values they plant themselves.
-- **CI is the only Windows and Intel-Mac test bed.** A change that the repo's CLAUDE.md lists (Pull requests, step 3) is done only when the smoke job passes on all five targets on the commit that merges (a PR runs linux-x64 only: dispatch the full matrix on the branch with `gh workflow run site-cli-creator.yml --ref <branch>`).
+- **CI is the only Windows and Intel-Mac test bed.** A change that the repo's CLAUDE.md lists (Pull requests, step 3) is done only when the smoke job passes on all five targets on the PR's head commit (a PR runs linux-x64 only: dispatch the full matrix on the branch with `gh workflow run site-cli-creator.yml --ref <branch>`).
 
 A worked round (0.2.0, issues #33–#39, PR #40): [references/worked-example.md](references/worked-example.md).
