@@ -8,6 +8,18 @@ export default defineCommand({
   summary: "Your invoices, newest first, with amount and payment status",
   args: z.object({}),
   uses: [getAccount, listInvoices],
+  output: z.object({
+    invoices: z.array(
+      z.object({
+        id: z.string().min(1),
+        number: z.string().min(1),
+        issued: z.string(),
+        due: z.string().nullable(),
+        amountDKK: z.number().positive(),
+        status: z.string(),
+      }),
+    ),
+  }),
   run: async (_args, { call, session }) => {
     const account = (await call(getAccount, { customerId: session.ids.customerId })).data.getAccount;
     const { invoices } = await call(listInvoices, { accountId: account.id });

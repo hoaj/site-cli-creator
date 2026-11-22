@@ -3,6 +3,7 @@ import type { z } from "zod";
 import type { Command } from "./command";
 import { EXIT, nextStep, type Kind } from "./envelope";
 import { neverList } from "./never";
+import { outputShape } from "./output";
 import { unwrap } from "./fingerprint";
 import type { Site } from "./site";
 
@@ -77,6 +78,15 @@ export function commandHelp(site: Site, commands: Command[], name: string) {
   return entry && { ...entry, usage: `${site.skill} ${name} [flags]`, globalFlags: h.globalFlags };
 }
 
+/** A command's output shape for help; a schema outputShape cannot read is "any", never a failure of help. */
+function shapeOf(schema: unknown): string {
+  try {
+    return outputShape(schema);
+  } catch {
+    return "any";
+  }
+}
+
 export function help(site: Site, commands: Command[]) {
   const never = neverList(site);
   const builtins = [
@@ -93,7 +103,7 @@ export function help(site: Site, commands: Command[]) {
     version: site.version,
     auth: site.auth,
     usage: `${site.skill} <command> [flags]`,
-    commands: commands.map((c) => ({ name: c.name, summary: c.summary, write: isWriteCommand(c), flags: flagSpecs(c.args) })),
+    commands: commands.map((c) => ({ name: c.name, summary: c.summary, write: isWriteCommand(c), flags: flagSpecs(c.args), ...(c.output && { output: shapeOf(c.output) }) })),
     builtins,
     globalFlags: GLOBAL_FLAGS,
     // site.never: what the CLI never does, whatever the flags; the user does it on the site.

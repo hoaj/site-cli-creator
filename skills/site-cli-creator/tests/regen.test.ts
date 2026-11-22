@@ -47,6 +47,7 @@ console.log(JSON.stringify({
     summary: c.summary,
     flags: c.flags,
     write: c.uses.some((o) => o.effect === "write"),
+    output: c.output,
   })),
   builtins: [{ name: "help" }],
 }));
@@ -192,6 +193,37 @@ describe("regen.ts", () => {
     expect(md).toContain("| `shop subscription show` | `[--all]` include ended | Your products \\| prices |");
     expect(md).not.toContain("stale");
     expect(md).toContain("Built-ins: help.");
+  });
+
+  test("a hint names the commands that have no output schema, and regen still succeeds (#96)", () => {
+    const skill = fakeSkill("no-output", "none", { getAccount: "read", addNote: "write" });
+    const shown = join(skill, "cli/src/commands/subscription-show.ts");
+    writeFileSync(shown, readFileSync(shown, "utf8").replace("run:", 'output: "{customer: string}", run:'));
+    // An older plugin (no runtime/output.ts): adding output would do nothing until the runtime is ported.
+    const old = regen(skill);
+    expect(old.code).toBe(0);
+    expect(old.out.hints).toHaveLength(1);
+    expect(old.out.hints[0]).not.toContain("note add"); // it did not forget a schema: no command is named
+    expect(old.out.hints[0]).not.toContain("subscription show");
+    expect(old.out.hints[0]).toContain("do not add one");
+    expect(old.out.hints[0]).toContain("predates output schemas");
+    expect(old.out.hints[0]).toContain("runtime/output.ts");
+    expect(old.out.hints[0]).not.toContain("Add one to each");
+    // A plugin whose runtime has it: the hint to add one.
+    write(join(skill, "cli/src/runtime/output.ts"), "export {};\n");
+    const r = regen(skill);
+    expect(r.code).toBe(0);
+    expect(r.out.hints).toHaveLength(1);
+    expect(r.out.hints[0]).toContain("note add");
+    expect(r.out.hints[0]).not.toContain("subscription show");
+    expect(r.out.hints[0]).not.toContain("predates");
+    expect(r.stderr).toContain("hint: no output schema on: note add");
+    const added = join(skill, "cli/src/commands/note-add.ts");
+    writeFileSync(added, readFileSync(added, "utf8").replace("run:", 'output: "{ok: boolean}", run:'));
+    const again = regen(skill);
+    expect(again.code).toBe(0);
+    expect(again.out.hints).toBeUndefined();
+    expect(again.stderr).not.toContain("hint:");
   });
 
   test("auth none, reads only: needsChrome false; auth login: always true", () => {
