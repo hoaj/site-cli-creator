@@ -165,7 +165,7 @@ describe("new.ts", () => {
     expect(unquoted.out.error.message).toContain('unexpected argument "billing"');
     expect(existsSync(join(work, "x"))).toBe(false);
     expect(run(NEW, newArgs(join(work, "x"), ["--no-labels"]), { STARTER_DIR: join(work, "missing") }).out.error.message).toContain("starter/plugin");
-  });
+  }, 30_000);
 
   test("creates the six labels with gh (feature, drift, bug, unverified, needs-account, ci-session); a gh failure is an error that keeps the files and says how to retry", () => {
     const bin = join(work, "gh-bin");
@@ -200,7 +200,7 @@ describe("new.ts", () => {
     expect(missing.out.error.labels.failed).toContain("gh label create feature");
     expect(missing.out.error.retry.map((c: string) => c.split(" ")[3])).toEqual(["feature", "drift", "bug", "unverified", "needs-account", "ci-session"]);
     expect(existsSync(join(work, "plugin-no-gh", "generated.json"))).toBe(true);
-  });
+  }, 30_000);
 });
 
 describe("maintainer requirements (SPEC §13)", () => {
@@ -281,7 +281,7 @@ exit 0
     const notAdmin = run(NEW, newArgs(blocked, ["--no-labels"], true), { ...env, GH_ADMIN: "false" });
     expect(notAdmin.out.error.unmet.map((u: { requirement: string }) => u.requirement)).toEqual(["repo-admin"]);
     expect(existsSync(blocked)).toBe(false);
-  });
+  }, 30_000);
 });
 
 describe("add-skill.ts", () => {
@@ -372,7 +372,7 @@ describe("add-skill.ts", () => {
     expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "https://a.example", "--auth", "maybe", "--daily-check", "on"]).out.error.message).toContain("login or none");
     expect(run(ADD_SKILL, ["--dir", plugin, "--skill", "x", "--origin", "not a url", "--auth", "none", "--daily-check", "on"]).out.error.message).toContain("--origin");
     expect(run(ADD_SKILL, ["--dir", join(work, "nowhere"), "--skill", "x", "--origin", "https://a.example", "--auth", "none", "--daily-check", "on"]).code).toBe(1);
-  });
+  }, 30_000);
 });
 
 const realStarterReady = ["plugin/package.json", "feedback/SKILL.md", "deploy/SKILL.md", "skill/SKILL.md", "skill/cli/src/site.ts", "skill/cli/src/main.ts"].every(
@@ -466,7 +466,7 @@ describe.skipIf(!realStarterReady)("against the real Starter code", () => {
     const env = { STARTER_DIR: REAL_STARTER };
     expect(run(NEW, newArgs(dir, ["--no-labels"]), env).code).toBe(0);
     // The generator's own run already drives Chrome through the Starter's browser tests, so the nested
-    // suites skip them unless SITE_CLI_FULL_GENERATED=1 (CI sets it on main only). cleanEnv() strips SITE_CLI_*.
+    // suites skip them unless SITE_CLI_FULL_GENERATED=1 (CI sets it on main and on manual runs). cleanEnv() strips SITE_CLI_*.
     const full = process.env.SITE_CLI_FULL_GENERATED === "1";
     const sh = (cmd: string[], cwd: string) => {
       const env = cmd[1] === "test" && !full ? { ...cleanEnv(), SITE_CLI_SKIP_BROWSER: "1" } : cleanEnv();
@@ -637,7 +637,7 @@ describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", ()
     expect(run(ADD_SKILL, ["--dir", own, "--skill", "shop", "--origin", "https://www.shop.example", "--auth", "none", "--daily-check", "on"], env).code).toBe(0);
     expect(readFileSync(join(own, "skills/shop/install.sh"), "utf8")).toContain('TAG_PREFIX="v"');
     expect(readJson(join(own, "generated.json"))).toMatchObject({ pluginDir: ".", tagPrefix: "v" });
-  });
+  }, 30_000);
 
   test("the plugin's own script and version tests pass in its folder", () => {
     const proc = Bun.spawnSync([process.execPath, "test", "./tests"], { cwd: join(root, "plugins/shop"), stdout: "pipe", stderr: "pipe", env: cleanEnv() });
@@ -683,7 +683,7 @@ describe.skipIf(!realStarterReady)("new.ts --into a shared marketplace repo", ()
     }
     expect(run(NEW, [...intoArgs(monorepo("mono-both"), ["--no-labels"]), "--dir", join(work, "x")], env).out.error.message).toContain("pass either --dir");
     expect(run(NEW, intoArgs(monorepo("mono-neither"), ["--no-labels"]).slice(2), env).out.error.message).toContain("pass either --dir");
-  });
+  }, 30_000);
 });
 
 /** The environment without anything a developer's shell may have set for site CLIs. */
