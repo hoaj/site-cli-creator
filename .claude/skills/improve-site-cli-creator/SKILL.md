@@ -70,7 +70,7 @@ Done when the new test fails for the reported reason, not for a typo in the test
 
 ### 6. Green gate
 
-The commands in [references/areas.md](references/areas.md#green-gate): full `bun test` (it includes the compiled end-to-end test), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Run `bun test` twice: browser tests that pass only sometimes are a bug to fix, not to rerun.
+The commands in [references/areas.md](references/areas.md#green-gate): full `bun test --parallel=3` (it includes the compiled end-to-end test), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Run `bun test --parallel=3` twice: browser tests that pass only sometimes are a bug to fix, not to rerun.
 
 Done when everything is green on both runs and the count line shows no new skips.
 

@@ -261,9 +261,8 @@ describe.skipIf(skip)("transport browser", () => {
   }, 60_000);
 
   test("ctx.cookies() on a site Chrome cannot load is a network failure, not an empty jar the hook takes for a bug (#95, review)", async () => {
-    const gone = Bun.serve({ port: 0, fetch: () => new Response("") });
-    const origin = gone.url.origin;
-    gone.stop(true);
+    // The reserved port 9 (discard) refuses connections; a port freed by a stopped server can be taken by a parallel file.
+    const origin = "http://127.0.0.1:9";
     const a = app({
       origin,
       transport: "browser",

@@ -716,7 +716,7 @@ for (const auth of ["none", "login"] as const) {
         headers = (await x.site.bootstrap(hookCtx(x.site, {}))).headers;
         ids = {};
       }
-    });
+    }, 60_000);
     afterAll(() => {
       site.stop();
       rmSync(x.dir, { recursive: true, force: true });
@@ -898,7 +898,7 @@ describe.skipIf(!HAS_CHROME)("expected code on the Starter runtime against the f
         const [call, check, login, envelope] = await Promise.all([r("call"), r("check"), r("login"), r("envelope")]);
         rt = { Client: call.Client, check: check.check, chromeLogin: login.chromeLogin, DryRun: envelope.DryRun };
         x = await importExpected(scaffold.src);
-      });
+      }, 60_000);
       afterAll(() => {
         site.stop();
         rmSync(dir, { recursive: true, force: true });
@@ -1091,7 +1091,7 @@ describe.skipIf(!HAS_CHROME)("frontend in headless Chrome", () => {
   let browser: Browser;
   beforeAll(async () => {
     browser = await chromium.launch({ executablePath: CHROME!, headless: true });
-  });
+  }, 60_000);
   afterAll(() => browser?.close());
 
   const open = async (site: FixtureSite) => {

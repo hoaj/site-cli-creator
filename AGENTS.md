@@ -34,4 +34,4 @@ Use the glossary's words exactly: **Task, Capture, Operation, Contract, Effect, 
 
 ## Checks
 
-Bun 1.4.3 (as CI), then `bun install --frozen-lockfile` at the root. The green gate (tests, both `tsc` projects, `actionlint`, `shellcheck`) is in the maintainer skill's `references/areas.md`; run `bun test` twice before a PR.
+Bun 1.4.3 (as CI), then `bun install --frozen-lockfile` at the root. The green gate (tests, both `tsc` projects, `actionlint`, `shellcheck`) is in the maintainer skill's `references/areas.md`; run `bun test --parallel=3` twice before a PR.
