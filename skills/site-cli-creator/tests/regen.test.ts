@@ -457,6 +457,6 @@ describe.skipIf(!realStarterReady)("against the real Starter code and the fixtur
       const refused = regen(skill);
       expect(refused.code).toBe(1);
       expect(refused.out.error.message).toContain("operations/closeAccount.ts: DELETE /api/account matches site.never DELETE /api/account* (Deleting the account)");
-    });
+    }, 30_000);
   }
 });

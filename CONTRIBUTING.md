@@ -22,7 +22,7 @@ Step-by-step installs: [setup.md](./.claude/skills/improve-site-cli-creator/refe
 Run the green gate from the repo root:
 
 ```sh
-bun test
+bun test --parallel=3
 bun x tsc --noEmit -p .
 bun x tsc --noEmit -p skills/site-cli-creator/starter/skill/cli
 actionlint .github/workflows/*.yml skills/site-cli-creator/starter/plugin/.github/workflows/*.yml

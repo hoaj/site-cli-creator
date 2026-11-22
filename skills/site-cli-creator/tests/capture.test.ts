@@ -686,7 +686,8 @@ describe("capture.ts flags", () => {
     expect(run(["--skill-dir", work, "--explore", "--task", "x", "--url", "https://a.example"]).out.error.message).toContain("--explore records no Task");
     expect(run(["--skill-dir", work, "--explore", "--write", "--url", "https://a.example"]).out.error.message).toContain("--explore is read-only");
     expect(run(["--skill-dir", work, "--task", "explore", "--url", "https://a.example"]).out.error.message).toContain("reserved for --explore");
-  });
+    // Ten bun start-ups in a row: only slow (5 s default timeout under --parallel=3 on a runner), nothing shared.
+  }, 30_000);
 
   test("--help documents every flag and the --script contract, exit 0", () => {
     const p = Bun.spawnSync([process.execPath, CAPTURE, "--help"], { stdout: "pipe", stderr: "pipe" });
