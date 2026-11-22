@@ -28,7 +28,7 @@ Use the glossary's words exactly: **Task, Capture, Operation, Contract, Effect, 
 - **Starter files are templates.** They hold tokens (`__PLUGIN__`, `__REPO__`, `__PREFIX__` …) and layout lines (`#@shared` / `#@standalone`) that `new` and `add-skill` fill; one Starter serves a plugin in its own repo and one in a shared repo (`new --dir` / `new --into`).
 - **Every PR that changes the plugin bumps its version** in the three manifests (users' agents cache plugins by version); `references/bump.md` in the maintainer skill lists the pins.
 - **Shapes, never values.** No real site data in the repo, tests, issues or PRs: no names, ids, amounts, tokens, cookies or raw traffic. Tests use the fixture site or values they plant themselves.
-- **Windows and Intel Mac exist only in CI.** A change that [CLAUDE.md](CLAUDE.md) lists (Pull requests, step 1) is done only when the five-platform matrix is green: `gh workflow run site-cli-creator.yml --ref <branch>`.
+- **Windows and Intel Mac exist only in CI.** A change that [CLAUDE.md](CLAUDE.md) lists (Pull requests, step 3) is done only when the five-platform matrix is green on the commit that merges: `gh workflow run site-cli-creator.yml --ref <branch>`.
 - **A green run without Chrome proves little:** the browser, Capture and e2e tests skip without it. Check the skip count.
 - **Throwaway scripts** go in `*.tmp.ts` files (gitignored) and are deleted after use.
 
