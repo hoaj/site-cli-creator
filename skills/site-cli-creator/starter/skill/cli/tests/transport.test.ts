@@ -261,21 +261,26 @@ describe.skipIf(skip)("transport browser", () => {
   }, 60_000);
 
   test("ctx.cookies() on a site Chrome cannot load is a network failure, not an empty jar the hook takes for a bug (#95, review)", async () => {
-    const gone = Bun.serve({ port: 0, fetch: () => new Response("") });
-    const origin = gone.url.origin;
-    gone.stop(true);
-    const a = app({
-      origin,
-      transport: "browser",
-      bootstrap: async (ctx) => {
-        const token = (await ctx.cookies()).csrf;
-        if (!token) throw new Error("no csrf cookie");
-        return { headers: { cookie: `csrf=${token}` } };
-      },
-    });
-    const r = await run(["ok", "show"], a);
-    expect(r.code).toBe(5);
-    expect((r.output as { error: { kind: string } }).error.kind).toBe("network");
+    // A listener that closes every connection as it opens: Chrome gets a real dropped connection, not a port its policy
+    // refuses (port 9 is on Chrome's restricted list: net::ERR_UNSAFE_PORT before any TCP attempt). The port stays held
+    // while the test runs, so a parallel file cannot take it the way it could a freed one.
+    const dropper = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { open: (s) => void s.end(), data() {} } });
+    try {
+      const a = app({
+        origin: `http://127.0.0.1:${dropper.port}`,
+        transport: "browser",
+        bootstrap: async (ctx) => {
+          const token = (await ctx.cookies()).csrf;
+          if (!token) throw new Error("no csrf cookie");
+          return { headers: { cookie: `csrf=${token}` } };
+        },
+      });
+      const r = await run(["ok", "show"], a);
+      expect(r.code).toBe(5);
+      expect((r.output as { error: { kind: string } }).error.kind).toBe("network");
+    } finally {
+      dropper.stop(true);
+    }
   }, 60_000);
 
   test("a front page that reloads itself once its script has run is waited for (review)", async () => {

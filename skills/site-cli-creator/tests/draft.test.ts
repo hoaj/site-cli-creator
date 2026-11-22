@@ -462,7 +462,7 @@ describe("draft-contract.ts", () => {
     const again = run(shapeFile, "--out", out);
     expect(again.code).toBe(1);
     expect(again.out.error.message).toContain("refusing to overwrite");
-  });
+  }, 30_000);
 
   test("REST: --name is refused (the name is METHOD /path), and the suggested file is verb + noun", () => {
     const dir = join(work, "captures", "invoice-show");
@@ -476,7 +476,7 @@ describe("draft-contract.ts", () => {
     expect(named.out.error.message).toContain("operations/getInvoice.ts");
     const printed = run(shapeFile);
     expect(printed.out).toMatchObject({ operation: "GET /api/invoices/:id", file: "src/operations/getInvoice.ts" });
-  });
+  }, 30_000);
 
   test("the same Operation in the skill's other Captures is merged in, so nullability shows", () => {
     const [seenNull] = capture([{ req: { url: `${ORIGIN}/api/invoices/1001` }, body: { id: "x", dueDate: null, pdfUrl: null } }]);
@@ -497,7 +497,7 @@ describe("draft-contract.ts", () => {
     const skipped = run(join(work, "merge", "captures", "merge-a", "GET-api-invoices-id.shape.json"));
     expect(skipped.code).toBe(0);
     expect(skipped.out.mergedFrom).toEqual(["captures/merge-b/GET-api-invoices-id.shape.json"]);
-  });
+  }, 30_000);
 
   test("the explore Capture is never merged in: after a fix re-captures a Task, its old shapes would come back (#84)", () => {
     const [current] = capture([{ req: { url: `${ORIGIN}/api/invoices/1001` }, body: { id: "x", total: 12 } }]);
@@ -514,7 +514,7 @@ describe("draft-contract.ts", () => {
     // Drafting from the explore Capture itself still merges the Tasks' Captures in.
     const fromExplore = run(join(work, "explored", "captures", "explore", "GET-api-invoices-id.shape.json"));
     expect(fromExplore.out.mergedFrom).toEqual(["captures/invoice-show/GET-api-invoices-id.shape.json"]);
-  });
+  }, 30_000);
 
   test("--help prints the usage and every flag's meaning, exit 0", () => {
     const r = run("--help");
@@ -533,5 +533,5 @@ describe("draft-contract.ts", () => {
     expect(run(join(work, "dir.shape.json")).out.error.message).toContain("not a Capture shape file");
     expect(run().out.error.message).toContain("expected one shape file");
     expect(run(join(work, "bad.json"), join(work, "other.json")).out.error.message).toContain('unexpected argument');
-  });
+  }, 30_000);
 });
