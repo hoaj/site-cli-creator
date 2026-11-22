@@ -6,7 +6,7 @@ You have the maintainer's standing yes to merge: review and merge every PR you o
 
 1. **Wait for green.**
    - **CI:** wait for the PR's checks. When its changed files all fall outside the `paths:` filter of `.github/workflows/site-cli-creator.yml`, CI never runs and there is nothing to wait for. Check that against the filter, never from an empty `gh pr checks`.
-   - **Five-platform matrix:** when the PR changes `install.sh`, `build.ts`, `main.ts`, `release.yml` or another Starter workflow, templating (`tools/lib/template.ts`), `package.json`, `bun.lock`, anything in the Starter CLI's `src/runtime/`, or its `tests/browser.test.ts`, `tests/transport.test.ts` or `tests/helpers.ts`, run `gh workflow run site-cli-creator.yml --ref <branch>`. That run must be green on the PR's latest commit too.
+   - **Five-platform matrix:** when the PR changes `install.sh`, `build.ts`, `main.ts`, `release.yml` or another Starter workflow, templating (`tools/lib/template.ts`), `package.json`, `bun.lock`, anything in the Starter CLI's `src/runtime/`, or its `tests/browser.test.ts`, `tests/transport.test.ts` or `tests/helpers.ts`, run `gh workflow run site-cli-creator.yml --ref <branch>`. That run must be green on the PR's latest commit too. Its `test` job also runs a generated plugin's Chrome tests, on Linux only; the other targets run the smoke test.
 2. **Review:** `/code-review high <n>`.
    - **Fixes:** fix every finding that holds up, with a red test first for a bug.
    - **Another round:** when a round found a correctness problem, push the fixes and go back to step 1. When it found only cleanup, push and go on to step 3.
