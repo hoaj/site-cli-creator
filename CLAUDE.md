@@ -7,16 +7,20 @@ You have the maintainer's standing yes to merge: review and merge every PR you o
 1. **Wait for green:** wait for the PR's checks. When its changed files all fall outside the `paths:` filter of `.github/workflows/site-cli-creator.yml`, CI never runs and there is nothing to wait for. Check that against the filter, never from an empty `gh pr checks`.
 2. **Review:** `/code-review high <n>`.
    - **Fixes:** fix every finding that holds up, with a red test first for a bug.
-   - **Another round:** when a round found a correctness problem, push the fixes and go back to step 1. When it found only cleanup, push and go on to step 3.
+   - **Another round:** when a round found a correctness problem, push the fixes and go back to step 1. When it found only cleanup, push, wait for the PR's checks on that commit and go on to step 3.
    - **The cap:** three rounds at most. If a correctness problem is still open after the third, stop without merging and tell the maintainer.
 3. **Merge.**
    - **Check main first:** `git fetch origin`. When `origin/main` has moved since the checks ran (always for a PR stacked on one that just merged), merge it into the branch, push, wait for green again, and review only that update if it needed more than a clean merge.
-   - **Five-platform matrix:** when the PR changes `install.sh`, `build.ts`, `main.ts`, `release.yml` or another Starter workflow, templating (`tools/lib/template.ts`), `package.json`, `bun.lock`, anything in the Starter CLI's `src/runtime/`, or its `tests/browser.test.ts`, `tests/transport.test.ts` or `tests/helpers.ts`, run `gh workflow run site-cli-creator.yml --ref <branch>`. Run it once, after the last review round and any merge of `main`, not after each round: it must be green on the commit you merge. When it fails on the PR's code, fix that, push and go back to step 1. Its `test` job also runs a generated plugin's Chrome tests, on Linux only; the other targets run the smoke test.
+   - **Five-platform matrix:** when the PR changes `install.sh`, `build.ts`, `main.ts`, `release.yml` or another Starter workflow, templating (`tools/lib/template.ts`), `package.json`, `bun.lock`, anything in the Starter CLI's `src/runtime/`, or its `tests/browser.test.ts`, `tests/transport.test.ts` or `tests/helpers.ts`, run `gh workflow run site-cli-creator.yml --ref <branch>`. Run it once, after the last review round and any merge of `main`, not after each round: it must be green on the PR's head commit. Its `test` job also runs a generated plugin's Chrome tests, on Linux only; the other targets run the smoke test. When it fails:
+     - **On a runner failure or a flake:** `gh run rerun <id> --failed`.
+     - **Because `main` itself is broken:** stop and tell the maintainer.
+     - **On the PR's code:** fix it, push and go back to step 1; that review counts as a round. After the third round, stop without merging and tell the maintainer.
    - **Then:**
-     1. Confirm `gh pr view <n> --json mergeable` says `MERGEABLE`.
-     2. Leave its worktree: ExitWorktree (keep), or `cd` to the main checkout when the session started inside it.
-     3. From the main checkout, remove the worktree at the path `git worktree list` shows.
-     4. Run `gh pr merge <n> --merge --delete-branch` (no `--repo`, which would keep the local branch).
+     1. `git fetch origin` again. When `origin/main` moved while the matrix ran, go back to **Check main first** and rerun the matrix on the new head.
+     2. Confirm `gh pr view <n> --json mergeable` says `MERGEABLE`.
+     3. Leave its worktree: ExitWorktree (keep), or `cd` to the main checkout when the session started inside it.
+     4. From the main checkout, remove the worktree at the path `git worktree list` shows.
+     5. Run `gh pr merge <n> --merge --delete-branch` (no `--repo`, which would keep the local branch).
 4. **Tell the maintainer,** after the merge and once:
    - the PR, what the review found and the merge commit;
    - for a generator change, also the skill's Relay items (version, issues closed, cold-read result, Starter code reach).
