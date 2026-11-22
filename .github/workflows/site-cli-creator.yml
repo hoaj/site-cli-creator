@@ -4,7 +4,7 @@ name: site-cli-creator
 # the Starter code's compiled CLI on every release target.
 # Cost: keep PR runs short; macOS minutes are the slowest to queue. A PR branch runs once
 # (pull_request; `push` is main only) and only on linux-x64; main and workflow_dispatch run all
-# five targets. Before merging a change to build.ts, install.sh, release.yml or main.ts, run the
+# five targets. Before merging a change that CLAUDE.md (Pull requests, step 1) lists, run the
 # full matrix on the branch: gh workflow run site-cli-creator.yml --ref <branch>.
 # A manual run (workflow_dispatch) runs the tests and then all five smoke targets. Tests run with
 # --parallel=3. SITE_CLI_FULL_GENERATED=1 (a push to main, or any manual run) makes the scaffold test

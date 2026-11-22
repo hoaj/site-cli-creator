@@ -98,6 +98,6 @@ After the merge, in the one report CLAUDE.md step 4 asks for, tell the maintaine
 
 - **Windows binaries:** `import.meta.main` is false in a binary built with the `Bun.build` API's `compile` option on Windows. The Starter `main.ts` guards with `isEntry()`. Keep it, and keep the smoke job on windows-latest green.
 - **No real site data in this repo.** Reports carry shapes only; tests use the fixture site's fake data or values they plant themselves.
-- **CI is the only Windows and Intel-Mac test bed.** A change to `build.ts`, `install.sh`, `release.yml` or `main.ts` is done only when the smoke job passes on all five targets (a PR runs linux-x64 only: dispatch the full matrix on the branch with `gh workflow run site-cli-creator.yml --ref <branch>`).
+- **CI is the only Windows and Intel-Mac test bed.** A change that the repo's CLAUDE.md lists (Pull requests, step 1) is done only when the smoke job passes on all five targets (a PR runs linux-x64 only: dispatch the full matrix on the branch with `gh workflow run site-cli-creator.yml --ref <branch>`).
 
 A worked round (0.2.0, issues #33–#39, PR #40): [references/worked-example.md](references/worked-example.md).
