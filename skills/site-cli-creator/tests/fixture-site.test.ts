@@ -1223,6 +1223,7 @@ describe.skipIf(!HAS_CHROME)("frontend in headless Chrome", () => {
     try {
       const context = await browser.newContext({ baseURL: site.url });
       context.setDefaultTimeout(1_500);
+      context.setDefaultNavigationTimeout(10_000);
       const page = await context.newPage();
       const error = await x.ops.addNote.trigger(page).then(() => null, (e: Error) => e);
       expect(error?.name).toBe("TimeoutError");
