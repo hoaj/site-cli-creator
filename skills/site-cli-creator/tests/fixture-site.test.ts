@@ -206,7 +206,7 @@ describe("fixture site, auth none", () => {
   test("the html-layout drift renders the same notices, streets included, so a repair can find every field (#124)", () => {
     const streets = (layout: "list" | "moved", each: string, css: string) =>
       extractHtml(noticesPage(NOTICES, null, layout), { notices: { each, fields: { streets: { css, lines: true } } } });
-    const want = { ok: true, value: { notices: NOTICES.map((n) => ({ streets: n.streets })) } };
+    const want = { ok: true as const, value: { notices: NOTICES.map((n) => ({ streets: n.streets })) } };
     expect(streets("list", "li.notice", "p.streets")).toEqual(want);
     expect(streets("moved", "div.card", "span.road-list")).toEqual(want);
   });
