@@ -414,13 +414,14 @@ await runTool(async () => {
   const stop = watchStop(context, page, (url) => recorder.inScope(url), !script);
   let scriptError: Error | undefined;
   let stoppedBy: string;
-  let start: StartAnswer | undefined;
+  let startResponse: PageResponse | null = null;
   try {
-    start = await startAnswer(await page.goto(startUrl));
+    startResponse = await page.goto(startUrl);
   } catch (error) {
     if (script) scriptError = new Error(`could not open --url: ${firstLine((error as Error).message)}`);
     else progress(`could not open --url (${firstLine((error as Error).message)}); navigate in the browser`);
   }
+  const start = await startAnswer(startResponse).catch(() => undefined);
   if (script && !scriptError) {
     const finished = script(page).then(
       () => "script finished",
@@ -465,9 +466,17 @@ await runTool(async () => {
   const suspectNote = suspects.size
     ? ` A write was aborted on ${[...suspects].sort().join(", ")}, which the sign-in may go through: if signing in stalled, capture again with ${[...suspects].sort().map((h) => `--login-host ${h}`).join(" ")}.`
     : "";
+  // The start page refused this Chrome and nothing else answered (#119): the Task's data never loaded.
+  const answered = operations.some((op) => !op.loginFlow && op.responses.some((r) => r.status >= 200 && r.status < 300));
+  const refused =
+    start && REFUSALS.has(start.status) && !answered
+      ? `The start page answered ${start.status}${start.blocked ? `, a ${start.blocked} bot wall's block page` : ""}, and no call answered 2xx: the site refused this Chrome, so the Task's data never loaded and this Capture holds none of its Operations. ` +
+        `${values.headless ? "Capture again headed (without --headless), so a person can pass any challenge in the window. " : ""}The CLI will likely meet the same wall: reference/fix.md#2c-a-bot-block.`
+      : undefined;
+  const refusedNote = refused ? ` ${refused}` : "";
   if (operations.length === 0) {
     const why = scriptError ? `--script failed: ${firstLine(scriptError.message)}; ` : "";
-    fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was.${suspectNote}`);
+    fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was.${suspectNote}${refusedNote}`);
   }
   const files = shapeFileNames(operations, new URL(origin).hostname);
   mkdirSync(dir, { recursive: true });
@@ -502,17 +511,10 @@ await runTool(async () => {
   };
   writeJson(join(dir, "index.json"), index);
 
-  if (scriptError) fail(`--script failed: ${firstLine(scriptError.message)} (shapes so far written to ${dir}).${suspectNote}`);
+  if (scriptError) fail(`--script failed: ${firstLine(scriptError.message)} (shapes so far written to ${dir}).${suspectNote}${refusedNote}`);
   const blockedElsewhere = [...recorder.blockedElsewhere].sort();
   const hints: string[] = [];
-  // The start page refused this Chrome and nothing else answered (#119): the Task's data never loaded.
-  const answered = operations.some((op) => !op.loginFlow && op.responses.some((r) => r.status >= 200 && r.status < 300));
-  if (start && REFUSALS.has(start.status) && !answered) {
-    hints.push(
-      `The start page answered ${start.status}${start.blocked ? `, a ${start.blocked} bot wall's block page` : ""}, and no call answered 2xx: the site refused this Chrome, so the Task's data never loaded and this Capture holds none of its Operations. ` +
-        `${values.headless ? "Capture again headed (without --headless), so a person can pass any challenge in the window. " : ""}The CLI will likely meet the same wall: reference/fix.md#2c-a-bot-block.`,
-    );
-  }
+  if (refused) hints.push(refused);
   if (values.write && !recorder.wrote) {
     hints.push(
       "No write went through: none came after a click, key press or submit" +

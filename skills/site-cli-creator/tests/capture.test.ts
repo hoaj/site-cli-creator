@@ -672,6 +672,14 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(r.everything).not.toContain(RAY_ID);
   }, 120_000);
 
+  test("a --script that fails on a refused start page: the error says the start page was refused (#119)", async () => {
+    const r = await capture(join(work, "walled-broken-skill"), ["--script", join(work, "broken.ts")], "/walled");
+    expect(r.code).toBe(1);
+    expect(r.out.error.message).toContain("--script failed: nope");
+    expect(r.out.error.message).toContain("The start page answered 403");
+    expect(r.out.error.message).toContain("fix.md#2c-a-bot-block");
+  }, 120_000);
+
   test("a 403 start page no wall rule recognises, and nothing else answered: the hint names the status only (#119)", async () => {
     const r = await capture(join(work, "forbidden-skill"), ["--script", join(work, "noop.ts")], "/forbidden");
     expect(r.code).toBe(0);
