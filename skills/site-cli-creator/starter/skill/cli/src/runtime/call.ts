@@ -817,10 +817,13 @@ export class Client {
     await this.probeSession();
     // A write answered with a sign-in page (a redirect to a login host or a login.paths entry, or a login.signedOutSelector
     // match) is never sent again, whichever answer it is (the first, or the resend after a renew): a POST's redirect to a
-    // sign-in page or a 200 form cannot be told from a success that landed there, so it may have taken effect.
+    // sign-in page or a 200 form cannot be told from a success that landed there, so it may have taken effect. So is a
+    // GraphQL write whose root field answered (it ran) with an UNAUTHENTICATED error below it.
     const neverResend = async (r: Response_): Promise<Response_> => {
-      if (r.loginRedirect && op.effect !== "read") {
-        const how = r.signedOut === "path" ? "a redirect to its sign-in page" : r.signedOut === "selector" ? "its sign-in form" : "a redirect to a login host";
+      if (op.effect === "read") return r;
+      const ran = op.graphql !== undefined && hasRootData(r.body) && gqlErrors(r.body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
+      if (r.loginRedirect || ran) {
+        const how = ran ? "a sign-in error (UNAUTHENTICATED) after the write ran" : r.signedOut === "path" ? "a redirect to its sign-in page" : r.signedOut === "selector" ? "its sign-in form" : "a redirect to a login host";
         // The write is not sent again, but the sign-in is still renewed where reauthenticate() would (login.refresh, plain
         // fetch, no Chrome), so the next run is signed in. Nothing proves the renewal took, so `next` keeps the login step
         // for a run that ends this way again. A site.never refusal of renew's own request is the bug it is everywhere.
@@ -929,9 +932,6 @@ export class Client {
 
   private isAuthFailure(op: Operation, res: Response_): boolean {
     if (res.status === 401 || res.status === 403 || res.loginRedirect) return true;
-    // A GraphQL write whose root field answered ran (partial success): an UNAUTHENTICATED error on a field below it is no
-    // reason to sign in and send it again.
-    if (op.effect !== "read" && op.graphql !== undefined && hasRootData(res.body)) return false;
     return op.graphql !== undefined && gqlErrors(res.body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
   }
 
