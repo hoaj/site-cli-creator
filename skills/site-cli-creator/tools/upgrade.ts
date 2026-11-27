@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 // bun tools/upgrade.ts --dir <plugin> [--starters <folder>]
-// Brings a plugin's Starter code to this generator's (SPEC §5 upgrade): renders the Starter code each
-// part was copied from (the plugin's own files: generated.json's generatedWith; each CLI skill: its
-// version in generated.json's `skills`, else the closest one) and this generator's, merges each
-// Starter file three ways, leaves the site's own code alone, and records the new generatedWith.
+// Brings a plugin's Starter code to this generator's (SPEC §5 upgrade): renders every past Starter version
+// from the one each part was copied from (the plugin's own files: generated.json's generatedWith; each CLI
+// skill: its version in generated.json's `skills`, else generatedWith) and this generator's, merges each
+// Starter file three ways from the past version closest to it, leaves the site's own code alone, and
+// records the new generatedWith.
 // Past Starter code comes from the generator's version tags on GitHub, or from --starters.
 // STARTER_DIR overrides the target (tests only).
 
@@ -15,18 +16,7 @@ import { readJson, writeJson } from "./lib/manifests";
 import { fail, progress, runTool } from "./lib/output";
 import { GENERATOR_ROOT, generatorVersion, starterDir } from "./lib/paths";
 import { repoFromManifest, requireDir } from "./lib/scaffold";
-import {
-  closestSkillVersion,
-  compareVersions,
-  isSiteCode,
-  localStarters,
-  mergeStarter,
-  pickBase,
-  readPlugin,
-  renderStarter,
-  type StarterParts,
-  type StarterSource,
-} from "./lib/upgrade";
+import { compareVersions, isSiteCode, localStarters, mergeStarter, pickBase, readPlugin, renderStarter, skillOf, type StarterSource } from "./lib/upgrade";
 
 const USAGE = "bun tools/upgrade.ts --dir <plugin> [--starters <folder>]";
 const OFFLINE = "or pass --starters <folder> holding a <X.Y.Z>/ copy of each version's skills/site-cli-creator/starter/";
@@ -105,43 +95,45 @@ await runTool(async () => {
   const scratch = mkdtempSync(join(tmpdir(), "site-cli-upgrade-"));
   try {
     const source = values.starters ? localStarters(requireDir(resolve(values.starters), "--starters")) : githubStarters(repo, scratch);
-    const target = starterDir();
-    // This generator's Starter code is the target, and also a candidate base for a skill added with it.
-    const versions = [...new Set([...source.versions.filter((v) => compareVersions(v, to) < 0), to])].sort(compareVersions);
-    const get = (v: string) => (v === to ? Promise.resolve(target) : source.get(v));
+    const past = source.versions.filter((v) => compareVersions(v, to) < 0);
 
-    const pluginBase = pickBase(versions, from);
+    // The version each part was copied from: its floor. Only Starter code from there up can be a file's base.
+    const pluginBase = pickBase(past, from);
     if (!pluginBase) fail(`no Starter code at or below ${from} (the plugin's generatedWith) in ${values.starters ?? `${repo}'s tags`}, ${OFFLINE}`);
-    const parts: StarterParts = { plugin: await get(pluginBase.version), skills: {} };
-    const skillBases: Record<string, { version: string; from: "generated.json" | "closest"; approximate?: true; linesApart?: number }> = {};
+    const skillBases: Record<string, { version: string; from: "generated.json" | "generatedWith"; approximate?: true }> = {};
     for (const skill of state.skills) {
       const want = state.skillVersions[skill.name];
-      if (want) {
-        const b = pickBase(versions, want);
-        if (!b) fail(`no Starter code at or below ${want} (skills/${skill.name} in generated.json), ${OFFLINE}`);
-        parts.skills[skill.name] = await get(b.version);
-        skillBases[skill.name] = { version: b.version, from: "generated.json", ...(b.approximate ? { approximate: true as const } : {}) };
+      if (want && compareVersions(want, to) >= 0) {
+        skillBases[skill.name] = { version: to, from: "generated.json" };
         continue;
       }
-      // No record (a skill added before add-skill wrote one): the closest version from the plugin's own up.
-      progress(`finding the Starter version skills/${skill.name} was copied from`);
-      const candidates = [];
-      for (const v of versions.filter((v) => compareVersions(v, pluginBase.version) >= 0)) candidates.push({ version: v, starter: await get(v) });
-      const best = closestSkillVersion(candidates, state, skill, scratch);
-      parts.skills[skill.name] = await get(best.version);
-      skillBases[skill.name] = { version: best.version, from: "closest", linesApart: best.linesApart };
+      // A skill with no record (added before add-skill kept one) is only known to be no older than the plugin.
+      const b = want ? pickBase(past, want) : pluginBase;
+      if (!b) fail(`no Starter code at or below ${want} (skills/${skill.name} in generated.json), ${OFFLINE}`);
+      skillBases[skill.name] = { version: b.version, from: want ? "generated.json" : "generatedWith", ...(b.approximate ? { approximate: true as const } : {}) };
     }
+    const floors = [pluginBase.version, ...Object.values(skillBases).map((b) => b.version)];
+    const oldest = floors.sort(compareVersions)[0]!;
 
-    progress(`rendering the Starter code it came from and v${to} for ${state.plugin}`);
-    renderStarter(parts, join(scratch, "base"), state, from);
-    const targetParts: StarterParts = { plugin: target, skills: {} };
-    renderStarter(targetParts, join(scratch, "target"), state, to);
+    const renders = [];
+    for (const v of past.filter((v) => compareVersions(v, oldest) >= 0)) {
+      const dir = join(scratch, "renders", v);
+      renderStarter(await source.get(v), dir, state, from);
+      renders.push({ version: v, dir });
+    }
+    progress(`merging the Starter code of v${oldest}…v${to} into ${state.plugin}`);
+    const target = starterDir();
+    renderStarter(target, join(scratch, "target"), state, to);
     const report = mergeStarter(
       state.root,
-      join(scratch, "base"),
-      join(scratch, "target"),
+      renders,
+      { version: to, dir: join(scratch, "target") },
+      (rel) => {
+        const skill = skillOf(rel, state);
+        return skill ? skillBases[skill]!.version : pluginBase.version;
+      },
       scratch,
-      [state.plugin, "starter it came from", `starter v${to}`],
+      (v) => [state.plugin, `starter v${v}`, `starter v${to}`],
       (rel) => isSiteCode(rel, state),
     );
     // Every part is at this version now, so the per-skill record goes.
@@ -150,15 +142,16 @@ await runTool(async () => {
     writeJson(genPath, { ...generated, generatedWith: to });
 
     // The site's own site.ts is never merged, but the runtime may read fields the new Starter site.ts added.
-    const oldest = [pluginBase.version, ...Object.values(skillBases).map((b) => b.version)].sort(compareVersions)[0]!;
-    const siteDiff = run(["git", "diff", "--no-index", "--no-color", join(await get(oldest), "skill/cli/src/site.ts"), join(target, "skill/cli/src/site.ts")]);
-    const touched = [...report.added, ...report.updated, ...report.merged, ...report.conflicts];
+    const siteDiff = run(["git", "diff", "--no-index", "--no-color", join(await source.get(oldest), "skill/cli/src/site.ts"), join(target, "skill/cli/src/site.ts")]);
+    const touched = [...report.added, ...report.updated, ...report.merged, ...report.conflicts, ...report.binaryConflicts];
+    // The generator's commits between the versions; this version may not be tagged yet (version-tags.yml runs on main).
+    const head = source.versions.includes(to) ? `v${to}` : "main";
     return {
       dir,
       from,
       to,
       bases: { plugin: { version: pluginBase.version, ...(pluginBase.approximate ? { approximate: true } : {}) }, skills: skillBases },
-      compare: `https://github.com/${repo}/compare/v${oldest}...v${to}`,
+      compare: `https://github.com/${repo}/compare/v${oldest}...${head}`,
       ...report,
       siteTemplateDiff: siteDiff.out.trim() || null,
       workflowsChanged: touched.some((f) => f.startsWith(".github/workflows/")),

@@ -4,7 +4,7 @@
 // Both the base and the target Starter code are rendered with the plugin's own values, as new and
 // add-skill would have written them, and each Starter file is merged three ways: the plugin's file, the
 // base render and the target render. The site's own code is never touched.
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, sep } from "node:path";
 import { MANIFESTS, MARKETPLACES, readJson } from "./manifests";
 import { fail } from "./output";
@@ -132,77 +132,28 @@ export function readPlugin(dir: string): PluginState {
 /** Paths in a CLI skill that hold the site's own code or what regen writes: the merge never touches them. */
 const SITE_CODE = [/^cli\/src\/site\.ts$/, /^cli\/src\/registry\.ts$/, /^cli\/src\/(operations|commands|lib)\//, /^captures\//];
 
-/** Which starter/ folder each part of the plugin is rendered from: the plugin's own files, and each CLI skill. */
-export type StarterParts = { plugin: string; skills: Record<string, string> };
-
 /**
- * Renders the Starter code for this plugin into `out`, laid out like the plugin's repo root, with the
- * plugin's current version in every pin, so two renders differ only where the Starter code changed.
+ * Renders one version's Starter code for this plugin into `out`, laid out like the plugin's repo root, with
+ * the plugin's current version in every pin, so two renders differ only where the Starter code changed.
  * `generatorVersion` fills __GENERATOR_VERSION__, which add-skill also filled with the plugin's generatedWith.
  */
-export function renderStarter(parts: StarterParts, out: string, state: PluginState, generatorVersion: string): void {
+export function renderStarter(starter: string, out: string, state: PluginState, generatorVersion: string): void {
   const tokens: Tokens = { ...state.tokens, GENERATOR_VERSION: generatorVersion };
   const dir = join(out, state.pluginDir);
-  copyPluginStarter(parts.plugin, out, dir, tokens, state.layout, state.version);
-  for (const skill of state.skills) renderSkill(parts.skills[skill.name] ?? parts.plugin, join(dir, "skills", skill.name), state, skill, generatorVersion);
-}
-
-function renderSkill(starter: string, skillDir: string, state: PluginState, skill: PluginSkill, generatorVersion: string): void {
-  const tokens: Tokens = { ...state.tokens, GENERATOR_VERSION: generatorVersion, SKILL: skill.name, ORIGIN: skill.origin, AUTH: skill.auth };
-  copySkillStarter(join(starter, "skill"), skillDir, tokens, state.layout, state.version);
-}
-
-/** Lines that differ between two folders (`git diff --no-index --numstat`, added plus deleted). */
-function linesApart(a: string, b: string): number {
-  const proc = Bun.spawnSync(["git", "diff", "--no-index", "--numstat", a, b], { stdout: "pipe", stderr: "pipe" });
-  if ((proc.exitCode ?? 2) > 1) fail(`git diff --no-index failed: ${proc.stderr.toString().trim()}`);
-  let n = 0;
-  for (const line of proc.stdout.toString().split("\n")) {
-    const [added, deleted] = line.split("\t");
-    if (added && added !== "-") n += Number(added) + Number(deleted);
+  copyPluginStarter(starter, out, dir, tokens, state.layout, state.version);
+  for (const skill of state.skills) {
+    const skillTokens: Tokens = { ...tokens, SKILL: skill.name, ORIGIN: skill.origin, AUTH: skill.auth };
+    copySkillStarter(join(starter, "skill"), join(dir, "skills", skill.name), skillTokens, state.layout, state.version);
   }
-  return n;
 }
 
-/**
- * The Starter version a CLI skill was most likely copied from, for a plugin with no record of it: of the
- * `candidates`, the one whose render differs from the skill's Starter files by the fewest lines (the
- * newest on a tie). A skill the plugin edited still lands on the version it came from, since every other
- * version adds that version's own differences on top.
- */
-export function closestSkillVersion(
-  candidates: { version: string; starter: string }[],
-  state: PluginState,
-  skill: PluginSkill,
-  scratch: string,
-): { version: string; linesApart: number } {
-  const root = join(scratch, "infer", skill.name);
-  const renders = candidates.map((c) => {
-    const out = join(root, c.version);
-    renderSkill(c.starter, out, state, skill, state.generatedWith);
-    return { ...c, out };
-  });
-  // The plugin's copy of every file some candidate has, outside the site's own code.
-  const mine = join(root, "plugin");
-  const skillDir = join(state.root, state.pluginDir, "skills", skill.name);
-  const starterFiles = new Set(renders.flatMap((r) => listFiles(r.out)).filter((rel) => !SITE_CODE.some((re) => re.test(rel))));
-  for (const rel of starterFiles) {
-    if (existsSync(join(skillDir, rel))) {
-      mkdirSync(dirname(join(mine, rel)), { recursive: true });
-      cpSync(join(skillDir, rel), join(mine, rel));
-    }
-  }
-  mkdirSync(mine, { recursive: true });
-  let best: { version: string; linesApart: number } | null = null;
-  for (const r of renders) {
-    for (const rel of listFiles(r.out)) if (SITE_CODE.some((re) => re.test(rel))) rmSync(join(r.out, rel));
-    const n = linesApart(r.out, mine);
-    if (!best || n < best.linesApart || (n === best.linesApart && compareVersions(r.version, best.version) > 0)) best = { version: r.version, linesApart: n };
-  }
-  if (!best) fail(`no Starter version to compare skills/${skill.name} with`);
-  return best;
+/** The CLI skill a repo-relative path belongs to, or null for the plugin's own files. */
+export function skillOf(rel: string, state: PluginState): string | null {
+  const prefix = `${state.pluginDir === "." ? "" : `${state.pluginDir}/`}skills/`;
+  if (!rel.startsWith(prefix)) return null;
+  const name = rel.slice(prefix.length).split("/")[0];
+  return state.skills.some((s) => s.name === name) ? (name as string) : null;
 }
-
 
 export function isSiteCode(rel: string, state: PluginState): boolean {
   for (const skill of state.skills) {
@@ -228,91 +179,150 @@ function listFiles(dir: string): string[] {
 export type MergeReport = {
   /** New in the Starter code, now in the plugin. */
   added: string[];
-  /** Unchanged in the plugin since it was copied: replaced with the new Starter file. */
+  /** Equal to a past Starter file (never edited in the plugin): replaced with the new Starter file. */
   updated: string[];
-  /** Changed in both, on different lines: merged cleanly. */
+  /** Edited in the plugin and changed in the Starter code, on different lines: merged cleanly. */
   merged: string[];
-  /** Changed in both on the same lines (conflict markers written), or a binary file changed in both (left as it was). */
+  /** Edited in the plugin and changed in the Starter code on the same lines: conflict markers written. */
   conflicts: string[];
+  /** A binary file edited in the plugin and changed in the Starter code: left as it was, no markers. */
+  binaryConflicts: string[];
   /** In the old Starter code and not the new: reported, never deleted. */
   removedFromStarter: string[];
   /** Changed in the Starter code, but the plugin deleted its copy: left deleted. */
   deletedInPlugin: string[];
+  /**
+   * Edited files merged from a newer base than their part's (`bases`): the plugin's file is closest to that
+   * version's, as when it took a later Starter fix by hand. Starter changes up to that version are taken as
+   * already in the file.
+   */
+  newerBases: Record<string, string>;
 };
+
+/** One version's Starter code rendered for this plugin (renderStarter). */
+export type Render = { version: string; dir: string };
 
 const isBinary = (buf: Buffer) => buf.subarray(0, 8000).includes(0);
 
-function writeLike(target: string, content: Buffer | string, modeFrom: string): void {
-  mkdirSync(dirname(target), { recursive: true });
-  writeFileSync(target, content);
-  chmodSync(target, statSync(modeFrom).mode & 0o777);
+/** A file's content for comparing and merging: text with LF line endings (a Windows checkout has CRLF), binary as is. */
+function content(path: string): Buffer {
+  const raw = readFileSync(path);
+  return isBinary(raw) ? raw : Buffer.from(raw.toString("utf8").replace(/\r\n/g, "\n"));
+}
+
+const execBits = (path: string) => statSync(path).mode & 0o111;
+
+/** How far apart two texts are: the lines one has that the other lacks, counted both ways (a line multiset). */
+function linesApart(a: Buffer, b: Buffer): number {
+  const counts = new Map<string, number>();
+  for (const line of a.toString("utf8").split("\n")) counts.set(line, (counts.get(line) ?? 0) + 1);
+  let n = 0;
+  for (const line of b.toString("utf8").split("\n")) {
+    const c = counts.get(line) ?? 0;
+    if (c > 0) counts.set(line, c - 1);
+    else n++;
+  }
+  for (const c of counts.values()) n += c;
+  return n;
 }
 
 /**
- * `git merge-file --diff3` of ours (the plugin's file) with base and theirs; returns the merged text and
- * whether it holds conflicts. The labels name the sides in the conflict markers.
+ * `git merge-file --diff3` of ours (the plugin's file) with base and theirs, all LF text; returns the merged
+ * text and whether it holds conflicts. The labels name the sides in the conflict markers.
  */
-function mergeFile(ours: string, base: string, theirs: string, labels: [string, string, string]): { text: string; conflict: boolean } {
-  const proc = Bun.spawnSync(
-    ["git", "merge-file", "-p", "--diff3", "-L", labels[0], "-L", labels[1], "-L", labels[2], ours, base, theirs],
-    { stdout: "pipe", stderr: "pipe" },
-  );
+function mergeFile(scratch: string, ours: Buffer, base: Buffer, theirs: Buffer, labels: [string, string, string]): { text: Buffer; conflict: boolean } {
+  const [o, b, t] = ["ours", "base", "theirs"].map((n) => join(scratch, `merge-${n}`)) as [string, string, string];
+  writeFileSync(o, ours);
+  writeFileSync(b, base);
+  writeFileSync(t, theirs);
+  const proc = Bun.spawnSync(["git", "merge-file", "-p", "--diff3", "-L", labels[0], "-L", labels[1], "-L", labels[2], o, b, t], { stdout: "pipe", stderr: "pipe" });
   const code = proc.exitCode ?? 255;
-  if (code < 0 || code > 127) fail(`git merge-file failed on ${ours}: ${proc.stderr.toString().trim() || `exit ${code}`}`);
-  return { text: proc.stdout.toString(), conflict: code > 0 };
+  if (code < 0 || code > 127) fail(`git merge-file failed: ${proc.stderr.toString().trim() || `exit ${code}`}`);
+  return { text: Buffer.from(proc.stdout), conflict: code > 0 };
 }
 
 /**
- * Merges every Starter file from the base render to the target render into the plugin at `root`, by the
- * rules of SPEC §5: a file the plugin never changed takes the target, a file only the plugin changed stays,
- * a file both changed is merged (conflict markers where they touch the same lines), a new Starter file is
- * added, and a removed one or one the plugin deleted is only reported. `skip` leaves out the site's code.
+ * Merges every Starter file into the plugin at `root`, by the rules of SPEC §5. `renders` are the past
+ * versions' renders (ascending) and `target` this generator's; `floor(rel)` is the version the file's part
+ * was copied from (generatedWith, or a CLI skill's own), and only renders from it up are a file's bases: a
+ * part already at the target's version is left as it is.
+ * A file equal to one of them was never edited and takes the target; an edited one is merged three ways
+ * from the closest of them (fewest lines apart, the older on a tie, so a doubt applies a change twice
+ * rather than skipping it); a new Starter file is added, and a removed one or one the plugin deleted is
+ * only reported. A change of only the executable bit is applied too. `skip` leaves out the site's code.
  */
 export function mergeStarter(
   root: string,
-  base: string,
-  target: string,
+  renders: Render[],
+  target: Render,
+  floor: (rel: string) => string,
   scratch: string,
-  labels: [string, string, string],
+  labels: (version: string) => [string, string, string],
   skip: (rel: string) => boolean,
 ): MergeReport {
-  const report: MergeReport = { added: [], updated: [], merged: [], conflicts: [], removedFromStarter: [], deletedInPlugin: [] };
-  const empty = join(scratch, "empty");
-  writeFileSync(empty, "");
-  const baseFiles = new Set(listFiles(base));
-  const targetFiles = new Set(listFiles(target));
-  for (const rel of [...new Set([...baseFiles, ...targetFiles])].sort()) {
-    if (skip(rel)) continue;
+  const report: MergeReport = { added: [], updated: [], merged: [], conflicts: [], binaryConflicts: [], removedFromStarter: [], deletedInPlugin: [], newerBases: {} };
+  const files = new Map(renders.map((r) => [r.version, new Set(listFiles(r.dir))]));
+  const targetFiles = new Set(listFiles(target.dir));
+  const all = new Set(targetFiles);
+  for (const set of files.values()) for (const rel of set) all.add(rel);
+  for (const rel of [...all].sort()) {
+    if (skip(rel) || compareVersions(floor(rel), target.version) >= 0) continue;
+    const bases = renders.filter((r) => compareVersions(r.version, floor(rel)) >= 0 && files.get(r.version)!.has(rel));
     const mine = join(root, rel);
     const inPlugin = existsSync(mine);
     if (!targetFiles.has(rel)) {
-      if (inPlugin) report.removedFromStarter.push(rel);
+      if (inPlugin && bases.length) report.removedFromStarter.push(rel);
       continue;
     }
-    const theirs = readFileSync(join(target, rel));
-    const old = baseFiles.has(rel) ? readFileSync(join(base, rel)) : null;
-    if (old && old.equals(theirs)) continue; // the Starter code did not change this file
+    const theirsPath = join(target.dir, rel);
+    const theirs = content(theirsPath);
+    const first = bases[0];
     if (!inPlugin) {
-      if (old) report.deletedInPlugin.push(rel);
-      else {
-        writeLike(mine, theirs, join(target, rel));
+      if (!first) {
+        mkdirSync(dirname(mine), { recursive: true });
+        writeFileSync(mine, theirs);
+        chmodSync(mine, statSync(theirsPath).mode & 0o777);
         report.added.push(rel);
-      }
+      } else if (!content(join(first.dir, rel)).equals(theirs)) report.deletedInPlugin.push(rel);
       continue;
     }
-    const current = readFileSync(mine);
-    if (current.equals(theirs)) continue; // already the new Starter file
-    if (old && current.equals(old)) {
-      writeLike(mine, theirs, join(target, rel));
+    const current = content(mine);
+    // The executable bit: take the target's when the plugin kept the one its part came with.
+    const fixMode = () => {
+      if (first && execBits(mine) === execBits(join(first.dir, rel)) && execBits(mine) !== execBits(theirsPath)) {
+        chmodSync(mine, (statSync(mine).mode & ~0o111 & 0o777) | execBits(theirsPath));
+      }
+    };
+    if (current.equals(theirs)) {
+      fixMode();
+      continue;
+    }
+    const exact = bases.find((r) => content(join(r.dir, rel)).equals(current));
+    if (exact) {
+      writeFileSync(mine, theirs);
+      fixMode();
       report.updated.push(rel);
       continue;
     }
-    if (isBinary(current) || isBinary(theirs) || (old && isBinary(old))) {
-      report.conflicts.push(rel);
+    let base: { version: string; text: Buffer } | null = null;
+    let best = Infinity;
+    for (const r of bases) {
+      const text = content(join(r.dir, rel));
+      const n = isBinary(text) || isBinary(current) ? 0 : linesApart(text, current);
+      if (n < best) {
+        best = n;
+        base = { version: r.version, text };
+      }
+    }
+    if (base && base.text.equals(theirs)) continue; // the plugin's edit already holds every Starter change to it
+    if (isBinary(current) || isBinary(theirs) || (base && isBinary(base.text))) {
+      report.binaryConflicts.push(rel);
       continue;
     }
-    const { text, conflict } = mergeFile(mine, old ? join(base, rel) : empty, join(target, rel), labels);
+    if (base && first && base.version !== first.version) report.newerBases[rel] = base.version;
+    const { text, conflict } = mergeFile(scratch, current, base?.text ?? Buffer.alloc(0), theirs, labels(base?.version ?? "none"));
     writeFileSync(mine, text);
+    fixMode();
     (conflict ? report.conflicts : report.merged).push(rel);
   }
   return report;

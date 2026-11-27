@@ -1,7 +1,7 @@
 // upgrade (SPEC §5, #118): a plugin made with an older Starter code is brought to this one by a three-way
 // merge. The base Starter here is a copy of the real one with known changes; the target is the real one.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import { generatorVersion, SKILL_ROOT } from "../tools/lib/paths";
@@ -104,6 +104,9 @@ beforeAll(() => {
   later = join(starters, LATER);
   cpSync(base, later, { recursive: true });
   edit(join(later, "skill/cli/src/runtime/envelope.ts"), "// stdout carries one JSON document", "// stdout carries exactly one JSON document");
+  edit(join(later, "skill/install.sh"), "# Run it when the binary is missing", "# Run it once, when the binary is missing");
+  // and a line of its own that the target changes back
+  edit(join(later, "skill/cli/src/runtime/envelope.ts"), "Progress goes to stderr.", "Progress goes to stderr (later).");
 });
 
 afterAll(() => rmSync(work, { recursive: true, force: true }));
@@ -137,6 +140,9 @@ describe("upgrade, a plugin in its own repo", () => {
     edit(join(shop, "install.sh"), "#   5. macOS: strip quarantine", "#   5. macOS (plugin edit): strip quarantine");
     edit(join(dir, "README.md"), "# demo (old heading)", "# demo, the plugin's own heading");
     rmSync(join(dir, "tests/bump.test.ts"));
+    // A Windows checkout (core.autocrlf): CRLF on a file the plugin never edited.
+    const crlf = join(dir, "skills/bank/install.sh");
+    writeFileSync(crlf, read(crlf).replace(/\n/g, "\r\n"));
     git(dir, "init", "-q");
     git(dir, "add", "-A");
     git(dir, "commit", "-qm", "plugin");
@@ -151,7 +157,8 @@ describe("upgrade, a plugin in its own repo", () => {
     expect(result.out).toMatchObject({
       from: OLD,
       to: generatorVersion(),
-      bases: { plugin: { version: OLD }, skills: { bank: { version: OLD, from: "closest" }, shop: { version: OLD, from: "closest" } } },
+      bases: { plugin: { version: OLD }, skills: { bank: { version: OLD, from: "generatedWith" }, shop: { version: OLD, from: "generatedWith" } } },
+      compare: "https://github.com/hoaj/site-cli-creator/compare/v0.0.1...main",
     });
     expect(JSON.parse(read(join(dir, "generated.json"))).generatedWith).toBe(generatorVersion());
   });
@@ -159,6 +166,7 @@ describe("upgrade, a plugin in its own repo", () => {
   test("a Starter file the plugin never changed is now the new Starter file, and new ones are added", () => {
     expect(result.out.added).toEqual(expect.arrayContaining([".github/workflows/drift-check.yml", "scripts/drift-check.ts", "tests/drift-check.test.ts"]));
     expect(result.out.updated).toEqual(expect.arrayContaining(["skills/shop/cli/src/runtime/envelope.ts", "skills/bank/install.sh", ".github/workflows/ci.yml"]));
+    expect(result.out.newerBases).toEqual({});
     const edited = new Set(["README.md", "skills/shop/install.sh", "generated.json"]);
     let compared = 0;
     for (const f of files(fresh)) {
@@ -184,7 +192,7 @@ describe("upgrade, a plugin in its own repo", () => {
     expect(install).toContain("# Run it once, when the binary is missing");
     expect(result.out.conflicts).toEqual(["README.md"]);
     const readme = read(join(dir, "README.md"));
-    expect(readme).toContain("<<<<<<< demo\n# demo, the plugin's own heading\n||||||| starter it came from\n# demo (old heading)\n=======\n# demo\n>>>>>>> starter v");
+    expect(readme).toContain("<<<<<<< demo\n# demo, the plugin's own heading\n||||||| starter v0.0.1\n# demo (old heading)\n=======\n# demo\n>>>>>>> starter v");
   });
 
   test("a file dropped from the Starter code and one the plugin deleted are only reported", () => {
@@ -204,8 +212,8 @@ describe("upgrade, a plugin in its own repo", () => {
    }, 30_000);
 });
 
-describe("upgrade, a CLI skill added with a later generator", () => {
-  test("its base is the version in generated.json, else the closest version, so its newer Starter lines are no conflict", () => {
+describe("upgrade, a CLI skill with Starter code newer than the plugin's", () => {
+  test("a skill added with a later generator: its record, else every version from generatedWith up, gives each file its base", () => {
     const dir = makePlugin({ dir: join(work, "late") }, base);
     const late = run(ADD_SKILL, ["--dir", dir, "--skill", "late", "--origin", "https://late.example.com", "--auth", "none", "--daily-check", "on"], later);
     expect(late.code).toBe(0);
@@ -218,11 +226,30 @@ describe("upgrade, a CLI skill added with a later generator", () => {
     git(dir, "commit", "-qm", "plugin");
     const result = run(UPGRADE, ["--dir", dir, "--starters", starters], REAL_STARTER);
     expect(result.code).toBe(0);
-    expect(result.out.bases.skills).toMatchObject({ late: { version: LATER, from: "closest" }, shop: { version: OLD, from: "generated.json" } });
-    expect(result.out.conflicts).not.toContain("skills/late/cli/src/runtime/envelope.ts");
-    expect(read(join(dir, "skills/late/cli/src/runtime/envelope.ts"))).toContain("// a plugin edit\nexport const EXIT");
+    expect(result.out.bases.skills).toMatchObject({ late: { version: OLD, from: "generatedWith" }, shop: { version: OLD, from: "generated.json" } });
+    // LATER's install.sh already is the new one: nothing to do, and no conflict from the plugin's older base.
     expect(result.out.updated).toContain("skills/shop/cli/src/runtime/envelope.ts");
+    for (const list of ["updated", "merged", "conflicts"]) expect(result.out[list]).not.toContain("skills/late/install.sh");
+    // The edited envelope.ts is closest to LATER's: merged from it, and named, with no conflict.
+    expect(result.out.newerBases).toEqual({ "skills/late/cli/src/runtime/envelope.ts": LATER });
+    expect(result.out.merged).toContain("skills/late/cli/src/runtime/envelope.ts");
+    expect(read(join(dir, "skills/late/cli/src/runtime/envelope.ts"))).toContain("// a plugin edit\nexport const EXIT");
     expect(JSON.parse(read(path))).not.toHaveProperty("skills");
+  }, 60_000);
+
+  test("a skill that took one later Starter fix by hand still gets the other later changes (review)", () => {
+    const dir = makePlugin({ dir: join(work, "port") }, base);
+    setGeneratedWith(dir, OLD);
+    // The hand port: LATER's envelope.ts line, but not LATER's install.sh line.
+    edit(join(dir, "skills/shop/cli/src/runtime/envelope.ts"), "// stdout carries one JSON document", "// stdout carries exactly one JSON document");
+    git(dir, "init", "-q");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "plugin");
+    const result = run(UPGRADE, ["--dir", dir, "--starters", starters], REAL_STARTER);
+    expect(result.code).toBe(0);
+    expect(result.out.updated).toContain("skills/shop/install.sh");
+    expect(read(join(dir, "skills/shop/install.sh"))).toContain("# Run it once, when the binary is missing");
+    expect(result.out.newerBases).toEqual({});
   }, 60_000);
 
   test("add-skill records the Starter version it copied when it is not the plugin's generatedWith", () => {
@@ -230,6 +257,34 @@ describe("upgrade, a CLI skill added with a later generator", () => {
     setGeneratedWith(dir, OLD);
     expect(run(ADD_SKILL, ["--dir", dir, "--skill", "extra", "--origin", "https://extra.example.com", "--auth", "none", "--daily-check", "on"], base).code).toBe(0);
     expect(JSON.parse(read(join(dir, "generated.json")))).toMatchObject({ generatedWith: OLD, skills: { extra: generatorVersion() } });
+  }, 60_000);
+});
+
+describe("upgrade, binary files and file modes (review)", () => {
+  test("a binary file changed on both sides is a binaryConflict, and a Starter change of only the executable bit reaches the plugin", () => {
+    const edge = join(work, "edge");
+    const oldStarter = join(edge, "starters", OLD);
+    cpSync(base, oldStarter, { recursive: true });
+    mkdirSync(join(oldStarter, "plugin/assets"), { recursive: true });
+    writeFileSync(join(oldStarter, "plugin/assets/logo.bin"), Buffer.from([0, 1, 2, 3]));
+    const target = join(edge, "target");
+    cpSync(REAL_STARTER, target, { recursive: true, filter: (src) => !src.split(sep).includes("node_modules") });
+    mkdirSync(join(target, "plugin/assets"), { recursive: true });
+    writeFileSync(join(target, "plugin/assets/logo.bin"), Buffer.from([0, 9, 9, 9]));
+    chmodSync(join(target, "plugin/scripts/run.ts"), 0o755);
+    expect(statSync(join(oldStarter, "plugin/scripts/run.ts")).mode & 0o111).toBe(0);
+    const dir = makePlugin({ dir: join(edge, "plugin") }, oldStarter);
+    setGeneratedWith(dir, OLD);
+    writeFileSync(join(dir, "assets/logo.bin"), Buffer.from([0, 5, 5, 5]));
+    git(dir, "init", "-q");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "plugin");
+    const result = run(UPGRADE, ["--dir", dir, "--starters", join(edge, "starters")], target);
+    expect(result.code).toBe(0);
+    expect(result.out.binaryConflicts).toEqual(["assets/logo.bin"]);
+    expect(result.out.conflicts).not.toContain("assets/logo.bin");
+    expect([...readFileSync(join(dir, "assets/logo.bin"))]).toEqual([0, 5, 5, 5]);
+    expect(statSync(join(dir, "scripts/run.ts")).mode & 0o111).toBe(0o111);
   }, 60_000);
 });
 
