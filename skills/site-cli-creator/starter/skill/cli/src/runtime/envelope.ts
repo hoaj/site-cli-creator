@@ -83,6 +83,11 @@ export type Surface = "cli" | "mcp";
 export const WRITE_NOT_RESENT = "Tell the user the write may already have taken effect and was not sent again, and ask them to check on the site. Do not run it again until they confirm it did not take effect.";
 export const SIGN_IN_RENEWED = "If it did not, run it again: the sign-in has been renewed.";
 
+/** That `next`, with `signIn` the surface's step to sign in again (run login, call the login tool, ask the Owner). */
+export function notResentNext(renewed: boolean, signIn: string): string {
+  return `${WRITE_NOT_RESENT} ${renewed ? `${SIGN_IN_RENEWED} If it ends this way again, ${signIn} before running it again.` : `If it did not, ${signIn}, then run it again.`}`;
+}
+
 /** First in `next` of any failure after a write the site answered with success (details.writeSent), on both surfaces. */
 export const WRITE_SENT = "The write was sent and the site answered with success, so it may have taken effect. Check on the site before running it again.";
 

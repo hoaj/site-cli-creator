@@ -104,7 +104,7 @@ function pick(scope: Doc | Element, fields: HtmlFields, prefix: string): Record<
     const path = prefix ? `${prefix}.${name}` : name;
     if (typeof field === "string") out[name] = textOf(first(scope, field));
     else if ("each" in field) out[name] = list(scope, field, path);
-    else if (field.lines) out[name] = segmentsOf(first(scope, field.css)).map(collapse).filter((line) => line !== "");
+    else if (field.lines) out[name] = linesOf(first(scope, field.css));
     else out[name] = value(scope, field, path);
   }
   return out;
@@ -194,13 +194,17 @@ function textOf(el: Element | null): string | null {
   return el ? collapse(segmentsOf(el).join(" ")) : null;
 }
 
+/** An element's lines (`lines: true`): its text split at `<br>` and block boundaries, each collapsed, empty ones left out; `[]` without one. */
+function linesOf(el: Element | null): string[] {
+  return el ? segmentsOf(el).map(collapse).filter((line) => line !== "") : [];
+}
+
 function collapse(text: string): string {
   return text.replace(/\s+/g, " ").trim();
 }
 
-/** An element's raw text, split at `<br>` and block boundaries (none when `el` is null); scripts, styles and `<noscript>` left out. */
-function segmentsOf(el: Element | null): string[] {
-  if (!el) return [];
+/** An element's raw text, split at `<br>` and block boundaries; scripts, styles and `<noscript>` left out. */
+function segmentsOf(el: Element): string[] {
   const segments = [""];
   const walk = (node: Node) => {
     if (node.type === "text") segments[segments.length - 1] += (node as { data: string }).data;
