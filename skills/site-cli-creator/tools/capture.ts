@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { chromium, type BrowserContext, type Page, type Request, type Response as PageResponse } from "playwright-core";
+import { chromium, type BrowserContext, type Page, type Request } from "playwright-core";
 import { parseFlags, requireKebab } from "./lib/args";
 import { writeJson } from "./lib/manifests";
 import { fail, firstLine, progress, runTool } from "./lib/output";
@@ -195,19 +195,27 @@ async function loadScript(file: string): Promise<(page: Page) => Promise<void>> 
   return mod.default as (page: Page) => Promise<void>;
 }
 
-/** The statuses a refusal answers with, as the Starter's blockSignal reads a captcha wall. */
+/** The statuses of a refused page load: the Capture's own rule (ARCHITECTURE §6). */
 const REFUSALS = new Set([403, 429, 503]);
 
-type StartAnswer = { status: number; blocked?: string };
+/** An answer with data: 2xx, or a 304 the profile's cache revalidated. */
+const withData = (status: number) => (status >= 200 && status < 300) || status === 304;
+
+/** A main-frame page load's answer: its status, the bot wall whose block page it is, and whether it was a sign-in step. */
+type PageAnswer = { status: number; blocked?: string; loginFlow: boolean };
 
 /**
- * The start page's answer (#119): its status, and the bot protection whose block page it is, told as the
- * CLI tells one (blockSignal). The body is read in memory; only the status and the vendor's name are kept.
+ * A page load's answer (#119), read as the load finishes, before a challenge's script can move on. The
+ * bot protection is told as the CLI tells one (blockSignal). The body stays in memory; only the status and
+ * the vendor's name are kept. Headers go in one line at a time: a response's Set-Cookie lines joined into
+ * one value (allHeaders) are no valid header value.
  */
-async function startAnswer(response: PageResponse | null): Promise<StartAnswer | undefined> {
+async function pageAnswer(req: Request, loginFlow: boolean): Promise<PageAnswer | undefined> {
+  const response = await req.response();
   if (!response) return undefined;
   const status = response.status();
-  const headers = new Headers(await response.allHeaders().catch(() => response.headers()));
+  const headers = new Headers();
+  for (const { name, value } of await response.headersArray()) headers.append(name, value);
   const text = (await response.body().catch(() => undefined))?.toString("utf8");
   let body: unknown = text?.trim() ? text : undefined;
   try {
@@ -216,16 +224,16 @@ async function startAnswer(response: PageResponse | null): Promise<StartAnswer |
     // not JSON: the page's text
   }
   const blocked = blockSignal(status, headers, body);
-  return { status, ...(blocked ? { blocked } : {}) };
+  return { status, ...(blocked ? { blocked } : {}), loginFlow };
 }
 
-/** What a Capture says when its start page was refused and no other call answered with data (#119). */
-function refusedStart({ status, blocked }: StartAnswer, headless: boolean): string {
+/** What a Capture says when the tab's last page load was refused and no other call answered with data (#119). */
+function refusedPage({ status, blocked }: PageAnswer, headless: boolean): string {
   const what = blocked
-    ? `The start page answered ${status}, the block page of a bot wall (${blocked}), and no call other than sign-in steps answered with data (2xx or 304): the site refused this Chrome`
-    : `The start page answered ${status} and no call other than sign-in steps answered with data (2xx or 304): the site refused this Chrome (a bot wall, a blocked address) or is down`;
+    ? `The tab's last page load answered ${status}, the block page of a bot wall (${blocked}), and no other call answered with data (2xx or 304), sign-in steps aside: the site refused this Chrome`
+    : `The tab's last page load answered ${status} and no other call answered with data (2xx or 304), sign-in steps aside: the site refused this Chrome (a bot wall, a blocked address) or is down`;
   return (
-    `${what}, so the Task's data never loaded and this Capture holds none of its Operations. ` +
+    `${what}, so the Task's data never loaded and the shapes hold only the refusal. ` +
     (headless ? "A wall may refuse only headless Chrome: capture again without --headless (--script still drives the page). " : "") +
     "A challenge solved in the window sends its answer as a write, which a read Task aborts (stderr names each aborted write): capture again with --allow-read <its path>. " +
     `${blocked ? "The CLI will likely meet the same wall" : "If it is a bot wall, the CLI will likely meet it too"}: reference/fix.md#2c-a-bot-block.`
@@ -306,6 +314,10 @@ await runTool(async () => {
   /** In-scope requests sent but not yet finished or failed. */
   const inflight = new Set<Request>();
   let open = true;
+  /** In-scope main-frame page loads in the order they finished, each with its answer (#119). */
+  const pageLoads: Promise<PageAnswer | undefined>[] = [];
+  /** Whether a fetch, XHR or event stream other than a sign-in step answered with data (#119). */
+  let fetchedData = false;
   const planOf = (req: Request): Planned | null => {
     if (!plans.has(req)) {
       plans.set(
@@ -404,18 +416,22 @@ await runTool(async () => {
     if (abort) await route.abort("blockedbyclient").catch(() => {});
     else await route.continue().catch(() => {});
   });
-  context.on("requestfinished", (req) =>
+  context.on("requestfinished", (req) => {
+    const planned = planOf(req);
+    if (open && planned && isPageLoad(req)) pageLoads.push(pageAnswer(req, planned.loginFlow).catch(() => undefined));
     track(req, async () => {
       const plan = planOf(req);
       if (!plan) return;
       const response = await req.response();
       const headers = await req.allHeaders().catch(() => req.headers());
       if (!response) return recorder.record(plan, { headers });
+      // A frame's document is not the Task's data: a block page may frame a resource of the site that answers 200.
+      if (!plan.loginFlow && req.resourceType() !== "document" && withData(response.status())) fetchedData = true;
       const body = await response.body().catch(() => null);
       const responseHeaders = await response.allHeaders().catch(() => response.headers());
       recorder.record(plan, { headers, response: { status: response.status(), headers: responseHeaders, body } });
-    }),
-  );
+    });
+  });
   context.on("requestfailed", (req) =>
     track(req, async () => {
       const plan = planOf(req);
@@ -427,14 +443,12 @@ await runTool(async () => {
   const stop = watchStop(context, page, (url) => recorder.inScope(url), !script);
   let scriptError: Error | undefined;
   let stoppedBy: string;
-  let startResponse: PageResponse | null = null;
   try {
-    startResponse = await page.goto(startUrl);
+    await page.goto(startUrl);
   } catch (error) {
     if (script) scriptError = new Error(`could not open --url: ${firstLine((error as Error).message)}`);
     else progress(`could not open --url (${firstLine((error as Error).message)}); navigate in the browser`);
   }
-  const start = await startAnswer(startResponse).catch(() => undefined);
   if (script && !scriptError) {
     const finished = script(page).then(
       () => "script finished",
@@ -470,6 +484,7 @@ await runTool(async () => {
     const plan = planOf(req);
     if (plan) recorder.record(plan, { headers: req.headers() });
   }
+  const loads = (await Promise.all(pageLoads)).filter((a): a is PageAnswer => a !== undefined && !a.loginFlow);
   await context.close().catch(() => {});
   process.stdin.pause();
 
@@ -479,10 +494,11 @@ await runTool(async () => {
   const suspectNote = suspects.size
     ? ` A write was aborted on ${[...suspects].sort().join(", ")}, which the sign-in may go through: if signing in stalled, capture again with ${[...suspects].sort().map((h) => `--login-host ${h}`).join(" ")}.`
     : "";
-  // The start page refused this Chrome and nothing else answered with data (#119): the Task's data never loaded.
-  // A 304 is data too: the profile's cache revalidated it.
-  const answered = operations.some((op) => !op.loginFlow && op.responses.some((r) => (r.status >= 200 && r.status < 300) || r.status === 304));
-  const refused = start && REFUSALS.has(start.status) && !answered ? refusedStart(start, values.headless) : undefined;
+  // The tab's last page load refused this Chrome and nothing else answered with data (#119): the Task's data never
+  // loaded. A page that loaded with data (not a block page) counts like a fetch: the data may be in its HTML.
+  const last = loads.at(-1);
+  const pageData = loads.some((a) => !a.blocked && withData(a.status));
+  const refused = last && (REFUSALS.has(last.status) || last.blocked) && !fetchedData && !pageData ? refusedPage(last, values.headless) : undefined;
   const refusedNote = refused ? ` ${refused}` : "";
   if (operations.length === 0) {
     const why = scriptError ? `--script failed: ${firstLine(scriptError.message)}; ` : "";
