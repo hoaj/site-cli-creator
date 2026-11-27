@@ -521,7 +521,7 @@ for (const auth of ["none", "login"] as const) {
       // An HTML Operation (#102): the notices come only as a server-rendered page, read by the compiled binary.
       const notices = await cli(["notice", "list"]);
       expect(notices.code, notices.stderr).toBe(0);
-      expect(notices.out).toEqual({ notices: NOTICES.map((n) => ({ id: n.id, title: n.title, area: n.area, startsAt: n.startsAt, when: n.startsText })) });
+      expect(notices.out).toEqual({ notices: NOTICES.map((n) => ({ id: n.id, title: n.title, area: n.area, streets: n.streets, startsAt: n.startsAt, when: n.startsText })) });
       const aarhus = await cli(["notice", "list", "--area", "Aarhus C"]);
       expect(aarhus.out.notices.map((n: { id: string }) => n.id)).toEqual(NOTICES.filter((n) => n.area === "Aarhus C").map((n) => n.id));
     }, 120_000);

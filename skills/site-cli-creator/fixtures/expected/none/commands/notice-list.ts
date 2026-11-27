@@ -13,6 +13,7 @@ export default defineCommand({
         id: z.string().min(1),
         title: z.string().min(1),
         area: z.string().min(1),
+        streets: z.array(z.string()),
         startsAt: z.string().nullable(),
         when: z.string().nullable(),
       }),
@@ -25,6 +26,7 @@ export default defineCommand({
         id: n.id,
         title: n.title,
         area: n.area.replace(/^Område:\s*/, ""), // the page labels the area
+        streets: n.streets,
         startsAt: n.startsAt,
         when: n.when,
       })),

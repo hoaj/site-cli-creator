@@ -17,6 +17,9 @@ import { ContractError } from "./envelope";
  * - `{ css, all: true }`: every match's text (or `attr`), as a list;
  * - `{ css, json: true }`: the first match's text parsed as JSON, for inline state
  *   (`<script type="application/ld+json">`, `<script id="__NEXT_DATA__">`); null when nothing matches;
+ * - `{ css, lines: true }`: the first match's text split at `<br>` and block boundaries (a newline in the
+ *   text, even in `<pre>`, is a space), each line collapsed and trimmed, empty lines left out, as a list;
+ *   `[]` when nothing matches;
  * - `{ each, in?, fields }`: a list, one object per element matching `each`, its `fields` picked inside
  *   that element. `in` names the list's container, which must be on the page even when the list is
  *   empty: without it a changed layout would read as an empty list instead of Drift.
@@ -25,7 +28,8 @@ import { ContractError } from "./envelope";
  */
 export type HtmlField =
   | string
-  | { css: string; attr?: string; all?: boolean; json?: boolean }
+  | { css: string; attr?: string; all?: boolean; json?: boolean; lines?: never }
+  | { css: string; lines: true; attr?: never; all?: never; json?: never }
   | { each: string; in?: string; fields: HtmlFields };
 
 export type HtmlFields = Record<string, HtmlField>;
@@ -100,6 +104,7 @@ function pick(scope: Doc | Element, fields: HtmlFields, prefix: string): Record<
     const path = prefix ? `${prefix}.${name}` : name;
     if (typeof field === "string") out[name] = textOf(first(scope, field));
     else if ("each" in field) out[name] = list(scope, field, path);
+    else if (field.lines) out[name] = segmentsOf(first(scope, field.css)).map(collapse).filter((line) => line !== "");
     else out[name] = value(scope, field, path);
   }
   return out;
@@ -186,18 +191,27 @@ const HIDDEN = new Set(["noscript", "template"]);
 
 /** An element's text: whitespace collapsed, `<br>` and block boundaries a space, scripts, styles and `<noscript>` inside it left out. */
 function textOf(el: Element | null): string | null {
-  if (!el) return null;
-  const parts: string[] = [];
+  return el ? collapse(segmentsOf(el).join(" ")) : null;
+}
+
+function collapse(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/** An element's raw text, split at `<br>` and block boundaries (none when `el` is null); scripts, styles and `<noscript>` left out. */
+function segmentsOf(el: Element | null): string[] {
+  if (!el) return [];
+  const segments = [""];
   const walk = (node: Node) => {
-    if (node.type === "text") parts.push((node as { data: string }).data);
+    if (node.type === "text") segments[segments.length - 1] += (node as { data: string }).data;
     else if (node.type === "tag") {
       const tag = (node as Element).name;
       if (HIDDEN.has(tag)) return;
-      if (BREAKS.has(tag)) parts.push(" ");
+      if (BREAKS.has(tag)) segments.push("");
       for (const child of (node as Element).children) walk(child as Node);
-      if (BREAKS.has(tag)) parts.push(" ");
+      if (BREAKS.has(tag)) segments.push("");
     }
   };
   for (const child of el.children) walk(child as Node);
-  return parts.join("").replace(/\s+/g, " ").trim();
+  return segments;
 }

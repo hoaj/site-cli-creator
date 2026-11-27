@@ -107,7 +107,7 @@ Task 1: "see my subscription and price"
 
 ## 5. Generate
 
-For each new Operation, draft its Contract into its file with `--out` (an Operation that answered HTML drafts an `html` block from the Capture's outline: the repeated element as a list, each element with text or a link as a field) (not shell redirection: `--out` refuses to overwrite an existing Contract), then cut it down by hand. The file is `<operationName>.ts` for GraphQL and a verb + noun for REST (`getInvoice.ts`; the draft's `file` suggests one). `--name` is for a GraphQL query the Capture could not name (anonymous or persisted); a REST name is always `METHOD /path`, so leave `--name` out.
+For each new Operation, draft its Contract into its file with `--out` (an Operation that answered HTML drafts an `html` block from the Capture's outline: the repeated element as a list, each element with text or a link as a field, an element whose lines repeated `<br>` separates as `lines: true`) (not shell redirection: `--out` refuses to overwrite an existing Contract), then cut it down by hand. The file is `<operationName>.ts` for GraphQL and a verb + noun for REST (`getInvoice.ts`; the draft's `file` suggests one). `--name` is for a GraphQL query the Capture could not name (anonymous or persisted); a REST name is always `METHOD /path`, so leave `--name` out.
 
 ```sh
 bun <gen>/tools/draft-contract.ts <skill>/captures/<slug>/<operation>.shape.json --out <skill>/cli/src/operations/<file>.ts

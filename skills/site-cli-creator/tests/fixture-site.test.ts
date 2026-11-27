@@ -14,6 +14,7 @@ import { findChrome } from "../starter/skill/cli/src/runtime/chrome";
 import { extractHtml } from "../starter/skill/cli/src/runtime/html";
 import { ACCOUNT, INVOICES, NOTICES, USER } from "../fixtures/site/data";
 import { loginOriginFor } from "../fixtures/site/hosts";
+import { noticesPage } from "../fixtures/site/pages";
 import { DRIFTS, startFixtureSite, type Drift, type FixtureSite } from "../fixtures/site/server";
 import { Client } from "../starter/skill/cli/src/runtime/call";
 import type { Site } from "../starter/skill/cli/src/runtime/site";
@@ -200,6 +201,14 @@ describe("fixture site, auth none", () => {
     const seen = site.requests().slice(from);
     expect(seen.filter((r) => r.path === "/graphql").map((r) => r.operationName).sort()).toEqual(["getAccount", "getAccount", "listSubscriptions"]);
     expect(seen.find((r) => r.path === "/api/invoices")!.operationName).toBeUndefined();
+  });
+
+  test("the html-layout drift renders the same notices, streets included, so a repair can find every field (#124)", () => {
+    const streets = (layout: "list" | "moved", each: string, css: string) =>
+      extractHtml(noticesPage(NOTICES, null, layout), { notices: { each, fields: { streets: { css, lines: true } } } });
+    const want = { ok: true as const, value: { notices: NOTICES.map((n) => ({ streets: n.streets })) } };
+    expect(streets("list", "li.notice", "p.streets")).toEqual(want);
+    expect(streets("moved", "div.card", "span.road-list")).toEqual(want);
   });
 
   test("there is no login in public mode, on either host", async () => {
@@ -812,7 +821,7 @@ for (const auth of ["none", "login"] as const) {
       expect(one.lines.length).toBe(3);
 
       const notices = await x.commands.noticeList.run({}, ctx());
-      expect(notices.notices).toEqual(NOTICES.map((n) => ({ id: n.id, title: n.title, area: n.area, startsAt: n.startsAt, when: n.startsText })));
+      expect(notices.notices).toEqual(NOTICES.map((n) => ({ id: n.id, title: n.title, area: n.area, streets: n.streets, startsAt: n.startsAt, when: n.startsText })));
       const aarhus = await x.commands.noticeList.run({ area: "Aarhus C" }, ctx());
       expect(aarhus.notices.map((n: any) => n.id)).toEqual(NOTICES.filter((n) => n.area === "Aarhus C").map((n) => n.id));
       expect((await x.commands.noticeList.run({ area: "Skagen" }, ctx())).notices).toEqual([]);
