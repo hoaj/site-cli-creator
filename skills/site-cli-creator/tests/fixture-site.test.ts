@@ -796,7 +796,7 @@ for (const auth of ["none", "login"] as const) {
       expect(one.lines.length).toBe(3);
 
       const notices = await x.commands.noticeList.run({}, ctx());
-      expect(notices.notices).toEqual(NOTICES.map((n) => ({ id: n.id, title: n.title, area: n.area, startsAt: n.startsAt, when: n.startsText })));
+      expect(notices.notices).toEqual(NOTICES.map((n) => ({ id: n.id, title: n.title, area: n.area, streets: n.streets, startsAt: n.startsAt, when: n.startsText })));
       const aarhus = await x.commands.noticeList.run({ area: "Aarhus C" }, ctx());
       expect(aarhus.notices.map((n: any) => n.id)).toEqual(NOTICES.filter((n) => n.area === "Aarhus C").map((n) => n.id));
       expect((await x.commands.noticeList.run({ area: "Skagen" }, ctx())).notices).toEqual([]);
