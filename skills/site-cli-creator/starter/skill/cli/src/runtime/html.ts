@@ -17,8 +17,9 @@ import { ContractError } from "./envelope";
  * - `{ css, all: true }`: every match's text (or `attr`), as a list;
  * - `{ css, json: true }`: the first match's text parsed as JSON, for inline state
  *   (`<script type="application/ld+json">`, `<script id="__NEXT_DATA__">`); null when nothing matches;
- * - `{ css, lines: true }`: the first match's visual lines (its text split at `<br>` and block boundaries,
- *   each collapsed and trimmed, empty lines left out), as a list; `[]` when nothing matches;
+ * - `{ css, lines: true }`: the first match's text split at `<br>` and block boundaries (a newline in the
+ *   text, even in `<pre>`, is a space), each line collapsed and trimmed, empty lines left out, as a list;
+ *   `[]` when nothing matches;
  * - `{ each, in?, fields }`: a list, one object per element matching `each`, its `fields` picked inside
  *   that element. `in` names the list's container, which must be on the page even when the list is
  *   empty: without it a changed layout would read as an empty list instead of Drift.

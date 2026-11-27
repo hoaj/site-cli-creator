@@ -276,15 +276,18 @@ describe("draftOperation", () => {
     expect(Object.values(picked.value)[0]![1]).toMatchObject({ text: ["tag2a", "tag2b"] });
   });
 
-  test("an element whose lines repeated <br> separates drafts as lines: true; one <br> after a label stays text (#124)", async () => {
-    const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><h3 class="t">T${i}</h3><p class="s">a${i}<br>b${i}<br>c${i}</p><p class="a">L:<br>v${i}</p></li>`).join("")}</ul>`;
+  test("an element whose lines repeated <br> separates drafts as lines: true; one <br> after a label stays text, with a TODO (#124)", async () => {
+    const addr = (i: number) => `<span class="addr">S${i}<br>C${i}</span>`.repeat(2);
+    const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><h3 class="t">T${i}</h3><p class="s">a${i}<br>b${i}<br>c${i}</p><p class="a">L:<br>v${i}</p>${addr(i)}</li>`).join("")}</ul>`;
     const { source } = draftOperation(htmlCapture(`${ORIGIN}/lines`, page, "text/html"));
-    expect(source).toContain('{ css: "p.s", lines: true }');
-    expect(source).toContain('"p.a"');
+    expect(source).toContain('{ css: "p.s", lines: true },');
+    expect(source).toContain('"p.a" /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart */,');
+    // A repeated element cannot combine all with lines: the TODO names the list that keeps each one's lines.
+    expect(source).toContain('{ css: "span.addr", all: true } /* TODO: a <br> inside: if it separates values, make this a list { each: "span.addr", fields: { lines: { css: ":scope", lines: true } } } */,');
     const op = await importDraft("listLines.ts", source);
     const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, any[]> };
     expect(op.response.safeParse(picked.value).success).toBe(true);
-    expect(Object.values(picked.value)[0]![1]).toMatchObject({ s: ["a2", "b2", "c2"], a: "L: v2" });
+    expect(Object.values(picked.value)[0]![1]).toMatchObject({ s: ["a2", "b2", "c2"], a: "L: v2", addr: ["S2 C2", "S2 C2"] });
   });
 
   // Every drafted selector picks, on the page it was drafted from, the element it was drafted from (review 2).

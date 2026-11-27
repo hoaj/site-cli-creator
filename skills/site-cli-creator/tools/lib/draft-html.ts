@@ -193,9 +193,14 @@ function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean, sk: Skel
     const all = node.many ? ", all: true" : "";
     const valueZod = node.many ? "z.array(z.string())" : "z.string().nullable()";
     // Values that only repeated <br> separates (a block of names) read as lines; one <br> after a label stays text.
-    const lines = !node.many && (node.children ?? []).some((c) => c.tag === "br" && c.many);
+    const br = (node.children ?? []).find((c) => c.tag === "br");
+    const lines = !node.many && !!br?.many;
+    // Any other <br> may separate values too: a text field joins them with a space, so the draft says how to keep them.
+    const brTodo = !br || lines ? "" : node.many
+      ? ` /* TODO: a <br> inside: if it separates values, make this a list { each: ${css}, fields: { lines: { css: ":scope", lines: true } } } */`
+      : " /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart */";
     if (node.text && lines) fields.push({ name: uniqueName(base, used), source: `{ css: ${css}, lines: true }`, zod: "z.array(z.string())" });
-    else if (node.text) fields.push({ name: uniqueName(base, used), source: node.many ? `{ css: ${css}${all} }` : css, zod: valueZod });
+    else if (node.text) fields.push({ name: uniqueName(base, used), source: (node.many ? `{ css: ${css}${all} }` : css) + brTodo, zod: valueZod });
     for (const a of node.attrs ?? []) {
       if (!VALUE_ATTRS.includes(a) && !a.startsWith("data-")) continue;
       const name = node.text || base === (TAG_NAMES[node.tag] ?? node.tag) ? `${base}${attrName(a)[0]!.toUpperCase()}${attrName(a).slice(1)}` : base;
