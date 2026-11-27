@@ -97,6 +97,33 @@ describe("extractHtml", () => {
     expect(extractHtml(page, { t: "div.card" })).toEqual({ ok: true, value: { t: "A B C D" } });
   });
 
+  test("lines: true reads the first match's visual lines, split at <br> and block boundaries (#124)", () => {
+    // A source newline inside a line is a space, nested inline elements stay on their line, empty lines are left out.
+    const page = `<div class="block"><h3>Group</h3><p><strong>Heading</strong><br>Name   one<br><br><a href="/a">Name
+two</a> and <a href="/b"><em>Name</em> three</a><br>Name four<br></p></div><div class="block"><p>Other</p></div>`;
+    expect(
+      extractHtml(page, {
+        p: { css: "div.block p", lines: true },
+        block: { css: "div.block", lines: true },
+        missing: { css: ".nowhere", lines: true },
+        items: { each: "div.block", fields: { lines: { css: ":scope", lines: true } } },
+      }),
+    ).toEqual({
+      ok: true,
+      value: {
+        p: ["Heading", "Name one", "Name two and Name three", "Name four"],
+        block: ["Group", "Heading", "Name one", "Name two and Name three", "Name four"],
+        missing: [],
+        items: [{ lines: ["Group", "Heading", "Name one", "Name two and Name three", "Name four"] }, { lines: ["Other"] }],
+      },
+    });
+    // lines reads the first match's text: with attr, all or json it is a type error, not a silent choice.
+    // @ts-expect-error
+    extractHtml(page, { x: { css: "p", lines: true, all: true } });
+    // @ts-expect-error
+    extractHtml(page, { x: { css: "a", lines: true, attr: "href" } });
+  });
+
   test("an empty list in a container that is there is an empty list, not Drift", () => {
     expect(extractHtml(PAGE, { items: { each: "li", in: "ul.empty-list", fields: { t: "a" } } })).toEqual({ ok: true, value: { items: [] } });
   });
