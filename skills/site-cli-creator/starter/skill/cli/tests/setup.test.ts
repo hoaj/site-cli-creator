@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import { checkSession, mcpTools, type App } from "../src/main";
+import { defineCommand } from "../src/runtime/command";
 import { BUILTIN_FLAGS } from "../src/runtime/help";
 import { remoteConfig } from "../src/runtime/remote-config";
 import { serveHttp } from "../src/runtime/remote";
@@ -469,6 +470,66 @@ describe("remote tools", () => {
     expect(status).toMatchObject({ state: "valid", uploadedAt });
     expect(status.checkedAt).toBeDefined();
     expect((await req(`${base}/setup`)).text).toContain("Session: valid");
+  });
+
+  describe("a write redirected to a login host (#123)", () => {
+    const toLoginHost = (r: Recorded) => (r.method === "PATCH" ? new Response(null, { status: 303, headers: { location: "https://login.example.test/authorize" } }) : sessionSite(r));
+
+    test("its next keeps 'check on the site first' in front of the Owner's step, never a bare 'retry'", async () => {
+      const { base, state, calls } = await start();
+      const token = await signIn(base);
+      await upload(base, { file: sessionJson() });
+      state.handler = toLoginHost;
+      const error = textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N", confirm: true })).error;
+      expect(error.kind).toBe("session");
+      expect(error.next).toStartWith("Tell the user the write may already have taken effect and was not sent again");
+      expect(error.next).toContain("check on the site");
+      expect(error.next).toContain(`${base}/setup`);
+      expect(error.next).not.toContain("Do not retry until they have");
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+      expect(readStatus(home.dir).state).toBe("expired");
+    });
+
+    test("when the server renewed the Session there, it is not marked expired and the Owner is asked only if it ends this way again", async () => {
+      const site = loginSite({ login: { ...loginSite().login!, refresh: { renew: async (ctx) => ({ headers: { ...ctx.headers, authorization: "Bearer new" } }) } } });
+      const { base, state, calls } = await start({ site });
+      const token = await signIn(base);
+      await upload(base, { file: sessionJson() });
+      state.handler = toLoginHost;
+      const error = textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N", confirm: true })).error;
+      expect(error.kind).toBe("session");
+      expect(error.next).toContain("check on the site");
+      expect(error.next).toContain("the sign-in has been renewed");
+      expect(error.next).toContain("If it ends this way again, ask the Owner");
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+      expect(readStatus(home.dir).state).not.toBe("expired");
+    });
+
+    test("after an earlier write of the same Task succeeded, next still says the second was not sent again (review 2)", async () => {
+      const orderBoth = defineCommand({
+        name: "order both",
+        summary: "Rename two orders",
+        args: z.object({}),
+        uses: [renameOrder],
+        run: async (_args, ctx) => {
+          await ctx.call(renameOrder, { orderId: "1", name: "A" });
+          return ctx.call(renameOrder, { orderId: "2", name: "B" });
+        },
+      });
+      const { base, state, calls, app } = await start({ extra: { commands: [orderBoth] } });
+      const token = await signIn(base);
+      await upload(base, { file: sessionJson() });
+      state.handler = (r) => (r.url.endsWith("/api/orders/2") ? toLoginHost(r) : sessionSite(r));
+      const error = textOf(await toolCall(base, token, "order_both", { confirm: true })).error;
+      expect(error.kind).toBe("session");
+      expect(error.writeSent).toBe(true);
+      expect(error.next).toStartWith("The write was sent and the site answered with success");
+      expect(error.next).toContain("Tell the user the write may already have taken effect and was not sent again");
+      expect(error.next).toContain(`${base}/setup`);
+      expect(error.next).not.toContain("Do not retry until they have");
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(2);
+      expect(app.commands.map((c) => c.name)).toEqual(["order both"]);
+    });
   });
 
   test("remote check refuses a write Operation (it needs Chrome); local check does not", async () => {
