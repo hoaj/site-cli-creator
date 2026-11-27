@@ -278,12 +278,14 @@ export function mergeStarter(
     const theirs = content(theirsPath);
     const first = bases[0];
     if (!inPlugin) {
-      if (!first) {
+      // Deleted by the plugin only when the version its part came from had the file; else new since then.
+      const atFloor = bases.find((r) => r.version === floor(rel));
+      if (!atFloor) {
         mkdirSync(dirname(mine), { recursive: true });
         writeFileSync(mine, theirs);
         chmodSync(mine, statSync(theirsPath).mode & 0o777);
         report.added.push(rel);
-      } else if (!content(join(first.dir, rel)).equals(theirs)) report.deletedInPlugin.push(rel);
+      } else if (!content(join(atFloor.dir, rel)).equals(theirs)) report.deletedInPlugin.push(rel);
       continue;
     }
     const current = content(mine);

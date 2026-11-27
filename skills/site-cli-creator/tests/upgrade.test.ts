@@ -106,7 +106,8 @@ beforeAll(() => {
   edit(join(later, "skill/cli/src/runtime/envelope.ts"), "// stdout carries one JSON document", "// stdout carries exactly one JSON document");
   edit(join(later, "skill/install.sh"), "# Run it when the binary is missing", "# Run it once, when the binary is missing");
   // and a line of its own that the target changes back
-  edit(join(later, "skill/cli/src/runtime/envelope.ts"), "Progress goes to stderr.", "Progress goes to stderr (later).");
+  edit(join(later, "skill/cli/src/runtime/envelope.ts"), "Progress goes to stderr.", "Progress goes to stderr (later).");  // and the daily drift check's script, new since OLD (the target has it too)
+  cpSync(join(REAL_STARTER, "plugin/scripts/drift-check.ts"), join(later, "plugin/scripts/drift-check.ts"));
 });
 
 afterAll(() => rmSync(work, { recursive: true, force: true }));
