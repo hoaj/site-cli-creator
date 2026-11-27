@@ -281,13 +281,22 @@ describe("draftOperation", () => {
     const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><h3 class="t">T${i}</h3><p class="s">a${i}<br>b${i}<br>c${i}</p><p class="a">L:<br>v${i}</p>${addr(i)}</li>`).join("")}</ul>`;
     const { source } = draftOperation(htmlCapture(`${ORIGIN}/lines`, page, "text/html"));
     expect(source).toContain('{ css: "p.s", lines: true },');
-    expect(source).toContain('"p.a" /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart */,');
+    expect(source).toContain('"p.a" /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart, with z.array(z.string()) */,');
     // A repeated element cannot combine all with lines: the TODO names the list that keeps each one's lines.
-    expect(source).toContain('{ css: "span.addr", all: true } /* TODO: a <br> inside: if it separates values, make this a list { each: "span.addr", fields: { lines: { css: ":scope", lines: true } } } */,');
+    expect(source).toContain('{ css: "span.addr", all: true } /* TODO: a <br> inside: if it separates values, make this an { each, in, fields } list whose item field is { css: ":scope", lines: true }, and its response z.array(z.object({ ...: z.array(z.string()) })) */,');
     const op = await importDraft("listLines.ts", source);
     const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, any[]> };
     expect(op.response.safeParse(picked.value).success).toBe(true);
     expect(Object.values(picked.value)[0]![1]).toMatchObject({ s: ["a2", "b2", "c2"], a: "L: v2", addr: ["S2 C2", "S2 C2"] });
+  });
+
+  test("the <br> TODO never nests a selector's own TODO comment, so the draft still parses (#124, review 2)", async () => {
+    // An earlier span.x (inside div.d) matches first, so the repeated span.x's selector carries a TODO of its own.
+    const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><div class="d"><span class="x">q${i}</span></div><span class="x">a${i}<br>b${i}</span><span class="x">c${i}<br>d${i}</span></li>`).join("")}</ul>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/nested`, page, "text/html"));
+    expect(source).toContain("an earlier element matches this too");
+    expect(source).toContain("a <br> inside");
+    await importDraft("listNested.ts", source);
   });
 
   // Every drafted selector picks, on the page it was drafted from, the element it was drafted from (review 2).

@@ -193,12 +193,13 @@ function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean, sk: Skel
     const all = node.many ? ", all: true" : "";
     const valueZod = node.many ? "z.array(z.string())" : "z.string().nullable()";
     // Values that only repeated <br> separates (a block of names) read as lines; one <br> after a label stays text.
-    const br = (node.children ?? []).find((c) => c.tag === "br");
-    const lines = !node.many && !!br?.many;
+    const brs = (node.children ?? []).filter((c) => c.tag === "br");
+    const lines = !node.many && (brs.length > 1 || brs.some((c) => c.many));
     // Any other <br> may separate values too: a text field joins them with a space, so the draft says how to keep them.
-    const brTodo = !br || lines ? "" : node.many
-      ? ` /* TODO: a <br> inside: if it separates values, make this a list { each: ${css}, fields: { lines: { css: ":scope", lines: true } } } */`
-      : " /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart */";
+    // The TODO never quotes the selector, which can end in a comment of its own (block comments do not nest).
+    const brTodo = !brs.length || lines ? "" : node.many
+      ? " /* TODO: a <br> inside: if it separates values, make this an { each, in, fields } list whose item field is { css: \":scope\", lines: true }, and its response z.array(z.object({ ...: z.array(z.string()) })) */"
+      : " /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart, with z.array(z.string()) */";
     if (node.text && lines) fields.push({ name: uniqueName(base, used), source: `{ css: ${css}, lines: true }`, zod: "z.array(z.string())" });
     else if (node.text) fields.push({ name: uniqueName(base, used), source: (node.many ? `{ css: ${css}${all} }` : css) + brTodo, zod: valueZod });
     for (const a of node.attrs ?? []) {
