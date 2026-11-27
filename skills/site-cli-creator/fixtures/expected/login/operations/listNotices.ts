@@ -30,7 +30,7 @@ export default defineOperation({
         id: z.string().min(1),
         title: z.string().min(1),
         area: z.string().min(1),
-        streets: z.array(z.string()),
+        streets: z.array(z.string()).min(1), // every notice names a street: [] means the element moved
         startsAt: z.string().nullable(), // a notice that is happening now has no date
         when: z.string().nullable(),
       }),

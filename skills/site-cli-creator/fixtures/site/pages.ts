@@ -247,7 +247,7 @@ export function noticesPage(notices: Notice[], area: string | null, layout: "lis
   const items =
     layout === "list"
       ? shown.map((n) => `<li class="notice" data-id="${n.id}"><h3 class="title">${escapeHtml(n.title)}</h3><p class="area">Område:<br>${escapeHtml(n.area)}<p class="streets">${n.streets.map(escapeHtml).join("<br>")}<p class="when">${time(n)}\n`).join("")
-      : shown.map((n) => `<div class="card" data-ref="${n.id}"><h2>${escapeHtml(n.title)}</h2><span class="place">${escapeHtml(n.area)}</span> ${time(n)}</div>\n`).join("");
+      : shown.map((n) => `<div class="card" data-ref="${n.id}"><h2>${escapeHtml(n.title)}</h2><span class="place">${escapeHtml(n.area)}</span> <span class="road-list">${n.streets.map(escapeHtml).join("<br>")}</span> ${time(n)}</div>\n`).join("");
   const list = layout === "list" ? `<ul class="notices">\n${items}</ul>` : `<section class="cards">\n${items}</section>`;
   return `<!doctype html>
 <html lang="da">
