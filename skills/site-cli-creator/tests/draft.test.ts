@@ -276,6 +276,17 @@ describe("draftOperation", () => {
     expect(Object.values(picked.value)[0]![1]).toMatchObject({ text: ["tag2a", "tag2b"] });
   });
 
+  test("an element whose lines repeated <br> separates drafts as lines: true; one <br> after a label stays text (#124)", async () => {
+    const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><h3 class="t">T${i}</h3><p class="s">a${i}<br>b${i}<br>c${i}</p><p class="a">L:<br>v${i}</p></li>`).join("")}</ul>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/lines`, page, "text/html"));
+    expect(source).toContain('{ css: "p.s", lines: true }');
+    expect(source).toContain('"p.a"');
+    const op = await importDraft("listLines.ts", source);
+    const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, any[]> };
+    expect(op.response.safeParse(picked.value).success).toBe(true);
+    expect(Object.values(picked.value)[0]![1]).toMatchObject({ s: ["a2", "b2", "c2"], a: "L: v2" });
+  });
+
   // Every drafted selector picks, on the page it was drafted from, the element it was drafted from (review 2).
   const picks = async (file: string, page: string) => {
     const { source } = draftOperation(htmlCapture(`${ORIGIN}/p`, page, "text/html"));
@@ -401,7 +412,7 @@ describe("draftOperation", () => {
   test("drafts type-check against the runtime's Operation type", () => {
     const tsc = Bun.spawnSync(
       [process.execPath, "x", "tsc", "--noEmit", "--strict", "--skipLibCheck", "--target", "esnext", "--module", "esnext",
-        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts", "listProducts.ts", "listTags.ts", "listIt.ts", "listIcons.ts", "getDetail.ts", "listMenu.ts", "getViewsAjaxRows.ts", "listViewRows.ts"].map((f) => join(work, "cli", "src", "operations", f))],
+        "--moduleResolution", "bundler", "--types", "bun", ...["getAccount.ts", "patchInvoice.ts", "addNote.ts", "createNote.ts", "updateOrder.ts", "updateTag.ts", "updateCart.ts", "listEvents.ts", "getViewsAjax.ts", "getEvent.ts", "listProducts.ts", "listTags.ts", "listLines.ts", "listIt.ts", "listIcons.ts", "getDetail.ts", "listMenu.ts", "getViewsAjaxRows.ts", "listViewRows.ts"].map((f) => join(work, "cli", "src", "operations", f))],
       { cwd: GENERATOR_ROOT, stdout: "pipe", stderr: "pipe" },
     );
     expect(tsc.stdout.toString() + tsc.stderr.toString()).toBe("");
