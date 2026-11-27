@@ -47,10 +47,10 @@ Leave out issues an open PR already fixes (its body says `Fixes #n`). Group the 
 
 ### 3. Branch
 
-Sweep merged leftovers first: `git fetch --prune && git branch -vv | grep ': gone]'`, then `git worktree remove ../skills-<slug>` and `git branch -d <branch>` for each; skip anything that errors.
+Sweep merged leftovers first: `git fetch --prune && git branch -vv | grep ': gone]'`, then `git worktree remove ../skills-<slug>` and `git branch -D <branch>` for each, but only when its tip equals its merged PR's head (`gh pr list --state merged --head <branch> --json headRefOid`). `-D` is needed because a squash-merged branch never counts as merged. Skip any other branch and anything that errors.
 
 - No open generator PR touches your files: `git worktree add ../skills-<slug> -b fix/site-cli-creator-<slug> origin/main`.
-- An open generator PR touches the same files: branch from its branch instead (`origin/<its branch>`). Still open your PR against `main` (only merges into `main` close `Fixes #n` issues); it shows the other PR's commits until that one merges. Say "stacked on #<n>, merge after it" in the body.
+- An open generator PR touches the same files: branch from its branch instead (`origin/<its branch>`). Still open your PR against `main` (only merges into `main` close `Fixes #n` issues); it shows the other PR's commits until that one merges and you rebase onto `main` (CLAUDE.md, step 3 **Check main first**). Say "stacked on #<n>, merge after it" in the body.
 
 Then run the setup in the new worktree: `node_modules` is per worktree.
 
@@ -92,7 +92,7 @@ Review and merge it with the procedure in the repo's CLAUDE.md (Pull requests): 
 
 ### 10. Relay
 
-After the merge, in the one report CLAUDE.md step 4 asks for, tell the maintainer the PR, the new version, the issues it closes, the cold-read result and the Starter code reach list. They update with `/plugin marketplace update hoaj`.
+After the merge, in the one report CLAUDE.md step 5 asks for, tell the maintainer the PR, the new version, the issues it closes, the cold-read result and the Starter code reach list. They update with `/plugin marketplace update hoaj`.
 
 ## Gotchas
 
