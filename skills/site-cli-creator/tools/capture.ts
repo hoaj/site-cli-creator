@@ -219,6 +219,19 @@ async function startAnswer(response: PageResponse | null): Promise<StartAnswer |
   return { status, ...(blocked ? { blocked } : {}) };
 }
 
+/** What a Capture says when its start page was refused and no other call answered with data (#119). */
+function refusedStart({ status, blocked }: StartAnswer, headless: boolean): string {
+  const what = blocked
+    ? `The start page answered ${status}, the block page of a bot wall (${blocked}), and no call other than sign-in steps answered with data (2xx or 304): the site refused this Chrome`
+    : `The start page answered ${status} and no call other than sign-in steps answered with data (2xx or 304): the site refused this Chrome (a bot wall, a blocked address) or is down`;
+  return (
+    `${what}, so the Task's data never loaded and this Capture holds none of its Operations. ` +
+    (headless ? "A wall may refuse only headless Chrome: capture again without --headless (--script still drives the page). " : "") +
+    "A challenge solved in the window sends its answer as a write, which a read Task aborts (stderr names each aborted write): capture again with --allow-read <its path>. " +
+    `${blocked ? "The CLI will likely meet the same wall" : "If it is a bot wall, the CLI will likely meet it too"}: reference/fix.md#2c-a-bot-block.`
+  );
+}
+
 function clearPreviousCapture(dir: string): void {
   if (!existsSync(dir)) return;
   for (const f of readdirSync(dir)) {
@@ -466,13 +479,10 @@ await runTool(async () => {
   const suspectNote = suspects.size
     ? ` A write was aborted on ${[...suspects].sort().join(", ")}, which the sign-in may go through: if signing in stalled, capture again with ${[...suspects].sort().map((h) => `--login-host ${h}`).join(" ")}.`
     : "";
-  // The start page refused this Chrome and nothing else answered (#119): the Task's data never loaded.
-  const answered = operations.some((op) => !op.loginFlow && op.responses.some((r) => r.status >= 200 && r.status < 300));
-  const refused =
-    start && REFUSALS.has(start.status) && !answered
-      ? `The start page answered ${start.status}${start.blocked ? `, a ${start.blocked} bot wall's block page` : ""}, and no call answered 2xx: the site refused this Chrome, so the Task's data never loaded and this Capture holds none of its Operations. ` +
-        `${values.headless ? "Capture again headed (without --headless; --script still drives it): a wall may refuse only headless Chrome, and a person can pass a challenge in the window. " : ""}The CLI will likely meet the same wall: reference/fix.md#2c-a-bot-block.`
-      : undefined;
+  // The start page refused this Chrome and nothing else answered with data (#119): the Task's data never loaded.
+  // A 304 is data too: the profile's cache revalidated it.
+  const answered = operations.some((op) => !op.loginFlow && op.responses.some((r) => (r.status >= 200 && r.status < 300) || r.status === 304));
+  const refused = start && REFUSALS.has(start.status) && !answered ? refusedStart(start, values.headless) : undefined;
   const refusedNote = refused ? ` ${refused}` : "";
   if (operations.length === 0) {
     const why = scriptError ? `--script failed: ${firstLine(scriptError.message)}; ` : "";

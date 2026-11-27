@@ -668,7 +668,9 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     const hint = (r.out.hints ?? []).find((h: string) => h.includes("fix.md#2c-a-bot-block"));
     expect(hint).toBeDefined();
     expect(hint).toContain("403");
-    expect(hint).toContain("cloudflare");
+    expect(hint).toContain("the block page of a bot wall (cloudflare)");
+    expect(hint).toContain("without --headless");
+    expect(hint).toContain("--allow-read <its path>");
     expect(r.everything).not.toContain(RAY_ID);
   }, 120_000);
 
@@ -684,7 +686,9 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     const r = await capture(join(work, "forbidden-skill"), ["--script", join(work, "noop.ts")], "/forbidden");
     expect(r.code).toBe(0);
     const hint = (r.out.hints ?? []).find((h: string) => h.includes("fix.md#2c-a-bot-block"));
-    expect(hint).toContain("403");
+    expect(hint).toContain("The start page answered 403");
+    expect(hint).toContain("or is down");
+    expect(hint).toContain("If it is a bot wall");
     expect(hint).not.toContain("cloudflare");
   }, 120_000);
 
