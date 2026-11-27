@@ -471,7 +471,7 @@ await runTool(async () => {
   const refused =
     start && REFUSALS.has(start.status) && !answered
       ? `The start page answered ${start.status}${start.blocked ? `, a ${start.blocked} bot wall's block page` : ""}, and no call answered 2xx: the site refused this Chrome, so the Task's data never loaded and this Capture holds none of its Operations. ` +
-        `${values.headless ? "Capture again headed (without --headless), so a person can pass any challenge in the window. " : ""}The CLI will likely meet the same wall: reference/fix.md#2c-a-bot-block.`
+        `${values.headless ? "Capture again headed (without --headless; --script still drives it): a wall may refuse only headless Chrome, and a person can pass a challenge in the window. " : ""}The CLI will likely meet the same wall: reference/fix.md#2c-a-bot-block.`
       : undefined;
   const refusedNote = refused ? ` ${refused}` : "";
   if (operations.length === 0) {

@@ -56,7 +56,7 @@ The Capture lands in `<skill>/captures/<slug>/`: one `<operation>.shape.json` pe
 
 If nothing reached the origin, `capture.ts` exits with an error and leaves any earlier Capture of the Task as it was: check `--url`, `--origin` and that the Task was performed, then run it again.
 
-If the start page answered 403, 429 or 503 and no call answered 2xx, the site refused the Capture's Chrome (a bot wall, a blocked address): the Capture is written, but a hint names the status and, when it recognises one, the bot wall (a failed `--script` says the same in its error). Capture again headed, so a person can pass any challenge; the CLI will likely meet the same wall ([fix.md](fix.md#2c-a-bot-block)).
+If the start page answered 403, 429 or 503 and no call answered 2xx, the site refused the Capture's Chrome (a bot wall, a blocked address): the Capture is written, but a hint names the status and, when it recognises one, the bot wall (a failed `--script` says the same in its error). Capture again headed (leave out `--headless`; `--script` still drives the page): a wall may refuse only headless Chrome, and a person can pass a challenge in the window; the CLI will likely meet the same wall ([fix.md](fix.md#2c-a-bot-block)).
 
 Recapture when the Task's data never appeared (wrong start page, still loading when the browser closed) or a needed Operation is missing.
 
