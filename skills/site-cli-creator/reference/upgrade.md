@@ -52,6 +52,8 @@ For each one, find out what the plugin's edit was for (`git log -p -- <file>` in
 - **The plugin's edit was its own** (a site-specific tweak): apply the Starter change and keep what the edit was for.
 - **You cannot tell what is right:** keep the plugin's lines, and list the file under "Left for the maintainer" in the PR with the Starter change it does not have yet.
 
+A hand port often reaches past its hunk: an import or call that merged cleanly, or a helper file the plugin added for it (its header or `git log` names the generator issue it ported). Once you take the Starter's lines, remove what only the port used, delete a plugin-owned helper file nothing imports any more, point the plugin's own tests for it at the Starter code, and name each in the PR. The typecheck in step 5 finds what is left over.
+
 Before going on, `grep -rn '^<<<<<<< ' <plugin>` must find nothing.
 
 ## 4. site.ts
@@ -67,8 +69,10 @@ cd <skill>/cli && bun install                       # package.json may pin new d
 cd <skill>/cli && bun run typecheck
 bun <gen>/tools/regen.ts --skill-dir <skill>
 cd <skill>/cli && SITE_CLI_NONINTERACTIVE=1 bun src/main.ts check --writes
-cd <plugin> && bun install && bun test
+cd <plugin> && bun test
 ```
+
+Before `bun test`, run `bun install` in every folder the plugin's CI installs in (the "Install dependencies" step of `.github/workflows/ci.yml`: the plugin root, each `skills/*/cli`, and any other folder of the plugin's own with a `package.json`, such as a `server/`): a folder left uninstalled fails with `Cannot find package`, which is not the upgrade's doing.
 
 A failure the upgrade caused is fixed in this branch. A `check` that fails because of Drift is not the upgrade's: open it as a Drift issue for `fix` and say so in the PR.
 
