@@ -20,7 +20,7 @@ import { toolCommand } from "./lib/paths";
 import { CaptureRecorder, markers, shapeFileNames, type Planned } from "./lib/recorder";
 import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
 import { redactPath } from "./lib/shape";
-import { blockSignal } from "../starter/skill/cli/src/runtime/call";
+import { blockSignal, parsedBody } from "../starter/skill/cli/src/runtime/call";
 import { loginHostName } from "../starter/skill/cli/src/runtime/site";
 
 const USAGE =
@@ -201,8 +201,8 @@ const REFUSALS = new Set([403, 429, 503]);
 /** An answer with data: 2xx, or a 304 the profile's cache revalidated. */
 const withData = (status: number) => (status >= 200 && status < 300) || status === 304;
 
-/** A main-frame page load's answer: its status, the bot wall whose block page it is, and whether it was a sign-in step. */
-type PageAnswer = { status: number; blocked?: string; loginFlow: boolean };
+/** A main-frame page load's answer: its status, and the bot wall whose block page it is. */
+type PageAnswer = { status: number; blocked?: string };
 
 /**
  * A page load's answer (#119), read as the load finishes, before a challenge's script can move on. The
@@ -210,21 +210,15 @@ type PageAnswer = { status: number; blocked?: string; loginFlow: boolean };
  * the vendor's name are kept. Headers go in one line at a time: a response's Set-Cookie lines joined into
  * one value (allHeaders) are no valid header value.
  */
-async function pageAnswer(req: Request, loginFlow: boolean): Promise<PageAnswer | undefined> {
+async function pageAnswer(req: Request): Promise<PageAnswer | undefined> {
   const response = await req.response();
   if (!response) return undefined;
   const status = response.status();
   const headers = new Headers();
   for (const { name, value } of await response.headersArray()) headers.append(name, value);
   const text = (await response.body().catch(() => undefined))?.toString("utf8");
-  let body: unknown = text?.trim() ? text : undefined;
-  try {
-    if (body !== undefined) body = JSON.parse(text as string);
-  } catch {
-    // not JSON: the page's text
-  }
-  const blocked = blockSignal(status, headers, body);
-  return { status, ...(blocked ? { blocked } : {}), loginFlow };
+  const blocked = blockSignal(status, headers, text === undefined ? undefined : parsedBody(text));
+  return { status, ...(blocked ? { blocked } : {}) };
 }
 
 /** What a Capture says when the tab's last page load was refused and no other call answered with data (#119). */
@@ -314,7 +308,7 @@ await runTool(async () => {
   /** In-scope requests sent but not yet finished or failed. */
   const inflight = new Set<Request>();
   let open = true;
-  /** In-scope main-frame page loads in the order they finished, each with its answer (#119). */
+  /** In-scope main-frame page loads that are no sign-in step, in the order they finished, each with its answer (#119). */
   const pageLoads: Promise<PageAnswer | undefined>[] = [];
   /** Whether a fetch, XHR or event stream other than a sign-in step answered with data (#119). */
   let fetchedData = false;
@@ -417,10 +411,9 @@ await runTool(async () => {
     else await route.continue().catch(() => {});
   });
   context.on("requestfinished", (req) => {
-    const planned = planOf(req);
-    if (open && planned && isPageLoad(req)) pageLoads.push(pageAnswer(req, planned.loginFlow).catch(() => undefined));
+    const plan = planOf(req);
+    if (open && plan && !plan.loginFlow && isPageLoad(req)) pageLoads.push(pageAnswer(req).catch(() => undefined));
     track(req, async () => {
-      const plan = planOf(req);
       if (!plan) return;
       const response = await req.response();
       const headers = await req.allHeaders().catch(() => req.headers());
@@ -484,7 +477,7 @@ await runTool(async () => {
     const plan = planOf(req);
     if (plan) recorder.record(plan, { headers: req.headers() });
   }
-  const loads = (await Promise.all(pageLoads)).filter((a): a is PageAnswer => a !== undefined && !a.loginFlow);
+  const loads = (await Promise.all(pageLoads)).filter((a): a is PageAnswer => a !== undefined);
   await context.close().catch(() => {});
   process.stdin.pause();
 

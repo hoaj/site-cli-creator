@@ -23,7 +23,7 @@
 // the table holds as it is.
 import { existsSync } from "node:fs";
 import type { Call } from "./command";
-import { ContractError, DryRun, Failure, ProfileUnavailable, SIGN_IN_RENEWED, WRITE_NOT_RESENT, type Account, type DiffEntry, type Surface } from "./envelope";
+import { ContractError, DryRun, Failure, ProfileUnavailable, notResentNext, type Account, type DiffEntry, type Surface } from "./envelope";
 import { extractHtml, htmlMatches, isHtmlType, type HtmlContract } from "./html";
 import { driftFingerprint, errorName, fieldPath, rejectedFields, zodDiff, type BreakType } from "./fingerprint";
 import { withSiteHeaders } from "./browser-headers";
@@ -105,6 +105,9 @@ export type Request = { method: string; url: string; headers: Record<string, str
  */
 type Response_ = { status: number; body: unknown; bytes?: Uint8Array; contentType?: string; loginRedirect?: boolean; signedOut?: "path" | "selector"; offsite?: boolean; blocked?: string };
 
+/** A `loginRedirect` answer, as a message names it. */
+const signInAnswer = (r: Response_) => (r.signedOut === "path" ? "a redirect to its sign-in page" : r.signedOut === "selector" ? "its sign-in form" : "a redirect to a login host");
+
 /** What a browser asks for when it loads a page. */
 const HTML_ACCEPT = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
@@ -180,7 +183,7 @@ function formBody(name: string, value: unknown): string {
 }
 
 /** An answer's text as JSON when it parses, else the text; undefined when empty. */
-function parsedBody(text: string): unknown {
+export function parsedBody(text: string): unknown {
   if (!text.trim()) return undefined;
   try {
     return JSON.parse(text);
@@ -339,6 +342,7 @@ function gqlErrors(body: unknown): GqlError[] {
 
 const gqlCode = (e: GqlError) => (typeof e.extensions?.code === "string" ? e.extensions.code : "");
 const gqlMessage = (e: GqlError) => (typeof e.message === "string" ? e.message : "");
+const unauthenticated = (body: unknown) => gqlErrors(body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
 
 /** Schema coordinates named by a validation message ("Type.field"), never values. */
 function gqlPath(message: string): string {
@@ -821,17 +825,16 @@ export class Client {
     // GraphQL write whose root field answered (it ran) with an UNAUTHENTICATED error below it.
     const neverResend = async (r: Response_): Promise<Response_> => {
       if (op.effect === "read") return r;
-      const ran = op.graphql !== undefined && hasRootData(r.body) && gqlErrors(r.body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
+      const ran = op.graphql !== undefined && hasRootData(r.body) && unauthenticated(r.body);
       if (r.loginRedirect || ran) {
-        const how = ran ? "a sign-in error (UNAUTHENTICATED) after the write ran" : r.signedOut === "path" ? "a redirect to its sign-in page" : r.signedOut === "selector" ? "its sign-in form" : "a redirect to a login host";
+        const how = ran ? "a sign-in error (UNAUTHENTICATED) after the write ran" : signInAnswer(r);
         // The write is not sent again, but the sign-in is still renewed where reauthenticate() would (login.refresh, plain
         // fetch, no Chrome), so the next run is signed in. Nothing proves the renewal took, so `next` keeps the login step
         // for a run that ends this way again. A site.never refusal of renew's own request is the bug it is everywhere.
         const renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew());
         // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
         const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
-        const next = `${WRITE_NOT_RESENT} ${renewed ? `${SIGN_IN_RENEWED} If it ends this way again, ${login} before running it again.` : `If it did not, ${login}, then run it again.`}`;
-        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { next });
+        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { next: notResentNext(renewed, login) });
       }
       return r;
     };
@@ -849,7 +852,7 @@ export class Client {
       // The site's own sign-in page (login.paths, login.signedOutSelector) after the one sign-in a run is allowed: the
       // sign-in did not take, which is a session failure, not a change of the site away from a Contract.
       if (res.signedOut) {
-        const how = res.signedOut === "path" ? "a redirect to its sign-in page" : "its sign-in form";
+        const how = signInAnswer(res);
         const after = this.signedInHere ? "a fresh sign-in" : this.renewed ? "renewing the sign-in" : "a check of the saved sign-in";
         throw new Failure("session", `${op.name}: the site still answers with ${how} after ${after}.`);
       }
@@ -932,7 +935,7 @@ export class Client {
 
   private isAuthFailure(op: Operation, res: Response_): boolean {
     if (res.status === 401 || res.status === 403 || res.loginRedirect) return true;
-    return op.graphql !== undefined && gqlErrors(res.body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
+    return op.graphql !== undefined && unauthenticated(res.body);
   }
 
   private async send(op: Operation, vars: unknown, prebuilt?: Request): Promise<Response_> {

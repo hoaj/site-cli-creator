@@ -9,7 +9,7 @@ import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelconte
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { Failure } from "./envelope";
-import { SIGN_IN_RENEWED, WRITE_NOT_RESENT, WRITE_SENT } from "./envelope";
+import { notResentNext, SIGN_IN_RENEWED, WRITE_NOT_RESENT, WRITE_SENT } from "./envelope";
 import { listedTools, toolResult, type McpTool, type ServerInfo } from "./mcp";
 import { OAuthStore, OwnerProvider, failedPage, returningPage, signedInPage } from "./owner-auth";
 import { redirectAllowed, type RemoteConfig } from "./remote-config";
@@ -96,11 +96,7 @@ function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknow
   }
   const owner = `the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json)`;
   const sent = (error as { writeSent?: boolean }).writeSent ? `${WRITE_SENT} ` : "";
-  const next = renewed
-    ? `${sent}${WRITE_NOT_RESENT} ${SIGN_IN_RENEWED} If it ends this way again, ask ${owner} before running it again.`
-    : notResent
-      ? `${sent}${WRITE_NOT_RESENT} If it did not, ask ${owner}, then run it again.`
-      : `${sent}Ask ${owner}. Do not retry until they have.`;
+  const next = `${sent}${notResent ? notResentNext(renewed, `ask ${owner}`) : `Ask ${owner}. Do not retry until they have.`}`;
   return { error: { ...error, next } };
 }
 
