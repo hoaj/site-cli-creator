@@ -341,3 +341,57 @@ describe.skipIf(!existsSync(VERSION_TAGS))("version-tags.sh (the generator's tag
     expect(proc.stdout.toString()).toBe(`v0.2.0 ${merge}\n`);
   });
 });
+
+describe("upgrade, review round 2", () => {
+  test("an edited file whose closest base already is the target is named in newerBases, not left out of every list", () => {
+    const dir = makePlugin({ dir: join(work, "r2-skip") }, base);
+    setGeneratedWith(dir, OLD);
+    // LATER's install.sh line by hand (LATER's file equals the target's), plus an edit of the plugin's own.
+    const install = join(dir, "skills/shop/install.sh");
+    edit(install, "# Run it when the binary is missing", "# Run it once, when the binary is missing");
+    edit(install, "#   5. macOS: strip quarantine", "#   5. macOS (plugin edit): strip quarantine");
+    git(dir, "init", "-q");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "plugin");
+    const result = run(UPGRADE, ["--dir", dir, "--starters", starters], REAL_STARTER);
+    expect(result.code).toBe(0);
+    expect(result.out.newerBases).toEqual({ "skills/shop/install.sh": LATER });
+    expect(read(install)).toContain("(plugin edit)");
+  }, 60_000);
+
+  test("a plugin already at this version merges only the skill a record holds back, and ignores a record for a skill it no longer has", () => {
+    const dir = makePlugin({ dir: join(work, "r2-current") }, REAL_STARTER);
+    const path = join(dir, "generated.json");
+    writeFileSync(path, `${JSON.stringify({ ...JSON.parse(read(path)), skills: { shop: OLD, gone: OLD } }, null, 2)}\n`);
+    // shop's Starter code is OLD's; the plugin's own files and bank are this version's, with an edit.
+    rmSync(join(dir, "skills/shop"), { recursive: true });
+    const shop = run(ADD_SKILL, ["--dir", dir, "--skill", "shop", "--origin", "https://shop.example.com", "--auth", "none", "--daily-check", "on"], base);
+    expect(shop.code).toBe(0);
+    writeFileSync(path, `${JSON.stringify({ ...JSON.parse(read(path)), skills: { shop: OLD, gone: OLD } }, null, 2)}\n`);
+    edit(join(dir, "README.md"), "# demo", "# demo (plugin edit)");
+    git(dir, "init", "-q");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "plugin");
+    const result = run(UPGRADE, ["--dir", dir, "--starters", starters], REAL_STARTER);
+    expect(result.code).toBe(0);
+    expect(result.out.bases.plugin).toEqual({ version: generatorVersion() });
+    expect(Object.keys(result.out.bases.skills).sort()).toEqual(["bank", "shop"]);
+    const touched = [...result.out.added, ...result.out.updated, ...result.out.merged, ...result.out.conflicts];
+    expect(touched.length).toBeGreaterThan(0);
+    expect(touched.every((f: string) => f.startsWith("skills/shop/"))).toBe(true);
+    expect(read(join(dir, "README.md"))).toContain("# demo (plugin edit)");
+  }, 60_000);
+
+  test("each CLI skill's site.ts generatedWith moves to the new version; nothing else in site.ts changes", () => {
+    const dir = makePlugin({ dir: join(work, "r2-site") }, base);
+    setGeneratedWith(dir, OLD);
+    const site = join(dir, "skills/shop/cli/src/site.ts");
+    edit(site, /generatedWith: "[^"]*"/.exec(read(site))![0], `generatedWith: "${OLD}"`);
+    const before = read(site);
+    git(dir, "init", "-q");
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "plugin");
+    expect(run(UPGRADE, ["--dir", dir, "--starters", starters], REAL_STARTER).code).toBe(0);
+    expect(read(site)).toBe(before.replace(`generatedWith: "${OLD}"`, `generatedWith: "${generatorVersion()}"`));
+  }, 60_000);
+});

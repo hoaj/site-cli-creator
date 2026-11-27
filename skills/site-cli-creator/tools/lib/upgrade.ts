@@ -316,12 +316,12 @@ export function mergeStarter(
         base = { version: r.version, text };
       }
     }
+    if (base && first && base.version !== first.version) report.newerBases[rel] = base.version;
     if (base && base.text.equals(theirs)) continue; // the plugin's edit already holds every Starter change to it
     if (isBinary(current) || isBinary(theirs) || (base && isBinary(base.text))) {
       report.binaryConflicts.push(rel);
       continue;
     }
-    if (base && first && base.version !== first.version) report.newerBases[rel] = base.version;
     const { text, conflict } = mergeFile(scratch, current, base?.text ?? Buffer.alloc(0), theirs, labels(base?.version ?? "none"));
     writeFileSync(mine, text);
     fixMode();

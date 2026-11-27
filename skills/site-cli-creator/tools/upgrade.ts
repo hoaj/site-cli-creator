@@ -8,7 +8,7 @@
 // Past Starter code comes from the generator's version tags on GitHub, or from --starters.
 // STARTER_DIR overrides the target (tests only).
 
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { parseFlags } from "./lib/args";
@@ -82,7 +82,8 @@ await runTool(async () => {
   const state = readPlugin(dir);
   const from = state.generatedWith;
   const to = generatorVersion();
-  const recorded = Object.values(state.skillVersions);
+  // Only the records of CLI skills the plugin still has count.
+  const recorded = state.skills.map((sk) => state.skillVersions[sk.name]).filter((v): v is string => !!v);
   if (compareVersions(from, to) === 0 && recorded.every((v) => v === to)) return { dir, from, to, upToDate: true };
   for (const v of [from, ...recorded]) {
     if (compareVersions(v, to) > 0) fail(`the plugin has Starter code from generator ${v}, newer than this one (${to}): update site-cli-creator first (/plugin marketplace update hoaj)`);
@@ -98,7 +99,8 @@ await runTool(async () => {
     const past = source.versions.filter((v) => compareVersions(v, to) < 0);
 
     // The version each part was copied from: its floor. Only Starter code from there up can be a file's base.
-    const pluginBase = pickBase(past, from);
+    // A plugin already at this version keeps its own files; only a skill a record holds back is merged.
+    const pluginBase = compareVersions(from, to) === 0 ? { version: to, approximate: false } : pickBase(past, from);
     if (!pluginBase) fail(`no Starter code at or below ${from} (the plugin's generatedWith) in ${values.starters ?? `${repo}'s tags`}, ${OFFLINE}`);
     const skillBases: Record<string, { version: string; from: "generated.json" | "generatedWith"; approximate?: true }> = {};
     for (const skill of state.skills) {
@@ -136,6 +138,13 @@ await runTool(async () => {
       (v) => [state.plugin, `starter v${v}`, `starter v${to}`],
       (rel) => isSiteCode(rel, state),
     );
+    // site.ts is the site's code, but its generatedWith line is the generator's (add-skill fills it; doctor falls back to it).
+    for (const skill of state.skills) {
+      const site = join(dir, "skills", skill.name, "cli", "src", "site.ts");
+      const text = readFileSync(site, "utf8");
+      const next = text.replace(/^(\s*generatedWith:\s*)(["'])[^"']*\2/m, `$1"${to}"`);
+      if (next !== text) writeFileSync(site, next);
+    }
     // Every part is at this version now, so the per-skill record goes.
     const genPath = join(dir, "generated.json");
     const { skills: _skills, ...generated } = readJson<Record<string, unknown>>(genPath);

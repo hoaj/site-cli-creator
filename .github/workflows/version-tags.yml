@@ -25,6 +25,8 @@ jobs:
         with:
           fetch-depth: 0
       - name: Tag every version that has no tag
+        # bash -eo pipefail: a failing version-tags.sh fails the job instead of ending the loop quietly.
+        shell: bash
         run: |
           .github/scripts/version-tags.sh HEAD | while read -r tag commit; do
             git tag "$tag" "$commit"

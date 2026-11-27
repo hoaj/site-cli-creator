@@ -1,6 +1,6 @@
 # Mode: upgrade
 
-Brings a plugin's Starter code (runtime, `install.sh`, `build.ts`, workflows, scripts, Feedback and Deploy skills) up to this generator's version, as a PR the maintainer merges. Use it when the maintainer asks for it, or when a Starter code fix or feature they want (such as the daily drift check, `.github/workflows/drift-check.yml`) came after the plugin was made: `generated.json`'s `generatedWith` is older than this generator's version (`.claude-plugin/plugin.json` two levels above `<gen>`). The site's own code (`site.ts`, `registry.ts`, `operations/`, `commands/`, `lib/`, `captures/`) is never touched.
+Brings a plugin's Starter code (runtime, `install.sh`, `build.ts`, workflows, scripts, Feedback and Deploy skills) up to this generator's version, as a PR the maintainer merges. Use it when the maintainer asks for it, or when a Starter code fix or feature they want (such as the daily drift check, `.github/workflows/drift-check.yml`) came after the plugin was made: `generated.json`'s `generatedWith` is older than this generator's version (`.claude-plugin/plugin.json` two levels above `<gen>`). The site's own code (`site.ts`, `registry.ts`, `operations/`, `commands/`, `lib/`, `captures/`) is never touched, except the `generatedWith` line in each `site.ts`, which the tool moves to the new version.
 
 Done when the PR is open with a minor bump, no conflict marker is left, `bun test` and every skill's `check --writes` passed, and the body states each conflict decision. The maintainer merges; an upgrade never merges itself.
 
@@ -25,14 +25,14 @@ It downloads every past Starter version from the oldest one a part of the plugin
 | `merged` | files the plugin edited and the Starter code changed, on different lines: merged cleanly | read each diff (`git diff`) |
 | `conflicts` | files the plugin edited and the Starter code changed on the same lines: conflict markers are written into them | step 3 |
 | `binaryConflicts` | binary files the plugin replaced and the Starter code changed: left as they were, with no markers | for each, keep the plugin's file or take the Starter's (from `compare`), and say which in the PR |
-| `newerBases` | edited files merged from a newer version than their part's base (`file: version`): the plugin's copy is closest to that version's, as when it took a later fix by hand, so the Starter changes up to it count as already there | for each, check in `compare` that the file really has every change up to that version; apply any it lacks |
+| `newerBases` | edited files whose base is a newer version than their part's (`file: version`), merged from it or, when that version's copy already is the new one, left as they were: the plugin's copy is closest to that version's, as when it took a later fix by hand, so the Starter changes up to it count as already there | for each, check in `compare` that the file really has every change up to that version; apply any it lacks |
 | `removedFromStarter` | files the new Starter code no longer has; kept | delete one only when nothing in the plugin uses it (`grep` its name), and say so |
 | `deletedInPlugin` | files the plugin deleted that the Starter code changed; left deleted | name them in the PR |
 | `siteTemplateDiff` | how the Starter's own `site.ts` changed (a diff), or null | step 4 |
 | `workflowsChanged` | a file under `.github/workflows/` changed | pushing needs a token with the `workflow` scope: `gh auth refresh -s workflow` |
 | `compare` | the generator's commits and PRs between the oldest base and this version | read it for why each Starter change was made |
 
-`generated.json` now says `generatedWith: <this version>`, and its per-skill record (`skills`) is gone: every part is at this version.
+`generated.json` and each `site.ts` now say `generatedWith: <this version>`, and `generated.json`'s per-skill record (`skills`) is gone: every part is at this version.
 
 ## 3. Resolve each conflict
 
