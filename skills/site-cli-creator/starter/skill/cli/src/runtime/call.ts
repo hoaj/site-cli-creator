@@ -822,11 +822,12 @@ export class Client {
       if (r.loginRedirect && op.effect !== "read") {
         const how = r.signedOut === "path" ? "a redirect to its sign-in page" : r.signedOut === "selector" ? "its sign-in form" : "a redirect to a login host";
         // The write is not sent again, but the sign-in is still renewed where reauthenticate() would (login.refresh, plain
-        // fetch, no Chrome), so the next run is signed in. A renew that fails leaves the write's own failure as it is.
-        const renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew().catch(() => false));
+        // fetch, no Chrome), so the next run is signed in. Nothing proves the renewal took, so `next` keeps the login step
+        // for a run that ends this way again. A site.never refusal of renew's own request is the bug it is everywhere.
+        const renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew());
         // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
         const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
-        const next = `${WRITE_NOT_RESENT} ${renewed ? SIGN_IN_RENEWED : `If it did not, ${login}, then run it again.`}`;
+        const next = `${WRITE_NOT_RESENT} ${renewed ? `${SIGN_IN_RENEWED} If it ends this way again, ${login} before running it again.` : `If it did not, ${login}, then run it again.`}`;
         throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { next });
       }
       return r;
@@ -928,6 +929,9 @@ export class Client {
 
   private isAuthFailure(op: Operation, res: Response_): boolean {
     if (res.status === 401 || res.status === 403 || res.loginRedirect) return true;
+    // A GraphQL write whose root field answered ran (partial success): an UNAUTHENTICATED error on a field below it is no
+    // reason to sign in and send it again.
+    if (op.effect !== "read" && op.graphql !== undefined && hasRootData(res.body)) return false;
     return op.graphql !== undefined && gqlErrors(res.body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
   }
 

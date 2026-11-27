@@ -404,14 +404,14 @@ describe("auth login", () => {
       expect(f.kind).toBe("session");
       expect(f.details.next).toContain("check on the site");
       expect(f.details.next).toContain("the sign-in has been renewed");
-      expect(f.details.next).not.toContain("login");
+      expect(f.details.next).toContain("If it ends this way again, run `shop login` before running it again.");
       expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
       expect(loginCalls).toEqual([]);
       expect(loadSession(home.dir)!.headers.authorization).toBe("Bearer new");
       expect(loadSession(home.dir)!.refresh).toEqual({ token: "r2" });
     });
 
-    test("a renew that fails or throws there keeps the write's own failure, with login in next", async () => {
+    test("a renew hook that answers null or throws there keeps the write's own failure, with login in next", async () => {
       for (const renew of [async () => null, async () => Promise.reject(new Error("boom"))]) {
         home.cleanup();
         home = tempHome();
@@ -425,6 +425,37 @@ describe("auth login", () => {
         expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
         expect(loginCalls).toEqual([]);
       }
+    });
+  });
+
+  describe("a GraphQL write whose root field answered is not sent again on UNAUTHENTICATED below it (#123, review 2)", () => {
+    const renameCustomer = defineOperation({
+      name: "renameCustomer",
+      effect: "write",
+      graphql: "mutation renameCustomer($id: String!) { renameCustomer(id: $id) { id owner { email } } }",
+      variables: z.object({ id: z.string() }),
+      response: z.any(),
+    });
+    const unauthenticated = { message: "not signed in", path: ["renameCustomer", "owner"], extensions: { code: "UNAUTHENTICATED" } };
+
+    test("root data plus an UNAUTHENTICATED field error: one request, no sign-in", async () => {
+      saved();
+      const { fetch, calls } = fakeFetch(() => json({ data: { renameCustomer: { id: "C-1", owner: null } }, errors: [unauthenticated] }));
+      const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      const c = client(loginSite(), deps, true);
+      await c.call(renameCustomer, { id: "C-1" }).catch(() => {});
+      expect(calls).toHaveLength(1);
+      expect(loginCalls).toEqual([]);
+      expect(c.writeSent).toBe(true);
+    });
+
+    test("UNAUTHENTICATED with a null root (the mutation did not run) still signs in and sends it again", async () => {
+      saved();
+      const { fetch, calls } = fakeFetch((r) => (r.headers.authorization === "Bearer new" ? json({ data: { renameCustomer: { id: "C-1", owner: null } } }) : json({ data: { renameCustomer: null }, errors: [unauthenticated] })));
+      const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      await client(loginSite(), deps, true).call(renameCustomer, { id: "C-1" });
+      expect(calls).toHaveLength(2);
+      expect(loginCalls).toEqual([true]);
     });
   });
 

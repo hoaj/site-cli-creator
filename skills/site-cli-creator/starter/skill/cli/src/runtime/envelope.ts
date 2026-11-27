@@ -78,7 +78,7 @@ export type Surface = "cli" | "mcp";
 
 /**
  * How `next` starts for a write that got a sign-in page and was not sent again (call.ts), on every surface: remote.ts keeps
- * it in front of the Owner's step. It ends with SIGN_IN_RENEWED when the run renewed the sign-in there.
+ * it in front of the Owner's step. SIGN_IN_RENEWED follows it when the run renewed the sign-in there.
  */
 export const WRITE_NOT_RESENT = "Tell the user the write may already have taken effect and was not sent again, and ask them to check on the site. Do not run it again until they confirm it did not take effect.";
 export const SIGN_IN_RENEWED = "If it did not, run it again: the sign-in has been renewed.";

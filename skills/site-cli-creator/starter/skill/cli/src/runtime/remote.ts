@@ -85,17 +85,22 @@ function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknow
     }
     return output;
   }
-  // A write that got a sign-in page and was not sent again: the user checks on the site first, whatever the Owner does.
-  const notResent = typeof error.next === "string" && error.next.startsWith(WRITE_NOT_RESENT);
-  if (notResent && error.next!.endsWith(SIGN_IN_RENEWED)) return output; // renewed here: the Session works, nothing for the Owner
+  // A write that got a sign-in page and was not sent again (WRITE_SENT may stand in front, for an earlier write of the
+  // Task): the user checks on the site first, whatever the Owner does.
+  const notResent = typeof error.next === "string" && error.next.includes(WRITE_NOT_RESENT);
+  // Renewed here: the Session may work again, so it is not marked expired; the Owner is asked only if it ends this way again.
+  const renewed = notResent && error.next!.includes(SIGN_IN_RENEWED);
   const before = readStatus(setup.dir);
-  if (before.state !== "missing") {
+  if (before.state !== "missing" && !renewed) {
     checkedStatus(setup.dir, new Date(setup.now()).toISOString(), "expired", before.uploadedAt, String(error.message ?? ""));
   }
   const owner = `the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json)`;
-  const next = notResent
-    ? `${WRITE_NOT_RESENT} If it did not, ask ${owner}, then run it again.`
-    : `${(error as { writeSent?: boolean }).writeSent ? `${WRITE_SENT} ` : ""}Ask ${owner}. Do not retry until they have.`;
+  const sent = (error as { writeSent?: boolean }).writeSent ? `${WRITE_SENT} ` : "";
+  const next = renewed
+    ? `${sent}${WRITE_NOT_RESENT} ${SIGN_IN_RENEWED} If it ends this way again, ask ${owner} before running it again.`
+    : notResent
+      ? `${sent}${WRITE_NOT_RESENT} If it did not, ask ${owner}, then run it again.`
+      : `${sent}Ask ${owner}. Do not retry until they have.`;
   return { error: { ...error, next } };
 }
 
