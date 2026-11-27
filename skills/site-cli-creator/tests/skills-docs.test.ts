@@ -30,10 +30,10 @@ describe("manifests", () => {
   const paths = [".claude-plugin/plugin.json", ".cursor-plugin/plugin.json", ".github/plugin/plugin.json"];
   const manifests = paths.map((p) => JSON.parse(read(join(PLUGIN, p))));
 
-  test("version 0.21.1, both skills exist", () => {
+  test("version 0.23.0, both skills exist", () => {
     manifests.forEach((m) => {
       expect(m.name).toBe("site-cli-creator");
-      expect(m.version).toBe("0.21.1");
+      expect(m.version).toBe("0.23.0");
       expect(m.skills).toEqual(["./skills/site-cli-creator", "./skills/site-cli-creator-feedback"]);
       for (const s of m.skills) expect(existsSync(join(PLUGIN, s, "SKILL.md"))).toBe(true);
     });
@@ -83,15 +83,15 @@ describe("skills", () => {
   test("generator SKILL.md stays short and every linked reference exists", () => {
     const md = read(skills.generator);
     expect(md.split("\n").length).toBeLessThanOrEqual(150);
-    for (const f of ["new", "add-skill", "add-task", "fix", "contracts"]) expect(md).toContain(`reference/${f}.md`);
-    for (const p of [skills.generator, ...["new", "add-skill", "add-task", "fix", "contracts"].map((f) => join(GEN, "reference", `${f}.md`))]) {
+    for (const f of ["new", "add-skill", "add-task", "fix", "upgrade", "contracts"]) expect(md).toContain(`reference/${f}.md`);
+    for (const p of [skills.generator, ...["new", "add-skill", "add-task", "fix", "upgrade", "contracts"].map((f) => join(GEN, "reference", `${f}.md`))]) {
       for (const l of links(read(p))) expect(existsSync(resolve(dirname(p), l))).toBe(true);
     }
   });
 
   test("tool commands in the generator SKILL.md match the architecture", () => {
     const md = read(skills.generator);
-    for (const t of ["new.ts --dir", "add-skill.ts --dir", "capture.ts --skill-dir", "draft-contract.ts", "regen.ts --skill-dir"]) expect(md).toContain(t);
+    for (const t of ["new.ts --dir", "add-skill.ts --dir", "capture.ts --skill-dir", "draft-contract.ts", "regen.ts --skill-dir", "upgrade.ts --dir"]) expect(md).toContain(t);
   });
 
   test("starter skill SKILL.md follows SPEC §8", () => {
@@ -187,7 +187,7 @@ describe("skills", () => {
 
 // Every `bun <gen>/tools/<tool>.ts ...` line in the guidance uses only flags that tool's USAGE declares.
 describe("guidance matches the tools' interfaces", () => {
-  const docs = [join(GEN, "SKILL.md"), ...["new", "add-skill", "add-task", "fix", "contracts"].map((f) => join(GEN, "reference", `${f}.md`))];
+  const docs = [join(GEN, "SKILL.md"), ...["new", "add-skill", "add-task", "fix", "upgrade", "contracts"].map((f) => join(GEN, "reference", `${f}.md`))];
   const usage = (tool: string) => {
     const src = read(join(GEN, "tools", `${tool}.ts`));
     const m = src.match(/const USAGE =\s*["'`](.*)["'`];/);

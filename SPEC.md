@@ -22,7 +22,7 @@ The generator writes into a repo that the person running it chooses. **After gen
 
 ## 2. Generator modes
 
-Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cli-creator/issues/11), [One site per plugin, or several?](https://github.com/hoaj/site-cli-creator/issues/12) and [How do generated plugins pick up template fixes?](https://github.com/hoaj/site-cli-creator/issues/13), changed by [No shared code in generated plugins](https://github.com/hoaj/site-cli-creator/issues/26), which removed `upgrade`.
+Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cli-creator/issues/11), [One site per plugin, or several?](https://github.com/hoaj/site-cli-creator/issues/12) and [How do generated plugins pick up template fixes?](https://github.com/hoaj/site-cli-creator/issues/13), changed by [No shared code in generated plugins](https://github.com/hoaj/site-cli-creator/issues/26), which removed `upgrade`, and [Upgrade command for generated plugins](https://github.com/hoaj/site-cli-creator/issues/118), which brought it back as a merge the maintainer reviews (§5).
 
 | Mode | Trigger | Does |
 |---|---|---|
@@ -30,6 +30,8 @@ Decided in [Who picks a plugin's task commands?](https://github.com/hoaj/site-cl
 | `add-skill` | a new site or login in an existing plugin | creates `skills/<skill>/`, asks whether the site needs a login and confirms it from the Capture (`auth`, §7), sets up login or `bootstrap`, then runs **add-task** for each Task |
 | `add-task` | a feature request filed by the Feedback skill, or the maintainer | runs the Task loop (§3) once, reusing existing Operations, then opens a PR that the maintainer merges. If the maintainer's account can't perform the Task, the issue is closed with an explanation and the label `needs-account` (§13) |
 | `fix` | a Drift or bug issue | **Drift:** re-captures only the affected Task, updates the Contract, runs `check`, opens a PR that auto-merges when green. If the maintainer's account can't reach the Task, see §13. **Bug:** fixes it in the plugin's own code, wherever it sits, and opens a PR. If the bug came from the Starter code, it also offers an issue through `site-cli-creator-feedback`, so new plugins get the fix (§5) |
+
+| `upgrade` | the maintainer wants a later Starter code in an existing plugin | merges the Starter code of this generator into the plugin, three ways per file (§5), leaves the site's own code alone, and opens a PR that the maintainer merges |
 
 Only Drift fixes auto-merge. The maintainer merges everything else. Every mode passes `--writes` when it runs `check` (§10). Every mode that opens a PR also bumps the plugin version in that PR (§9).
 
@@ -69,7 +71,7 @@ Decided in [Template command surface and SKILL.md layout](https://github.com/hoa
   .github/workflows/ci.yml                  STARTER    PR tests and "version above main" (§9)
   .github/workflows/drift-check.yml         STARTER    the daily read-only check of every CLI skill (§10); own repo only
   .github/workflows/release.yml             STARTER    draft release vX.Y.Z → build every skill × target, uploading to the draft → publish
-  generated.json                            GENERATED  {"generatedWith", "maintainer", "pluginDir", "tagPrefix"} (§5, §13)
+  generated.json                            GENERATED  {"generatedWith", "maintainer", "pluginDir", "tagPrefix", "skills"?} (§5, §13)
   skills/<plugin>-feedback/SKILL.md         GENERATED  one per plugin, written once by `new`, then owned
                                                        by the plugin (§10)
   skills/<plugin>-deploy/SKILL.md           GENERATED  one per plugin, written once by `new`, then owned
@@ -102,14 +104,15 @@ There is no CLI framework. Routing and flag parsing are about 30 lines in `main.
 
 ## 5. Starter code
 
-Decided in [No shared code in generated plugins](https://github.com/hoaj/site-cli-creator/issues/26), which replaced the template files and `upgrade` from [How do generated plugins pick up template fixes?](https://github.com/hoaj/site-cli-creator/issues/13).
+Decided in [No shared code in generated plugins](https://github.com/hoaj/site-cli-creator/issues/26), which replaced the template files and `upgrade` from [How do generated plugins pick up template fixes?](https://github.com/hoaj/site-cli-creator/issues/13); `upgrade` came back in [Upgrade command for generated plugins](https://github.com/hoaj/site-cli-creator/issues/118), as a merge rather than an overwrite.
 
 - **The generator holds tested Starter code:** `main.ts`, `runtime/*`, `build.ts` (with the playwright-core patch), `install.sh`, the deploy files (`Dockerfile`, `.dockerignore`), the Deploy skill with its host guides (`hosts/<host>.md`), `release.yml`, the bump script, the version-sync test and the version check workflow (§9).
-- **`new` copies it once.** From then on it belongs to the plugin, like every other file, and can be changed freely. Nothing ever overwrites a plugin's files from outside. There is no `upgrade` mode.
+- **`new` copies it once.** From then on it belongs to the plugin, like every other file, and can be changed freely. Nothing changes a plugin's files without the maintainer merging a PR.
+- **`upgrade` merges a later Starter code in.** It renders the Starter code each part of the plugin was copied from (the plugin's own files: `generatedWith`; each CLI skill: the version `add-skill` recorded in `generated.json`'s `skills`, else the tagged version whose Starter code differs least from the skill's files) and this generator's, both with the plugin's own values and version, and merges each Starter file: a file the plugin never changed takes the new one, a file only the plugin changed stays, a file both changed is merged with conflict markers where they touch the same lines, which the maintainer's agent resolves and states in the PR, a new Starter file is added, and a removed one or one the plugin deleted is only reported. The site's own code (`site.ts`, `registry.ts`, `operations/`, `commands/`, `lib/`, `captures/`) is never touched. Past Starter code comes from the generator's tags `vX.Y.Z`, one per version, at its first commit on `main`; a version never tagged uses the closest one below it. The PR bumps minor and is never auto-merged.
 - **Labels in §4** say where a file came from, not who owns it: STARTER (copied from the Starter code), GENERATED (written by the generator), AGENT (written by the agent in the Task loop). The plugin owns all of them, including the Feedback skill and every SKILL.md.
 - **A bug in code that came from the Starter code** is fixed by `fix` in the plugin. `fix` also offers an issue through `site-cli-creator-feedback`, so the Starter code is fixed for future plugins. Existing plugins are not touched. They get the fix only if they hit the bug themselves.
-- **`generated.json`** records the generator version the plugin was created with (`generatedWith`) and its `maintainer` (§13), as information only, and `doctor` prints them. It also records where the plugin sits in its repo (`pluginDir`: `.` or `plugins/<plugin>`) and how its release tags start (`tagPrefix`: `v` or `<plugin>-v`), which `add-skill` and `fix` read; a plugin without them is the root of its own repo, with tags `v…`. When a Starter code bug is fixed, the maintainer can see which plugins were created before the fix and may be affected. Nothing acts on it automatically.
-- Improvements to the generator reach only plugins created after them.
+- **`generated.json`** records the generator version the plugin was created with (`generatedWith`) and its `maintainer` (§13), as information only, and `doctor` prints them. It also records where the plugin sits in its repo (`pluginDir`: `.` or `plugins/<plugin>`) and how its release tags start (`tagPrefix`: `v` or `<plugin>-v`), which `add-skill` and `fix` read; a plugin without them is the root of its own repo, with tags `v…`. When a Starter code bug is fixed, the maintainer can see which plugins were created before the fix and may be affected, and bring them up to date with `upgrade`. Nothing acts on it automatically.
+- Improvements to the generator reach only plugins created after them, and plugins whose maintainer runs `upgrade`.
 - **How the Starter code is built**, decided in [Prototype versus Starter code](https://github.com/hoaj/site-cli-creator/issues/30): it is written fresh from this spec during the build, not copied from the prototype. The prototype is a reference only, mainly for its offline scenario switch (`PROTO_SCENARIO=ok|drift|gqlerror|session|network`), which becomes the pattern for the Starter code's test fixtures. The Starter code has its own tests in the generator's CI: unit tests for routing, the envelope, classification, Fingerprints and bug keys, plus the platform smoke test from §9. The prototype branch is deleted once the Starter code lands.
 
 ## 6. Contracts
