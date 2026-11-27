@@ -47,7 +47,7 @@ Leave out issues an open PR already fixes (its body says `Fixes #n`). Group the 
 
 ### 3. Branch
 
-Sweep merged leftovers first: `git fetch --prune && git branch -vv | grep ': gone]'`, then `git worktree remove ../skills-<slug>` and `git branch -d <branch>` for each; skip anything that errors.
+Sweep merged leftovers first: `git fetch --prune && git branch -vv | grep ': gone]'`, then `git worktree remove ../skills-<slug>` and `git branch -D <branch>` for each (`-D`, because a squash-merged branch never counts as merged); skip anything that errors.
 
 - No open generator PR touches your files: `git worktree add ../skills-<slug> -b fix/site-cli-creator-<slug> origin/main`.
 - An open generator PR touches the same files: branch from its branch instead (`origin/<its branch>`). Still open your PR against `main` (only merges into `main` close `Fixes #n` issues); it shows the other PR's commits until that one merges. Say "stacked on #<n>, merge after it" in the body.
