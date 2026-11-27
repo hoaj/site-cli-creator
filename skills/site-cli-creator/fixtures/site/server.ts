@@ -34,6 +34,7 @@ export const DRIFTS = [
   "bot-wall", // data APIs answer 403 with an HTML challenge page unless the request comes from a browser (Sec-Fetch-Mode) and carries the cookie the front page sets in JavaScript
   "ua-wall", // data APIs answer 403 with an HTML challenge page to a request whose user-agent is not a Chrome one (`Mozilla/5.0 … Chrome/<version>`): Bun/…, missing, or any other; #111
   "html-layout", // GET /notices renders the same notices in a new layout, with no ul.notices (#102)
+  "page-wall", // the site's pages (GET /, GET /notices) answer 403 with the HTML challenge page to headless Chrome (a `HeadlessChrome` user-agent); data APIs are untouched (#119)
 ] as const;
 
 export type Drift = (typeof DRIFTS)[number];
@@ -279,6 +280,10 @@ export function startFixtureSite(opts: { port?: number; auth: Auth; control?: bo
   };
 
   const handleSite = async (req: Request, route: string, url: URL, entry: RequestLogEntry): Promise<Response> => {
+    // A wall that tells headless Chrome by its user-agent: a headless Capture's start page is refused.
+    if (drift === "page-wall" && (route === "GET /" || route === "GET /notices") && /HeadlessChrome/.test(req.headers.get("user-agent") ?? "")) {
+      return html(403, CHALLENGE_PAGE);
+    }
     if (route === "GET /") {
       const page = html(200, accountPage(auth, noteForm(drift)) + (drift === "bot-wall" ? BOT_SCRIPT : ""));
       if (auth === "login") return sessionOf(req) ? page : redirect(302, `${loginUrl}/login`);

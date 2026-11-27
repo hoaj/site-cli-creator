@@ -7,6 +7,7 @@
 // | GraphQL data null + server error code (after retries)  | network (INTERNAL*, SERVICE_UNAVAILABLE) |
 // | login: 401/403/redirect to a login host                | renew (login.refresh), else sign in again; retry; still → drift auth |
 // | login: redirect to a login.paths entry, or a 2xx HTML answer showing login.signedOutSelector | as a login-host redirect; still after the sign-in → session |
+// | login: a write answered with any of the redirects or pages above                | session, not sent again               |
 // | login: sessionProbe not 2xx (5xx/429 aside), once a run before the first call | sign in again before sending |
 // | login: sign-in doesn't complete                        | session                              |
 // | none: 401/403                                          | rerun bootstrap, retry; still → drift auth |
@@ -22,7 +23,7 @@
 // the table holds as it is.
 import { existsSync } from "node:fs";
 import type { Call } from "./command";
-import { ContractError, DryRun, Failure, ProfileUnavailable, type Account, type DiffEntry, type Surface } from "./envelope";
+import { ContractError, DryRun, Failure, ProfileUnavailable, SIGN_IN_RENEWED, WRITE_NOT_RESENT, type Account, type DiffEntry, type Surface } from "./envelope";
 import { extractHtml, htmlMatches, isHtmlType, type HtmlContract } from "./html";
 import { driftFingerprint, errorName, fieldPath, rejectedFields, zodDiff, type BreakType } from "./fingerprint";
 import { withSiteHeaders } from "./browser-headers";
@@ -814,23 +815,30 @@ export class Client {
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
     await this.ensureSession();
     await this.probeSession();
-    // A write answered with the site's own sign-in page (login.paths, login.signedOutSelector) is never sent again, whichever
-    // answer it is (the first, or the resend after a renew): a POST's redirect to /login or a 200 form cannot be told from a
-    // success that landed there, so it may have taken effect.
-    const neverResend = (r: Response_): Response_ => {
-      if (r.signedOut && op.effect !== "read") {
-        const how = r.signedOut === "path" ? "a redirect to its sign-in page" : "its sign-in form";
+    // A write answered with a sign-in page (a redirect to a login host or a login.paths entry, or a login.signedOutSelector
+    // match) is never sent again, whichever answer it is (the first, or the resend after a renew): a POST's redirect to a
+    // sign-in page or a 200 form cannot be told from a success that landed there, so it may have taken effect. So is a
+    // GraphQL write whose root field answered (it ran) with an UNAUTHENTICATED error below it.
+    const neverResend = async (r: Response_): Promise<Response_> => {
+      if (op.effect === "read") return r;
+      const ran = op.graphql !== undefined && hasRootData(r.body) && gqlErrors(r.body).some((e) => gqlCode(e) === "UNAUTHENTICATED");
+      if (r.loginRedirect || ran) {
+        const how = ran ? "a sign-in error (UNAUTHENTICATED) after the write ran" : r.signedOut === "path" ? "a redirect to its sign-in page" : r.signedOut === "selector" ? "its sign-in form" : "a redirect to a login host";
+        // The write is not sent again, but the sign-in is still renewed where reauthenticate() would (login.refresh, plain
+        // fetch, no Chrome), so the next run is signed in. Nothing proves the renewal took, so `next` keeps the login step
+        // for a run that ends this way again. A site.never refusal of renew's own request is the bug it is everywhere.
+        const renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew());
         // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
         const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
-        const next = `Tell the user the write may already have taken effect and was not sent again, and ask them to check on the site. Do not run it again until they confirm it did not take effect. If it did not, ${login}, then run it again.`;
+        const next = `${WRITE_NOT_RESENT} ${renewed ? `${SIGN_IN_RENEWED} If it ends this way again, ${login} before running it again.` : `If it did not, ${login}, then run it again.`}`;
         throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { next });
       }
       return r;
     };
-    let res = neverResend(await this.send(op, v.data, built?.req));
+    let res = await neverResend(await this.send(op, v.data, built?.req));
     // Renew, then sign in (or rerun bootstrap): each at most once a run, so this ends. A bot wall
     // is no sign-out: no sign-in gets past it, so none is spent on it.
-    while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = neverResend(await this.send(op, v.data, built?.req));
+    while (!res.blocked && this.isAuthFailure(op, res) && (await this.reauthenticate())) res = await neverResend(await this.send(op, v.data, built?.req));
     if (res.blocked) throw this.blockedFailure(op, res.blocked);
     if (this.isAuthFailure(op, res)) {
       // Renew met a bot wall and no Chrome sign-in followed (the Setup page's check): the wall, not Drift.
