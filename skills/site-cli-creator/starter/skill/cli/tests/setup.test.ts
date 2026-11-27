@@ -471,6 +471,40 @@ describe("remote tools", () => {
     expect((await req(`${base}/setup`)).text).toContain("Session: valid");
   });
 
+  describe("a write redirected to a login host (#123)", () => {
+    const toLoginHost = (r: Recorded) => (r.method === "PATCH" ? new Response(null, { status: 303, headers: { location: "https://login.example.test/authorize" } }) : sessionSite(r));
+
+    test("its next keeps 'check on the site first' in front of the Owner's step, never a bare 'retry'", async () => {
+      const { base, state, calls } = await start();
+      const token = await signIn(base);
+      await upload(base, { file: sessionJson() });
+      state.handler = toLoginHost;
+      const error = textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N", confirm: true })).error;
+      expect(error.kind).toBe("session");
+      expect(error.next).toStartWith("Tell the user the write may already have taken effect and was not sent again");
+      expect(error.next).toContain("check on the site");
+      expect(error.next).toContain(`${base}/setup`);
+      expect(error.next).not.toContain("Do not retry until they have");
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+      expect(readStatus(home.dir).state).toBe("expired");
+    });
+
+    test("when the server renewed the Session there, nothing is asked of the Owner and the Session stays valid", async () => {
+      const site = loginSite({ login: { ...loginSite().login!, refresh: { renew: async (ctx) => ({ headers: { ...ctx.headers, authorization: "Bearer new" } }) } } });
+      const { base, state, calls } = await start({ site });
+      const token = await signIn(base);
+      await upload(base, { file: sessionJson() });
+      state.handler = toLoginHost;
+      const error = textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N", confirm: true })).error;
+      expect(error.kind).toBe("session");
+      expect(error.next).toContain("check on the site");
+      expect(error.next).toContain("the sign-in has been renewed");
+      expect(error.next).not.toContain("Owner");
+      expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+      expect(readStatus(home.dir).state).not.toBe("expired");
+    });
+  });
+
   test("remote check refuses a write Operation (it needs Chrome); local check does not", async () => {
     let writeChecks = 0;
     const app = makeApp(loginSite(), makeDeps(fakeFetch(sessionSite).fetch, home.dir).deps, {

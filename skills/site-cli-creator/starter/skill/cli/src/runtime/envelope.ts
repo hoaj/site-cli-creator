@@ -76,6 +76,13 @@ export type EnvelopeSite = { plugin: string; skill: string; version: string; rep
 /** Who reads the envelope: an agent running the CLI, or an MCP client calling the `mcp` server's tools. */
 export type Surface = "cli" | "mcp";
 
+/**
+ * How `next` starts for a write that got a sign-in page and was not sent again (call.ts), on every surface: remote.ts keeps
+ * it in front of the Owner's step. It ends with SIGN_IN_RENEWED when the run renewed the sign-in there.
+ */
+export const WRITE_NOT_RESENT = "Tell the user the write may already have taken effect and was not sent again, and ask them to check on the site. Do not run it again until they confirm it did not take effect.";
+export const SIGN_IN_RENEWED = "If it did not, run it again: the sign-in has been renewed.";
+
 /** First in `next` of any failure after a write the site answered with success (details.writeSent), on both surfaces. */
 export const WRITE_SENT = "The write was sent and the site answered with success, so it may have taken effect. Check on the site before running it again.";
 

@@ -9,7 +9,7 @@ import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelconte
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { Failure } from "./envelope";
-import { WRITE_SENT } from "./envelope";
+import { SIGN_IN_RENEWED, WRITE_NOT_RESENT, WRITE_SENT } from "./envelope";
 import { listedTools, toolResult, type McpTool, type ServerInfo } from "./mcp";
 import { OAuthStore, OwnerProvider, failedPage, returningPage, signedInPage } from "./owner-auth";
 import { redirectAllowed, type RemoteConfig } from "./remote-config";
@@ -77,7 +77,7 @@ function checkedStatus(dir: string, at: string, state: "valid" | "expired", uplo
  * request does not end a Session for good), so it is marked valid.
  */
 function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknown {
-  const error = (output as { error?: { kind?: string; message?: string } } | null)?.error;
+  const error = (output as { error?: { kind?: string; message?: string; next?: string } } | null)?.error;
   if (!error || error.kind !== "session") {
     if (code === 0) {
       const status = readStatus(setup.dir);
@@ -85,11 +85,17 @@ function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknow
     }
     return output;
   }
+  // A write that got a sign-in page and was not sent again: the user checks on the site first, whatever the Owner does.
+  const notResent = typeof error.next === "string" && error.next.startsWith(WRITE_NOT_RESENT);
+  if (notResent && error.next!.endsWith(SIGN_IN_RENEWED)) return output; // renewed here: the Session works, nothing for the Owner
   const before = readStatus(setup.dir);
   if (before.state !== "missing") {
     checkedStatus(setup.dir, new Date(setup.now()).toISOString(), "expired", before.uploadedAt, String(error.message ?? ""));
   }
-  const next = `${(error as { writeSent?: boolean }).writeSent ? `${WRITE_SENT} ` : ""}Ask the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json). Do not retry until they have.`;
+  const owner = `the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json)`;
+  const next = notResent
+    ? `${WRITE_NOT_RESENT} If it did not, ask ${owner}, then run it again.`
+    : `${(error as { writeSent?: boolean }).writeSent ? `${WRITE_SENT} ` : ""}Ask ${owner}. Do not retry until they have.`;
   return { error: { ...error, next } };
 }
 

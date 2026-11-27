@@ -392,6 +392,40 @@ describe("auth login", () => {
       expect(calls.map((c) => c.method)).toEqual(["PATCH", "PATCH"]);
       expect(loginCalls).toEqual([true]);
     });
+
+    const withRefresh = (renew: (ctx: any) => Promise<unknown>) => loginSite({ login: { ...loginSite().login!, refresh: { renew: renew as never } } });
+
+    test("with login.refresh the session is still renewed (the write is not resent), so the next run is signed in", async () => {
+      saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
+      const { fetch, calls } = fakeFetch(() => toLoginHost(302));
+      const { deps, loginCalls } = makeDeps(fetch, home.dir);
+      const s = withRefresh(async (ctx) => (ctx.refresh.token === "r1" ? { headers: { ...ctx.headers, authorization: "Bearer new" }, refresh: { token: "r2" } } : null));
+      const f = await failure(client(s, deps, true).call(renameOrder, { orderId: "7", name: "N" }));
+      expect(f.kind).toBe("session");
+      expect(f.details.next).toContain("check on the site");
+      expect(f.details.next).toContain("the sign-in has been renewed");
+      expect(f.details.next).not.toContain("login");
+      expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
+      expect(loginCalls).toEqual([]);
+      expect(loadSession(home.dir)!.headers.authorization).toBe("Bearer new");
+      expect(loadSession(home.dir)!.refresh).toEqual({ token: "r2" });
+    });
+
+    test("a renew that fails or throws there keeps the write's own failure, with login in next", async () => {
+      for (const renew of [async () => null, async () => Promise.reject(new Error("boom"))]) {
+        home.cleanup();
+        home = tempHome();
+        saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
+        const { fetch, calls } = fakeFetch(() => toLoginHost(303));
+        const { deps, loginCalls } = makeDeps(fetch, home.dir);
+        const f = await failure(client(withRefresh(renew), deps, true).call(renameOrder, { orderId: "7", name: "N" }));
+        expect(f.kind).toBe("session");
+        expect(f.message).toContain("not sent again");
+        expect(f.details.next).toContain("`shop login`");
+        expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
+        expect(loginCalls).toEqual([]);
+      }
+    });
   });
 
   test("GraphQL UNAUTHENTICATED counts as logged out", async () => {
