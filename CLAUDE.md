@@ -8,7 +8,7 @@ You have the maintainer's standing yes to merge: review and merge every PR you o
 2. **Review:** `/code-review high <n>`.
    - **Fixes:** fix every finding that holds up, with a red test first for a bug.
    - **Another round:** when a round found a correctness problem, push the fixes and go back to step 1. When it found only cleanup, push, get green as in step 1 and go on to step 3.
-   - **The cap:** three rounds at most. If a correctness problem is still open after the third, stop without merging and tell the maintainer, including whether the five-platform matrix has run on that commit.
+   - **The cap:** three rounds at most. When findings are still open after the third, file each as an issue, link them in the PR and go on to step 3: they don't hold the merge. Two kinds do: a finding that blocks a pipeline (CI, the five-platform matrix, release or install), or one that breaks something vital (a write sent twice, lost or leaked data, a security hole, sign-in). For those, stop without merging and tell the maintainer, including whether the five-platform matrix has run on that commit.
 3. **Merge.**
    - **Check main first:** `git fetch origin`. When `origin/main` has moved since the checks ran (always for a PR stacked on one that just merged), merge it into the branch, push, wait for green again, and review only that update if it needed more than a clean merge.
    - **Five-platform matrix:** when the PR changes `install.sh`, `build.ts`, `main.ts`, `release.yml` or another Starter workflow, templating (`tools/lib/template.ts`), `package.json`, `bun.lock`, anything in the Starter CLI's `src/runtime/`, or its `tests/browser.test.ts`, `tests/transport.test.ts` or `tests/helpers.ts`, run `gh workflow run site-cli-creator.yml --ref <branch>`. Run it once, after the last review round and any merge of `main`, not after each round: it must be green on the PR's head commit. Its `test` job also runs a generated plugin's Chrome tests, on Linux only; the other targets run the smoke test. A runner or download failure before any test ran may be rerun once (`gh run rerun <id> --failed`). When it fails because of the PR and fewer than three review rounds are used, fix it, push and go back to step 1. On any other failure, stop without merging and tell the maintainer.
@@ -19,5 +19,5 @@ You have the maintainer's standing yes to merge: review and merge every PR you o
      4. From the main checkout, remove the worktree at the path `git worktree list` shows.
      5. Run `gh pr merge <n> --merge --delete-branch` (no `--repo`, which would keep the local branch).
 4. **Tell the maintainer,** after the merge and once:
-   - the PR, what the review found and the merge commit;
+   - the PR, what the review found, the issues filed for findings left open, and the merge commit;
    - for a generator change, also the skill's Relay items (version, issues closed, cold-read result, Starter code reach).
