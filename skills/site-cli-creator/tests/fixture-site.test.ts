@@ -543,6 +543,22 @@ describe("drift switches", () => {
     expect((await gql(site, browser, "getAccount", "query getAccount { getAccount { id } }")).status).toBe(200);
   });
 
+  test("page-wall: the site's pages answer an HTML challenge with 403 to headless Chrome only; data APIs are untouched (#119)", async () => {
+    const site = startFixtureSite({ auth: "none" });
+    sites.push(site);
+    site.setDrift("page-wall");
+    const headless = { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) HeadlessChrome/140.0.0.0 Safari/537.36" };
+    for (const path of ["/", "/notices"]) {
+      const walled = await fetch(`${site.url}${path}`, { headers: headless });
+      expect(walled.status).toBe(403);
+      expect(await walled.text()).toContain("Just a moment...");
+    }
+    const headed = { "user-agent": headless["user-agent"].replace("HeadlessChrome", "Chrome") };
+    expect((await fetch(`${site.url}/`, { headers: headed })).status).toBe(200);
+    const h = await csrfHeaders(site);
+    expect((await fetch(`${site.url}/api/invoices?accountId=${ACCOUNT.id}`, { headers: { ...h, ...headless } })).status).toBe(200);
+  });
+
   test("ua-wall: a data API answers an HTML challenge with 403 to a request without a Chrome user-agent (#111)", async () => {
     const site = startFixtureSite({ auth: "none" });
     sites.push(site);
@@ -572,7 +588,7 @@ describe("drift switches", () => {
     const site = startFixtureSite({ auth: "none" });
     sites.push(site);
     expect(() => site.setDrift("nope" as Drift)).toThrow(/unknown drift/);
-    expect(DRIFTS.length).toBe(14);
+    expect(DRIFTS.length).toBe(15);
   });
 });
 
