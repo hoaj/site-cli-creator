@@ -6,11 +6,13 @@ You have the maintainer's standing yes to merge: review and merge every PR you o
 
 1. **Wait for green:** wait for the PR's checks. When its changed files all fall outside the `paths:` filter of `.github/workflows/site-cli-creator.yml`, CI never runs and there is nothing to wait for. Check that against the filter, never from an empty `gh pr checks`.
 2. **Review:** `/code-review high <n>`.
-   - **Fixes:** fix every finding that holds up, with a red test first for a bug.
+   - **Fixes:** in rounds one and two, fix every finding that holds up, with a red test first for a bug. The third round follows **The cap**.
    - **Another round:** when a round found a correctness problem, push the fixes and go back to step 1. When it found only cleanup, push, get green as in step 1 and go on to step 3.
-   - **The cap:** three rounds at most. If a correctness problem is still open after the third, stop without merging and tell the maintainer, including whether the five-platform matrix has run on that commit.
+   - **The cap:** three rounds at most. The third round's findings are not fixed in this PR. Check each one and drop those that don't hold up. What happens to the rest:
+     - **Some hold the merge.** That is any finding that blocks a pipeline (CI, the five-platform matrix, release or install) or breaks something vital. Vital means, for example, an unwanted, unconsented or repeated write, lost or leaked data, a security hole, a broken Server sign-in or Session, or Starter code that breaks every generated CLI. When one of these is open, stop without merging, file nothing, and give the maintainer every open finding, including whether the five-platform matrix has run on that commit. A security hole is never a public issue (`SECURITY.md`).
+     - **The rest don't.** Note them as follow-ups and carry on with the merge. They are filed in step 4, once the PR has merged.
 3. **Merge.**
-   - **Check main first:** `git fetch origin`. When `origin/main` has moved since the checks ran (always for a PR stacked on one that just merged), merge it into the branch, push, wait for green again, and review only that update if it needed more than a clean merge.
+   - **Check main first:** `git fetch origin`. When `origin/main` has moved since the checks ran (always for a PR stacked on one that just merged), merge it into the branch, push, wait for green again, and review only that update if it needed more than a clean merge. That review counts as a round. With rounds left, a correctness finding is fixed and sends the PR back to step 1, and cleanup is fixed in place. Once three rounds are used, its findings follow **The cap**.
    - **Five-platform matrix:** when the PR changes `install.sh`, `build.ts`, `main.ts`, `release.yml` or another Starter workflow, templating (`tools/lib/template.ts`), `package.json`, `bun.lock`, anything in the Starter CLI's `src/runtime/`, or its `tests/browser.test.ts`, `tests/transport.test.ts` or `tests/helpers.ts`, run `gh workflow run site-cli-creator.yml --ref <branch>`. Run it once, after the last review round and any merge of `main`, not after each round: it must be green on the PR's head commit. Its `test` job also runs a generated plugin's Chrome tests, on Linux only; the other targets run the smoke test. A runner or download failure before any test ran may be rerun once (`gh run rerun <id> --failed`). When it fails because of the PR and fewer than three review rounds are used, fix it, push and go back to step 1. On any other failure, stop without merging and tell the maintainer.
    - **Then:**
      1. `git fetch origin` again. When `origin/main` moved since **Check main first**, go back to it, and rerun the matrix if this PR needs one.
@@ -18,6 +20,10 @@ You have the maintainer's standing yes to merge: review and merge every PR you o
      3. Leave its worktree: ExitWorktree (keep), or `cd` to the main checkout when the session started inside it.
      4. From the main checkout, remove the worktree at the path `git worktree list` shows.
      5. Run `gh pr merge <n> --merge --delete-branch` (no `--repo`, which would keep the local branch).
-4. **Tell the maintainer,** after the merge and once:
-   - the PR, what the review found and the merge commit;
+4. **File the follow-ups,** if **The cap** left any, after the merge:
+   - **One issue per finding.** First search the open issues (`gh issue list --label site-cli-creator --state open --search <words>`) and comment on a match instead of filing a new one.
+   - **Format:** a new issue gets `--label site-cli-creator` and the bug format of `skills/site-cli-creator-feedback/SKILL.md` (Intent, Where, Expected, Actual, Environment). The review's file, line and failure scenario go in Where and Actual, and the PR goes in Intent. Shapes, never values.
+   - **The PR:** list the issues in its body under "Follow-ups (left open)", without a closing keyword.
+5. **Tell the maintainer,** after the merge and once:
+   - the PR, what the review found, the issues filed or commented on for findings left open, and the merge commit;
    - for a generator change, also the skill's Relay items (version, issues closed, cold-read result, Starter code reach).
