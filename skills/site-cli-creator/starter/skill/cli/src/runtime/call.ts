@@ -7,6 +7,7 @@
 // | GraphQL data null + server error code (after retries)  | network (INTERNAL*, SERVICE_UNAVAILABLE) |
 // | login: 401/403/redirect to a login host                | renew (login.refresh), else sign in again; retry; still → drift auth |
 // | login: redirect to a login.paths entry, or a 2xx HTML answer showing login.signedOutSelector | as a login-host redirect; still after the sign-in → session |
+// | login: a write answered with any of the redirects or pages above                | session, not sent again               |
 // | login: sessionProbe not 2xx (5xx/429 aside), once a run before the first call | sign in again before sending |
 // | login: sign-in doesn't complete                        | session                              |
 // | none: 401/403                                          | rerun bootstrap, retry; still → drift auth |
@@ -814,12 +815,12 @@ export class Client {
     if (op.effect === "write" && !this.confirm) throw new DryRun(op.name, v.data);
     await this.ensureSession();
     await this.probeSession();
-    // A write answered with the site's own sign-in page (login.paths, login.signedOutSelector) is never sent again, whichever
-    // answer it is (the first, or the resend after a renew): a POST's redirect to /login or a 200 form cannot be told from a
-    // success that landed there, so it may have taken effect.
+    // A write answered with a sign-in page (a redirect to a login host or a login.paths entry, or a login.signedOutSelector
+    // match) is never sent again, whichever answer it is (the first, or the resend after a renew): a POST's redirect to a
+    // sign-in page or a 200 form cannot be told from a success that landed there, so it may have taken effect.
     const neverResend = (r: Response_): Response_ => {
-      if (r.signedOut && op.effect !== "read") {
-        const how = r.signedOut === "path" ? "a redirect to its sign-in page" : "its sign-in form";
+      if (r.loginRedirect && op.effect !== "read") {
+        const how = r.signedOut === "path" ? "a redirect to its sign-in page" : r.signedOut === "selector" ? "its sign-in form" : "a redirect to a login host";
         // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
         const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
         const next = `Tell the user the write may already have taken effect and was not sent again, and ask them to check on the site. Do not run it again until they confirm it did not take effect. If it did not, ${login}, then run it again.`;

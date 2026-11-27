@@ -355,6 +355,45 @@ describe("auth login", () => {
     expect(loginCalls).toEqual([true]);
   });
 
+  describe("a write redirected to a login host is never sent again (#123)", () => {
+    const toLoginHost = (status: number) => new Response(null, { status, headers: { location: "https://login.example.test/authorize?x=1" } });
+    for (const status of [302, 303, 307]) {
+      test(`a PATCH answered ${status} to a login host: one request, kind session, no sign-in`, async () => {
+        saved();
+        const { fetch, calls } = fakeFetch((r) => (r.headers.authorization === "Bearer new" ? json({ ok: true }) : toLoginHost(status)));
+        const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+        const f = await failure(client(loginSite(), deps, true).call(renameOrder, { orderId: "7", name: "N" }));
+        expect(f.kind).toBe("session");
+        expect(f.message).toContain("not sent again");
+        expect(f.details.next).toContain("check on the site");
+        expect(f.details.next).toContain("Do not run it again until they confirm");
+        expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
+        expect(loginCalls).toEqual([]);
+      });
+    }
+
+    test("a PATCH whose 303 leads on the origin, then to a login host, is not sent again either", async () => {
+      saved();
+      const { fetch, calls } = fakeFetch((r) => (r.method === "PATCH" ? new Response(null, { status: 303, headers: { location: "/done" } }) : toLoginHost(302)));
+      const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
+      const f = await failure(client(loginSite(), deps, true).call(renameOrder, { orderId: "7", name: "N" }));
+      expect(f.kind).toBe("session");
+      expect(calls.map((c) => c.method)).toEqual(["PATCH", "GET"]);
+      expect(loginCalls).toEqual([]);
+    });
+
+    test("a PATCH answered 401, signed in again and resent, then redirected to a login host: two requests, no further sign-in", async () => {
+      saved();
+      const { fetch, calls } = fakeFetch((r) => (r.headers.authorization === "Bearer new" ? toLoginHost(303) : json({}, 401)));
+      const { deps, loginCalls } = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }, { authorization: "Bearer newer" }]);
+      const f = await failure(client(loginSite(), deps, true).call(renameOrder, { orderId: "7", name: "N" }));
+      expect(f.kind).toBe("session");
+      expect(f.message).toContain("may have taken effect");
+      expect(calls.map((c) => c.method)).toEqual(["PATCH", "PATCH"]);
+      expect(loginCalls).toEqual([true]);
+    });
+  });
+
   test("GraphQL UNAUTHENTICATED counts as logged out", async () => {
     saved();
     const { fetch } = fakeFetch((r) =>
