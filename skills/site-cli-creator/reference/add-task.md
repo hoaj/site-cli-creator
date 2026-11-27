@@ -56,6 +56,8 @@ The Capture lands in `<skill>/captures/<slug>/`: one `<operation>.shape.json` pe
 
 If nothing reached the origin, `capture.ts` exits with an error and leaves any earlier Capture of the Task as it was: check `--url`, `--origin` and that the Task was performed, then run it again.
 
+If the start page answered 403, 429 or 503 and no call answered 2xx, the site refused the Capture's Chrome (a bot wall, a blocked address): the Capture is written, but a hint names the status and, when it recognises one, the bot wall. Capture again headed, so a person can pass any challenge; the CLI will likely meet the same wall ([fix.md](fix.md#2c-a-bot-block)).
+
 Recapture when the Task's data never appeared (wrong start page, still loading when the browser closed) or a needed Operation is missing.
 
 **One page, several Tasks.** When a single page loads everything (an account page), every Task's Capture of it holds the same Operations. Capture it once per Task, or explore once and split it per Task ([explore.md](explore.md)): either way each Task has its own `captures/<slug>/`, which `fix` re-captures, and step 3 keeps different Operations per Task. An Operation the page calls on its own (a detail call for the first item, with no detail page) counts as captured.

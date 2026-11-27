@@ -12,7 +12,7 @@ import { existsSync, mkdirSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import { chromium, type BrowserContext, type Page, type Request } from "playwright-core";
+import { chromium, type BrowserContext, type Page, type Request, type Response as PageResponse } from "playwright-core";
 import { parseFlags, requireKebab } from "./lib/args";
 import { writeJson } from "./lib/manifests";
 import { fail, firstLine, progress, runTool } from "./lib/output";
@@ -20,6 +20,7 @@ import { toolCommand } from "./lib/paths";
 import { CaptureRecorder, markers, shapeFileNames, type Planned } from "./lib/recorder";
 import { parseHttpUrl, parseOrigin } from "./lib/scaffold";
 import { redactPath } from "./lib/shape";
+import { blockSignal } from "../starter/skill/cli/src/runtime/call";
 import { loginHostName } from "../starter/skill/cli/src/runtime/site";
 
 const USAGE =
@@ -192,6 +193,30 @@ async function loadScript(file: string): Promise<(page: Page) => Promise<void>> 
   }
   if (typeof mod.default !== "function") fail(`${path} must export default async (page) => {...}`);
   return mod.default as (page: Page) => Promise<void>;
+}
+
+/** The statuses a refusal answers with, as the Starter's blockSignal reads a captcha wall. */
+const REFUSALS = new Set([403, 429, 503]);
+
+type StartAnswer = { status: number; blocked?: string };
+
+/**
+ * The start page's answer (#119): its status, and the bot protection whose block page it is, told as the
+ * CLI tells one (blockSignal). The body is read in memory; only the status and the vendor's name are kept.
+ */
+async function startAnswer(response: PageResponse | null): Promise<StartAnswer | undefined> {
+  if (!response) return undefined;
+  const status = response.status();
+  const headers = new Headers(await response.allHeaders().catch(() => response.headers()));
+  const text = (await response.body().catch(() => undefined))?.toString("utf8");
+  let body: unknown = text?.trim() ? text : undefined;
+  try {
+    if (body !== undefined) body = JSON.parse(text as string);
+  } catch {
+    // not JSON: the page's text
+  }
+  const blocked = blockSignal(status, headers, body);
+  return { status, ...(blocked ? { blocked } : {}) };
 }
 
 function clearPreviousCapture(dir: string): void {
@@ -389,8 +414,9 @@ await runTool(async () => {
   const stop = watchStop(context, page, (url) => recorder.inScope(url), !script);
   let scriptError: Error | undefined;
   let stoppedBy: string;
+  let start: StartAnswer | undefined;
   try {
-    await page.goto(startUrl);
+    start = await startAnswer(await page.goto(startUrl));
   } catch (error) {
     if (script) scriptError = new Error(`could not open --url: ${firstLine((error as Error).message)}`);
     else progress(`could not open --url (${firstLine((error as Error).message)}); navigate in the browser`);
@@ -479,6 +505,14 @@ await runTool(async () => {
   if (scriptError) fail(`--script failed: ${firstLine(scriptError.message)} (shapes so far written to ${dir}).${suspectNote}`);
   const blockedElsewhere = [...recorder.blockedElsewhere].sort();
   const hints: string[] = [];
+  // The start page refused this Chrome and nothing else answered (#119): the Task's data never loaded.
+  const answered = operations.some((op) => !op.loginFlow && op.responses.some((r) => r.status >= 200 && r.status < 300));
+  if (start && REFUSALS.has(start.status) && !answered) {
+    hints.push(
+      `The start page answered ${start.status}${start.blocked ? `, a ${start.blocked} bot wall's block page` : ""}, and no call answered 2xx: the site refused this Chrome, so the Task's data never loaded and this Capture holds none of its Operations. ` +
+        `${values.headless ? "Capture again headed (without --headless), so a person can pass any challenge in the window. " : ""}The CLI will likely meet the same wall: reference/fix.md#2c-a-bot-block.`,
+    );
+  }
   if (values.write && !recorder.wrote) {
     hints.push(
       "No write went through: none came after a click, key press or submit" +

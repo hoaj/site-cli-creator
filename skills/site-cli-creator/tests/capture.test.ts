@@ -165,6 +165,17 @@ const SSO_HOME_PAGE = `<!doctype html><html><body><script>
 fetch("/api/customers/${CUSTOMER_ID}/profile").then(() => (window.loaded = true));
 </script></body></html>`;
 
+// A start page behind a bot wall (#119): the page load answers a block page in Cloudflare's style (invented
+// markup and Ray ID) with 403, and the Task's data never loads. Then a 403 page no wall rule recognises,
+// and one a Task gets past: its own script loads the data (2xx).
+const RAY_ID = "8f1e2d3c4b5a6978";
+const BOT_WALL_PAGE = `<!doctype html><html><head><title>Attention Required! | Cloudflare</title></head>
+<body><div id="cf-wrapper"><div id="cf-error-details"><h1>Sorry, you have been blocked</h1><p>Cloudflare Ray ID: ${RAY_ID}</p></div></div></body></html>`;
+const FORBIDDEN_PAGE = `<!doctype html><html><body><h1>Forbidden</h1></body></html>`;
+const FORBIDDEN_THEN_DATA_PAGE = `<!doctype html><html><body><h1>No access here</h1><script>
+fetch("/api/customers/${CUSTOMER_ID}/profile").then((r) => r.json()).then(() => (window.loaded = true));
+</script></body></html>`;
+
 function json(body: unknown, init: ResponseInit = {}) {
   return new Response(JSON.stringify(body), {
     ...init,
@@ -216,6 +227,9 @@ beforeAll(() => {
       if (url.pathname === "/u/login" && req.method === "GET") return new Response(SSO_LOGIN_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/u/login" && req.method === "POST") return Response.redirect(`http://127.0.0.1:${server.port}/sso-home`, 302);
       if (url.pathname === "/sso-home") return new Response(SSO_HOME_PAGE, { headers: { "content-type": "text/html" } });
+      if (url.pathname === "/walled") return new Response(BOT_WALL_PAGE, { status: 403, headers: { "content-type": "text/html; charset=UTF-8" } });
+      if (url.pathname === "/forbidden") return new Response(FORBIDDEN_PAGE, { status: 403, headers: { "content-type": "text/html" } });
+      if (url.pathname === "/forbidden-then-data") return new Response(FORBIDDEN_THEN_DATA_PAGE, { status: 403, headers: { "content-type": "text/html" } });
       if (url.pathname === "/events") return new Response(EVENTS_PAGE, { headers: { "content-type": "text/html; charset=utf-8" } });
       if (url.pathname === "/events/4711") return new Response(EVENT_PAGE, { headers: { "content-type": "text/html" } });
       if (url.pathname === "/views/ajax") return json([{ command: "settings", settings: {} }, { command: "insert", data: `<div class="view">${`<span class="who">${SECRETS[2]}</span>`.repeat(4)}</div>` }]);
@@ -645,6 +659,31 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(stalled.stderr).not.toMatch(/localhost:\d+ \(not recorded\)/);
     expect(stalled.out.error.message).toContain("--script failed");
     expect(stalled.out.error.message).toContain("capture again with --login-host localhost");
+  }, 120_000);
+
+  test("a start page answering a bot wall's 403: a hint names the status and the wall and points to the bot-block ladder (#119)", async () => {
+    const r = await capture(join(work, "walled-skill"), ["--script", join(work, "noop.ts")], "/walled");
+    expect(r.code).toBe(0);
+    expect(r.out.stoppedBy).toBe("script finished");
+    const hint = (r.out.hints ?? []).find((h: string) => h.includes("fix.md#2c-a-bot-block"));
+    expect(hint).toBeDefined();
+    expect(hint).toContain("403");
+    expect(hint).toContain("cloudflare");
+    expect(r.everything).not.toContain(RAY_ID);
+  }, 120_000);
+
+  test("a 403 start page no wall rule recognises, and nothing else answered: the hint names the status only (#119)", async () => {
+    const r = await capture(join(work, "forbidden-skill"), ["--script", join(work, "noop.ts")], "/forbidden");
+    expect(r.code).toBe(0);
+    const hint = (r.out.hints ?? []).find((h: string) => h.includes("fix.md#2c-a-bot-block"));
+    expect(hint).toContain("403");
+    expect(hint).not.toContain("cloudflare");
+  }, 120_000);
+
+  test("a 403 start page whose Task still loads its data (2xx): no bot-wall hint (#119)", async () => {
+    const r = await capture(join(work, "forbidden-data-skill"), ["--script", join(work, "loaded.ts")], "/forbidden-then-data");
+    expect(r.code).toBe(0);
+    expect((r.out.hints ?? []).some((h: string) => h.includes("fix.md#2c-a-bot-block"))).toBe(false);
   }, 120_000);
 
   test("nothing recorded: an error, and the previous Capture is left alone", async () => {
