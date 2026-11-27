@@ -92,7 +92,7 @@ Review and merge it with the procedure in the repo's CLAUDE.md (Pull requests): 
 
 ### 10. Relay
 
-After the merge, in the one report CLAUDE.md step 4 asks for, tell the maintainer the PR, the new version, the issues it closes, the cold-read result and the Starter code reach list. They update with `/plugin marketplace update hoaj`.
+After the merge, in the one report CLAUDE.md step 5 asks for, tell the maintainer the PR, the new version, the issues it closes, the cold-read result and the Starter code reach list. They update with `/plugin marketplace update hoaj`.
 
 ## Gotchas
 
