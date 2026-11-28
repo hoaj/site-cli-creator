@@ -244,10 +244,11 @@ function escapeHtml(text: string): string {
 export function noticesPage(notices: Notice[], area: string | null, layout: "list" | "moved" = "list"): string {
   const shown = area ? notices.filter((n) => n.area === area) : notices;
   const time = (n: Notice) => (n.startsAt ? `<time datetime="${n.startsAt}">${escapeHtml(n.startsText)}</time>` : `<em>${escapeHtml(n.startsText)}</em>`);
+  const streets = (n: Notice) => n.streets.map(escapeHtml).join("<br>");
   const items =
     layout === "list"
-      ? shown.map((n) => `<li class="notice" data-id="${n.id}"><h3 class="title">${escapeHtml(n.title)}</h3><p class="area">Område:<br>${escapeHtml(n.area)}<p class="streets">${n.streets.map(escapeHtml).join("<br>")}<p class="when">${time(n)}\n`).join("")
-      : shown.map((n) => `<div class="card" data-ref="${n.id}"><h2>${escapeHtml(n.title)}</h2><span class="place">${escapeHtml(n.area)}</span> <span class="road-list">${n.streets.map(escapeHtml).join("<br>")}</span> ${time(n)}</div>\n`).join("");
+      ? shown.map((n) => `<li class="notice" data-id="${n.id}"><h3 class="title">${escapeHtml(n.title)}</h3><p class="area">Område:<br>${escapeHtml(n.area)}<p class="streets">${streets(n)}<p class="when">${time(n)}\n`).join("")
+      : shown.map((n) => `<div class="card" data-ref="${n.id}"><h2>${escapeHtml(n.title)}</h2><span class="place">${escapeHtml(n.area)}</span> <span class="road-list">${streets(n)}</span> ${time(n)}</div>\n`).join("");
   const list = layout === "list" ? `<ul class="notices">\n${items}</ul>` : `<section class="cards">\n${items}</section>`;
   return `<!doctype html>
 <html lang="da">
