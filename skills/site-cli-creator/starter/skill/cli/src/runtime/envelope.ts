@@ -31,6 +31,11 @@ export type FailureDetails = {
    * taken effect, whatever failed after it (renewing the sign-in there included), so the user checks on the site first.
    */
   writeNotResent?: boolean;
+  /**
+   * With writeNotResent, on the session failure call.ts throws there: the run renewed the sign-in right after that answer
+   * (login.refresh, or another run's renewal or sign-in taken over), so `next` says SIGN_IN_RENEWED.
+   */
+  signInRenewed?: boolean;
   /** Replaces the kind's fixed `next`, when that sentence would be wrong here (the MCP login tool's own failures). */
   next?: string;
 };
@@ -84,7 +89,7 @@ export type Surface = "cli" | "mcp";
 /**
  * How `next` starts for a write that got a sign-in page and was not sent again (details.writeNotResent), on every surface
  * and for every kind, after WRITE_SENT when an earlier write of the Task was answered with success. SIGN_IN_RENEWED
- * follows it in the session failure call.ts throws there when the run renewed the sign-in.
+ * follows it in the session failure call.ts throws there when the run renewed the sign-in (details.signInRenewed).
  */
 export const WRITE_NOT_RESENT = "Tell the user the write may already have taken effect and was not sent again, and ask them to check on the site. Do not run it again until they confirm it did not take effect.";
 export const SIGN_IN_RENEWED = "If it did not, run it again: the sign-in has been renewed.";
@@ -179,6 +184,7 @@ export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface =
       ...(d.blocked !== undefined && { blocked: d.blocked }),
       ...(d.writeSent && { writeSent: true }),
       ...(d.writeNotResent && { writeNotResent: true }),
+      ...(d.signInRenewed && { signInRenewed: true }),
       version: site.version,
       os: osName(),
       next: `${d.writeSent ? `${WRITE_SENT} ` : ""}${d.writeNotResent ? `${WRITE_NOT_RESENT} ` : ""}${d.next ?? fixed}`,

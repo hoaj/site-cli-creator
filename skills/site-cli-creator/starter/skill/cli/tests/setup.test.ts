@@ -10,7 +10,7 @@ import { Failure, SIGN_IN_RENEWED, WRITE_NOT_RESENT } from "../src/runtime/envel
 import { BUILTIN_FLAGS } from "../src/runtime/help";
 import { remoteConfig } from "../src/runtime/remote-config";
 import { serveHttp } from "../src/runtime/remote";
-import { persistenceWarning, readStatus, statusFile } from "../src/runtime/setup";
+import { persistenceWarning, readStatus, statusFile, writeStatus } from "../src/runtime/setup";
 import { sessionFile } from "../src/runtime/session";
 import { CLAUDE_CB, authorizePage, fakeFetch, getCustomer, getOrder, happySite, listProducts, json, loginSite, makeApp, makeDeps, makeSite, pkce, postLogin, register, renameOrder, tempHome, token, withFreePort, type Recorded } from "./helpers";
 
@@ -503,8 +503,61 @@ describe("remote tools", () => {
       expect(error.next).toContain("check on the site");
       expect(error.next).toContain("the sign-in has been renewed");
       expect(error.next).toContain("If it ends this way again, ask the Owner");
+      expect(error.signInRenewed).toBe(true);
       expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
       expect(readStatus(home.dir).state).not.toBe("expired");
+    });
+
+    const renewingSite = () => loginSite({ login: { ...loginSite().login!, refresh: { renew: async (ctx) => ({ headers: { ...ctx.headers, authorization: "Bearer new" } }) } } });
+
+    test("a renewal there replaces an earlier call's stale 'expired', and a later call that succeeds marks it valid (#195)", async () => {
+      const { base, state } = await start({ site: renewingSite() });
+      const token = await signIn(base);
+      await upload(base, { file: sessionJson() });
+      const { uploadedAt } = readStatus(home.dir);
+      // An earlier call left the Session marked expired.
+      writeStatus(home.dir, { state: "expired", uploadedAt, checkedAt: "2026-01-01T00:00:00.000Z", reason: "signed out" });
+      state.handler = toLoginHost;
+      const error = textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N", confirm: true })).error;
+      expect(error.writeNotResent).toBe(true);
+      expect(error.signInRenewed).toBe(true);
+      const status = readStatus(home.dir);
+      expect(status).toMatchObject({ state: "unchecked", uploadedAt });
+      expect(status.checkedAt).not.toBe("2026-01-01T00:00:00.000Z");
+      const page = (await req(`${base}/setup`)).text;
+      expect(page).toContain("Session: unchecked");
+      expect(page).toContain("renewed");
+      expect(page).not.toContain("Session: expired");
+      // A dry run sends nothing, so it proves nothing (review).
+      state.handler = sessionSite;
+      expect(textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N" })).dryRun).toBe(true);
+      expect(readStatus(home.dir).state).toBe("unchecked");
+      expect((await toolCall(base, token, "products_show")).isError).toBeUndefined();
+      expect(readStatus(home.dir)).toMatchObject({ state: "valid", uploadedAt });
+    });
+
+    test("a command's own session failure after a write not sent again is marked expired, whatever its next says (#195)", async () => {
+      // It catches the not-resent failure (the server renewed there) and throws its own, whose next quotes SIGN_IN_RENEWED.
+      const quoting = defineCommand({
+        name: "order requote",
+        summary: "Rename, then fail with a session error",
+        args: z.object({}),
+        uses: [renameOrder],
+        run: async (_args, ctx) => {
+          try {
+            await ctx.call(renameOrder, { orderId: "7", name: "N" });
+          } catch {}
+          throw new Failure("session", "signed out", { next: `${WRITE_NOT_RESENT} ${SIGN_IN_RENEWED}` });
+        },
+      });
+      const { base, state } = await start({ site: renewingSite(), extra: { commands: [quoting] } });
+      const token = await signIn(base);
+      await upload(base, { file: sessionJson() });
+      state.handler = toLoginHost;
+      const error = textOf(await toolCall(base, token, "order_requote", { confirm: true })).error;
+      expect(error.writeNotResent).toBe(true);
+      expect(error.signInRenewed).toBeUndefined();
+      expect(readStatus(home.dir).state).toBe("expired");
     });
 
     test("after an earlier write of the same Task succeeded, next still says the second was not sent again (review 2)", async () => {

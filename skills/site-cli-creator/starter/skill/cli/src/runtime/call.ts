@@ -834,10 +834,23 @@ export class Client {
         // The write is not sent again, but the sign-in is still renewed where reauthenticate() would (login.refresh, plain
         // fetch, no Chrome), so the next run is signed in. Nothing proves the renewal took, so `next` keeps the login step
         // for a run that ends this way again. A site.never refusal of renew's own request is the bug it is everywhere.
-        const renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew());
+        let renewed: boolean;
+        try {
+          renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew());
+        } catch (e) {
+          // Kept for runTask too: a command that catches what renewing threw still ends with it (#194).
+          this.notResent = e;
+          throw e;
+        }
         // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
         const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
-        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { writeNotResent: true, next: notResentNext(renewed, login) });
+        // Kept for runTask: a command that catches it and returns still ends with it (#194).
+        this.notResent = new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, {
+          writeNotResent: true,
+          ...(renewed && { signInRenewed: true }),
+          next: notResentNext(renewed, login),
+        });
+        throw this.notResent;
       }
       return r;
     };
@@ -876,6 +889,9 @@ export class Client {
 
   /** A write Operation got a sign-in page and was not sent again (main.ts: any failure after it must say so). */
   writeNotResent = false;
+
+  /** What neverResend threw for that write (the last one): its session failure, or what renewing the sign-in there threw. */
+  notResent: unknown;
 
   /**
    * With a never list: the request this Operation sends with these variables (built once, the

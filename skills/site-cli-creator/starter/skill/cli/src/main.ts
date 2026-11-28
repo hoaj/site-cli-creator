@@ -286,6 +286,9 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
       account: chosen,
       note: deps.note,
     }));
+    // So does a write not sent again (#194): the user checks on the site first. It ends with what neverResend threw (its
+    // session failure, or a bug renewing the sign-in there), marked writeNotResent below.
+    if (client.writeNotResent) throw client.notResent;
     const value = result ?? null;
     // An undefined result the schema accepts is fine; otherwise what prints (null) is what is checked.
     const skip = result === undefined && command.output?.safeParse(undefined).success === true;
