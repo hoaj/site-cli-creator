@@ -9,7 +9,7 @@
 
 ## Setup
 
-You need Bun 1.4.3 (the version CI uses), Google Chrome, `actionlint` and `shellcheck`. The tests that drive Chrome run only in CI, never locally.
+You need Bun 1.4.3 (the version CI uses), Google Chrome, `actionlint` and `shellcheck`. Without Chrome the browser tests skip.
 
 ```sh
 bun install --frozen-lockfile
@@ -19,7 +19,7 @@ Step-by-step installs: [setup.md](./.claude/skills/improve-site-cli-creator/refe
 
 ## Before you open a PR
 
-Run the green gate from the repo root. Run the tests of each area your change touches (the table in [areas.md](./.claude/skills/improve-site-cli-creator/references/areas.md)); CI runs the full `bun test --parallel=3` on every PR.
+Run the green gate from the repo root. Run the tests of each area your change touches (the table in [areas.md](./.claude/skills/improve-site-cli-creator/references/areas.md)), and of its [CI-only files](./.claude/skills/improve-site-cli-creator/references/areas.md#ci-only-files) only the tests you added or changed (`-t "<test name>"`); CI runs the full `bun test --parallel=3` on every PR.
 
 ```sh
 bun test skills/site-cli-creator/tests/<file>.test.ts
@@ -29,7 +29,7 @@ actionlint .github/workflows/*.yml skills/site-cli-creator/starter/plugin/.githu
 shellcheck skills/site-cli-creator/starter/skill/install.sh
 ```
 
-Every PR that touches the plugin (`skills/`, the manifests, `package.json`) bumps the version. After a PR with a new version merges, tag it, with a git credential that has the `workflow` scope (over HTTPS: `gh auth refresh -s workflow && gh auth setup-git`): `bash -o pipefail -c 'git fetch origin && git show origin/main:.github/scripts/version-tags.sh | bash -s -- origin/main | while read -r tag commit; do git push origin "${commit}:refs/tags/${tag}" || exit 1; echo "tagged ${tag}"; done'`. `upgrade` downloads a plugin's past Starter code from these tags; nothing else creates them. [bump.md](./.claude/skills/improve-site-cli-creator/references/bump.md) lists the files to change.
+Every PR that touches the plugin (`skills/`, the manifests, `package.json`) bumps the version. After a PR with a new version merges, the maintainer tags it. That step is theirs: the command reads and pushes `origin`'s tags, so in a fork's checkout it would tag the fork. Run it with `origin` set to hoaj/site-cli-creator and a git credential that has the `workflow` scope (over HTTPS: `gh auth refresh -s workflow && gh auth setup-git`): `bash -o pipefail -c 'git fetch origin && git show origin/main:.github/scripts/version-tags.sh | bash -s -- origin/main | while read -r tag commit; do git push origin "${commit}:refs/tags/${tag}" || exit 1; echo "tagged ${tag}"; done'`. `upgrade` downloads a plugin's past Starter code from these tags; nothing else creates them. [bump.md](./.claude/skills/improve-site-cli-creator/references/bump.md) lists the files to change.
 
 ## Working with an agent
 
