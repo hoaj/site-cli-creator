@@ -163,6 +163,10 @@ export function osName(platform: string = process.platform, arch: string = proce
 
 export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface = "cli") {
   const d = f.details;
+  // A plain session failure after a write not sent again: the generic "rerun the command" would contradict WRITE_NOT_RESENT.
+  const fixed = d.writeNotResent && f.kind === "session"
+    ? notResentNext(false, surface === "mcp" ? "call the login tool" : `run \`${site.skill} login\``)
+    : nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined);
   return {
     error: {
       kind: f.kind,
@@ -177,7 +181,7 @@ export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface =
       ...(d.writeNotResent && { writeNotResent: true }),
       version: site.version,
       os: osName(),
-      next: `${d.writeSent ? `${WRITE_SENT} ` : ""}${d.writeNotResent ? `${WRITE_NOT_RESENT} ` : ""}${d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined)}`,
+      next: `${d.writeSent ? `${WRITE_SENT} ` : ""}${d.writeNotResent ? `${WRITE_NOT_RESENT} ` : ""}${d.next ?? fixed}`,
     },
   };
 }
