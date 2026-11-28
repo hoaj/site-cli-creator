@@ -19,7 +19,7 @@ import { ContractError } from "./envelope";
  *   (`<script type="application/ld+json">`, `<script id="__NEXT_DATA__">`); null when nothing matches;
  * - `{ css, lines: true }`: the first match's text split at `<br>` and block boundaries (a newline in the
  *   text, even in `<pre>`, is a space), each line collapsed and trimmed, empty lines left out, as a list;
- *   `[]` when nothing matches;
+ *   null when nothing matches (as for text), `[]` when the element is there with no lines;
  * - `{ each, in?, fields }`: a list, one object per element matching `each`, its `fields` picked inside
  *   that element. `in` names the list's container, which must be on the page even when the list is
  *   empty: without it a changed layout would read as an empty list instead of Drift.
@@ -194,9 +194,9 @@ function textOf(el: Element | null): string | null {
   return el ? collapse(segmentsOf(el).join(" ")) : null;
 }
 
-/** An element's lines (`lines: true`): its text split at `<br>` and block boundaries, each collapsed, empty ones left out; `[]` without one. */
-function linesOf(el: Element | null): string[] {
-  return el ? segmentsOf(el).map(collapse).filter((line) => line !== "") : [];
+/** An element's lines (`lines: true`): its text split at `<br>` and block boundaries, each collapsed, empty ones left out; null without one. */
+function linesOf(el: Element | null): string[] | null {
+  return el ? segmentsOf(el).map(collapse).filter((line) => line !== "") : null;
 }
 
 function collapse(text: string): string {
