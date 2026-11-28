@@ -16,7 +16,7 @@ This skill lives in `.claude/skills/`, not in the plugin's `skills/`, because pl
 Run once per checkout or worktree; details and commands in [references/setup.md](references/setup.md):
 
 - Bun 1.4.3 (`bun --version`), then `bun install --frozen-lockfile` at the repo root.
-- Google Chrome. Without it the browser-driven tests (e2e, the Starter's `browser.test.ts`, and on macOS the Capture tests) **skip and the suite still passes**, so a red test written there never goes red. Check the count line for skips.
+- Google Chrome, for Captures and the cold read. The tests that drive Chrome run only in CI ([CI-only files](references/areas.md#ci-only-files)).
 - `actionlint` and `shellcheck`.
 
 ## Workflow
@@ -43,7 +43,10 @@ gh issue list --repo hoaj/site-cli-creator --label site-cli-creator --state open
 gh pr list --repo hoaj/site-cli-creator --state open --search "site-cli-creator in:title" --json number,title,headRefName,files
 ```
 
-Leave out issues an open PR already fixes (its body says `Fixes #n`). Group the rest by area ([references/areas.md](references/areas.md)) and root cause: issues that share a file or a cause go into one branch and one version.
+Leave out issues an open PR already fixes (its body says `Fixes #n`). When the maintainer named the issues, take only those, plus any that share a file or a cause with them. Otherwise fix the rest in as few PRs as you can: one branch, one version, one CI run and one review for several issues, even from different areas ([references/areas.md](references/areas.md)). Issues that share a file or a cause always go together. Two kinds of issue get a PR of their own, with those that share a file or cause with them:
+
+- **One whose files an open generator PR touches:** stack it on that PR (step 3), so the rest of the batch doesn't wait for that PR.
+- **One that stalls:** no red test, a fix that outgrows the others, or a change that alone fails the green gate, the cold read, CI or the five-platform matrix. Drop its commit (one commit per issue, step 9) and give it its own PR instead of holding the rest.
 
 ### 3. Branch
 
@@ -58,7 +61,7 @@ Then run the setup in the new worktree: `node_modules` is per worktree.
 
 Write a test that fails on your branch's base for exactly the reported behaviour, in the area's test file ([references/areas.md](references/areas.md)). Prefer the test file's own inline page or server (`tests/capture.test.ts` has one); add a pattern to `fixtures/site` only when the e2e test or the cold read must exercise it too. A leak (a site value in a capture, envelope or issue) gets a test that plants the value and scans every output file for it.
 
-Done when the new test fails for the reported reason, not for a typo in the test and not by being skipped (check the count line: a skip is not red).
+Done when the new test fails for the reported reason, not for a typo in the test and not by being skipped (check the count line: a skip is not red). A red test in a [CI-only file](references/areas.md#ci-only-files) can't be run locally. Open the PR with the red test alone in its first commit, and wait for that CI run to fail on it for the reported reason (and not skip it). Only then push the fix.
 
 ### 5. Fix
 
@@ -70,9 +73,9 @@ Done when the new test fails for the reported reason, not for a typo in the test
 
 ### 6. Green gate
 
-The commands in [references/areas.md](references/areas.md#green-gate): the test files of every area whose Files you touched (the table above it), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Of a [CI-only file](references/areas.md#ci-only-files) run only the tests you added or changed (`-t`). Don't run the full `bun test --parallel=3` locally: CI runs it on every PR (it includes the compiled end-to-end test), and step 9 waits for it. A browser test that fails in CI and passes on a rerun is a bug to fix, not to rerun.
+The commands in [references/areas.md](references/areas.md#green-gate): the test files of every area whose Files you touched (the table above it), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Never run a [CI-only file](references/areas.md#ci-only-files) locally, not even one test: they drive Chrome and run only in CI. Don't run the full `bun test --parallel=3` locally: CI runs it on every PR (it includes the compiled end-to-end test), and step 9 waits for it. A browser test that fails in CI and passes on a rerun is a bug to fix, not to rerun.
 
-Done when everything is green locally and none of the tests you ran skipped. The full suite's verdict is CI's, in step 9.
+Done when everything is green locally and none of the tests you ran skipped. The full suite's verdict is CI's, in step 9. An area whose only tests are CI-only files (the fixture site, Starter browser and transport code) has no local test gate: CI in step 9 is its only check, so run the cold read only after that CI run is green.
 
 ### 7. Cold read
 
