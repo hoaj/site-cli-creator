@@ -298,6 +298,17 @@ describe("a write not sent again keeps WRITE_NOT_RESENT whatever fails after it 
     expect(e.next).toContain("the sign-in has been renewed");
   });
 
+  test("a bug renewing there, which the command caught too, still ends it as that bug, marked writeNotResent (#194 review)", async () => {
+    withRefresh();
+    // renew answers an object whose headers throw: a bug in the plugin, out of renew(), not a refusal.
+    const buggy = loginSite({ login: { ...loginSite().login!, refresh: { renew: async () => ({ get headers(): Record<string, string> { throw new TypeError("broken renew answer"); } }) } } });
+    const r = await run(["--confirm", "item", "rename"], appOf([swallowing], () => toLoginHost(), [renameItem], buggy).app);
+    expect(r.code).toBe(1);
+    expect(err(r.output).kind).toBe("bug");
+    expect(err(r.output).writeNotResent).toBe(true);
+    expect(err(r.output).next).toStartWith(NOT_RESENT);
+  });
+
   test("signInRenewed is set only when the run renewed the sign-in there (#195)", async () => {
     withRefresh();
     const renewed = await run(["--confirm", "item", "rename"], appOf([rename], () => toLoginHost(), [renameItem], renewing()).app);

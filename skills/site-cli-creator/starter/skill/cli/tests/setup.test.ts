@@ -528,7 +528,10 @@ describe("remote tools", () => {
       expect(page).toContain("Session: unchecked");
       expect(page).toContain("renewed");
       expect(page).not.toContain("Session: expired");
+      // A dry run sends nothing, so it proves nothing (review).
       state.handler = sessionSite;
+      expect(textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N" })).dryRun).toBe(true);
+      expect(readStatus(home.dir).state).toBe("unchecked");
       expect((await toolCall(base, token, "products_show")).isError).toBeUndefined();
       expect(readStatus(home.dir)).toMatchObject({ state: "valid", uploadedAt });
     });

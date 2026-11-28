@@ -73,13 +73,14 @@ function checkedStatus(dir: string, at: string, state: "valid" | "expired", uplo
 /**
  * A `session` failure in remote mode is the Owner's to fix, not the client's: the Setup page then
  * shows the Session as expired (when one was stored), and `next` names that page, not the login tool.
- * A call that succeeds while the page says expired, or renewed and unchecked since, proves the Session
- * works (one refused request does not end a Session for good), so it is marked valid.
+ * A call that succeeds (not a dry run) while the page says expired, or renewed and unchecked since,
+ * proves the Session works (one refused request does not end a Session for good), so it is marked valid.
  */
 function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknown {
   const error = (output as { error?: { kind?: string; message?: string; next?: string; writeSent?: boolean; writeNotResent?: boolean; signInRenewed?: boolean } } | null)?.error;
   if (!error || error.kind !== "session") {
-    if (code === 0) {
+    // A dry run sends nothing, so it proves nothing.
+    if (code === 0 && (output as { dryRun?: unknown } | null)?.dryRun !== true) {
       const status = readStatus(setup.dir);
       // An "unchecked" with checkedAt is a renewal's (below); an upload or a login on this host writes none.
       if (status.state === "expired" || (status.state === "unchecked" && status.checkedAt)) {
