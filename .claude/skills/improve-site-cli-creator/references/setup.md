@@ -26,7 +26,7 @@ The Starter CLI's types resolve through this `node_modules`; there is no separat
 
 ## Google Chrome
 
-Needed by the Capture, browser and e2e tests. Without Chrome they **skip and the suite still passes**: `tests/e2e.test.ts` and the Starter's `browser.test.ts` on every platform, `tests/capture.test.ts` on macOS (on Linux it fails instead). Install Chrome, or point `SITE_CLI_CHROME` at a Chrome binary.
+Needed for Captures and the cold read. The Capture, browser and e2e tests drive it too, but they run only in CI ([CI-only files](areas.md#ci-only-files)). Without Chrome they **skip and the suite still passes**: `tests/e2e.test.ts` and the Starter's `browser.test.ts` on every platform, `tests/capture.test.ts` on macOS (on Linux it fails instead). Install Chrome, or point `SITE_CLI_CHROME` at a Chrome binary.
 
 ## actionlint and shellcheck
 

@@ -9,7 +9,7 @@
 
 ## Setup
 
-You need Bun 1.4.3 (the version CI uses), Google Chrome, `actionlint` and `shellcheck`. Without Chrome the browser tests skip.
+You need Bun 1.4.3 (the version CI uses), Google Chrome, `actionlint` and `shellcheck`. The tests that drive Chrome run only in CI, never locally.
 
 ```sh
 bun install --frozen-lockfile
