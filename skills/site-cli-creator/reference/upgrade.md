@@ -78,6 +78,8 @@ cd <plugin> && bun test
 
 Before `bun test`, run `bun install` in every folder the plugin's CI installs in (the "Install dependencies" step of `.github/workflows/ci.yml`: the plugin root, each `skills/*/cli`, and any other folder of the plugin's own with a `package.json`, such as a `server/`): a folder left uninstalled fails with `Cannot find package`, which is not the upgrade's doing.
 
+**`lines` fields (0.24.0, [#165](https://github.com/hoaj/site-cli-creator/issues/165)).** When the upgrade crosses 0.24.0, a `{ css, lines: true }` field reads null when its element is missing, where it read `[]` before. For each such field in `operations/`, check its Zod: add `.nullable()` where an item or page may lack the element, and keep it unchanged where a missing element should be Drift. A command that reads a nullable one handles null. A `.min(1)` field's Drift now says `invalid_type` where it said `too_small`. Name each field in the PR.
+
 A failure the upgrade caused is fixed in this branch. A `check` that fails because of Drift is not the upgrade's: open it as a Drift issue for `fix` and say so in the PR.
 
 ## 6. Bump and PR
