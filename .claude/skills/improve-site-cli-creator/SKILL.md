@@ -70,7 +70,7 @@ Done when the new test fails for the reported reason, not for a typo in the test
 
 ### 6. Green gate
 
-The commands in [references/areas.md](references/areas.md#green-gate): the test files of every area whose Files you touched (the table above it), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Of a [CI-only file](references/areas.md#ci-only-files) run only the tests you added or changed (`-t`). Don't run the full `bun test --parallel=3` locally: CI runs it on every PR (it includes the compiled end-to-end test), and step 9 waits for it. A browser test that fails in CI and passes on a rerun is a bug to fix, not to rerun.
+The commands in [references/areas.md](references/areas.md#green-gate): the test files of every area whose Files you touched (the table above it), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Never run a [CI-only file](references/areas.md#ci-only-files) locally, not even one test: they drive Chrome and run only in CI. Don't run the full `bun test --parallel=3` locally: CI runs it on every PR (it includes the compiled end-to-end test), and step 9 waits for it. A browser test that fails in CI and passes on a rerun is a bug to fix, not to rerun.
 
 Done when everything is green locally and none of the tests you ran skipped. The full suite's verdict is CI's, in step 9.
 
