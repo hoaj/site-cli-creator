@@ -4,7 +4,7 @@ File paths are under `skills/site-cli-creator/` unless they name the repo root o
 
 | Area | Files | Tests | Typical reports |
 |---|---|---|---|
-| Capture tool | `tools/capture.ts`, `tools/lib/recorder.ts`, `tools/lib/shape.ts`, `tools/lib/graphql.ts` | `tests/capture.test.ts` (has its own inline page: put red tests there, proven red in CI as SKILL.md step 4 says), `tests/shape.test.ts` | a value in a shape file; a call mislabelled (REST vs GraphQL, read vs write); a Capture that never stops; a page broken by an aborted read |
+| Capture tool | `tools/capture.ts`, `tools/lib/recorder.ts`, `tools/lib/shape.ts`, `tools/lib/graphql.ts` | `tests/capture.test.ts` (has its own inline page: put red tests there), `tests/shape.test.ts` | a value in a shape file; a call mislabelled (REST vs GraphQL, read vs write); a Capture that never stops; a page broken by an aborted read |
 | Drafting | `tools/draft-contract.ts`, `tools/lib/draft.ts`, `tools/lib/zod-source.ts` | `tests/draft.test.ts` | a variable dropped; wrong nullability; a draft that doesn't compile or drifts on `check` |
 | Scaffolding | `tools/new.ts`, `tools/add-skill.ts`, `tools/lib/scaffold.ts`, `tools/lib/template.ts`, `tools/lib/manifests.ts`, `tools/lib/requirements.ts` | `tests/scaffold.test.ts` | a missing file, label or manifest field; a requirement not checked |
 | Registry and SKILL.md table | `tools/regen.ts`, `tools/lib/regen.ts` | `tests/regen.test.ts` | a non-command file registered; a table row wrong |
@@ -23,20 +23,23 @@ File paths are under `skills/site-cli-creator/` unless they name the repo root o
 ## Green gate
 
 ```sh
-bun test skills/site-cli-creator/tests/shape.test.ts skills/site-cli-creator/tests/draft.test.ts   # the test files of every area you touched, in one command, leaving out the CI-only files
+bun test skills/site-cli-creator/tests/shape.test.ts skills/site-cli-creator/tests/draft.test.ts   # the test files of every area you touched, in one command; without Chrome the browser tests SKIP
+bun test skills/site-cli-creator/tests/capture.test.ts -t "<test name>"                            # a CI-only file: only the tests you added or changed
 bun x tsc --noEmit -p .                                      # tools, tests, fixtures
 bun x tsc --noEmit -p skills/site-cli-creator/starter/skill/cli
 actionlint .github/workflows/*.yml skills/site-cli-creator/starter/plugin/.github/workflows/*.yml
 shellcheck skills/site-cli-creator/starter/skill/install.sh
 ```
 
-Which tests: those of every area whose Files you touched, except the [CI-only files](#ci-only-files). For a file in no row, or a `tools/lib` file shared by several areas, also run the test files that import it (`git grep -l <module> -- '*.test.ts'`).
+Which tests: those of every area whose Files you touched. For a file in no row, or a `tools/lib` file shared by several areas, also run the test files that import it (`git grep -l <module> -- '*.test.ts'`).
 
 The full `bun test --parallel=3` (everything, incl. the compiled e2e test) runs in CI on every PR; don't run it locally.
 
 ### CI-only files
 
-These drive Chrome and take most of the suite's time (CI, Nov 2026: about 105, 65, 50, 45 and 30 s of the suite's 130 s). Never run them locally, not even one test with `-t`: they run only in CI (GitHub Actions), on every PR. A test you add or change in one is proven by the PR's CI run, so check that run's results and skip count for it.
+These drive Chrome and take most of the suite's time (CI, Nov 2026: about 105, 65, 50, 45 and 30 s of the suite's 130 s). Don't run them whole locally: run only the tests you added or changed, with `-t "<test name>"`. CI runs them whole.
+
+Chrome itself is fine locally. Investigate a bug in a real browser (the Playwright CLI, a Capture against the fixture site), and add a Chrome test when one proves the fix. What stays in CI is the full suite and these files whole.
 
 - `tests/e2e.test.ts` (it also compiles the CLI)
 - `starter/skill/cli/tests/browser.test.ts`
@@ -44,6 +47,6 @@ These drive Chrome and take most of the suite's time (CI, Nov 2026: about 105, 6
 - `tests/capture.test.ts`
 - `starter/skill/cli/tests/transport.test.ts`
 
-The full suite runs on Linux only in CI; macOS and Windows get the smoke test, on `main` and on `workflow_dispatch`. So nothing runs the Chrome tests on macOS or Windows: Chrome behaviour there is covered only by Captures, the cold read and the smoke test.
+The full suite runs on Linux only in CI; macOS and Windows get the smoke test, on `main` and on `workflow_dispatch`.
 
 Installing Bun, Chrome, `actionlint` and `shellcheck`: [setup.md](setup.md).

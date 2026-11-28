@@ -29,9 +29,9 @@ Use the glossary's words exactly: **Task, Capture, Operation, Contract, Effect, 
 - **Every PR that changes the plugin bumps its version** in the three manifests (users' agents cache plugins by version); `references/bump.md` in the maintainer skill lists the pins.
 - **Shapes, never values.** No real site data in the repo, tests, issues or PRs: no names, ids, amounts, tokens, cookies or raw traffic. Tests use the fixture site or values they plant themselves.
 - **Windows and Intel Mac exist only in CI.** A change that [CLAUDE.md](CLAUDE.md) lists (Pull requests, step 3) is done only when the five-platform matrix is green on the PR's head commit: `gh workflow run site-cli-creator.yml --ref <branch>`.
-- **Chrome tests run only in CI.** The browser, Capture, fixture-site, transport and e2e tests drive Chrome and never run locally, not even one with `-t`. The PR's CI run is their proof: check its skip count.
+- **A green run without Chrome proves little:** the browser, Capture and e2e tests skip without it. Check the skip count.
 - **Throwaway scripts** go in `*.tmp.ts` files (gitignored) and are deleted after use.
 
 ## Checks
 
-Bun 1.4.3 (as CI), then `bun install --frozen-lockfile` at the root. The green gate (tests, both `tsc` projects, `actionlint`, `shellcheck`) is in the maintainer skill's `references/areas.md`. Locally, run only the test files of every area you touched, never its CI-only files (they drive Chrome and run only in CI). The full `bun test --parallel=3` runs in CI on every PR: push and wait for it instead of running it locally.
+Bun 1.4.3 (as CI), then `bun install --frozen-lockfile` at the root. The green gate (tests, both `tsc` projects, `actionlint`, `shellcheck`) is in the maintainer skill's `references/areas.md`. Locally, run only the test files of every area you touched, and of its CI-only files only the tests you changed. The full `bun test --parallel=3` runs in CI on every PR: push and wait for it instead of running it locally.
