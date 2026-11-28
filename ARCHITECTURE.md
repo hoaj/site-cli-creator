@@ -39,7 +39,7 @@ Glossary terms (Task, CLI skill, Feedback skill, Starter code, Capture, Operatio
       SKILL.md                 files generator problems on hoaj/site-cli-creator, label site-cli-creator (SPEC §1)
 ```
 
-The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator's CI, SPEC §5 and §9) and `.github/scripts/version-tags.sh`: it lists each version on main's first-parent history with no tag `vX.Y.Z` and its first commit there, and the merge procedure in the repo's CLAUDE.md pushes those tags after each merge (never moving one), so `upgrade` can download past Starter code. It is not a workflow: GitHub refused Actions' token a tag on a commit with workflow files, both by `git push` and by creating the ref through the git refs API (#164's first run), so the merger's own credential pushes them. Publishing a release, which is how a generated plugin's release.yml gets its tags, was not tried.
+The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator's CI, SPEC §5 and §9) and `.github/scripts/version-tags.sh`: it lists each version on main's first-parent history with no tag `vX.Y.Z` and its first commit there, and the merge procedure in the repo's CLAUDE.md pushes those tags after each merge (never moving one), so `upgrade` can download past Starter code. It is not a workflow: GitHub refused Actions' token a tag on a commit with workflow files, both by `git push` (#164's first run on main, run 46086308692) and by creating the ref through the git refs API (a dispatched run of an API variant, run 46086439387: "Resource not accessible by integration"), so the merger's own credential pushes them. Publishing a release, which is how a generated plugin's release.yml gets its tags, was not tried.
 
 ## 2. Placeholders in starter/
 
@@ -53,7 +53,7 @@ The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator'
 | `__OWNER__` | GitHub owner of the plugin repo | `hoaj` |
 | `__DESCRIPTION__` | one-line plugin description | |
 | `__MAINTAINER__` | GitHub login of the maintainer | `hoaj` |
-| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.23.3` |
+| `__GENERATOR_VERSION__` | site-cli-creator's own version | `0.23.5` |
 | `__ORIGIN__` | the site origin | `https://www.yousee.dk` |
 | `__AUTH__` | `login` or `none` | |
 | `__PREFIX__` | what release tags, workflow names and workflow files start with: empty in a plugin's own repo, `<plugin>-` in a shared repo | `yousee-` |

@@ -14,10 +14,15 @@ else
   tags="$(git tag -l 'v*')"
 fi
 seen=""
-for commit in $(git rev-list --first-parent --reverse "$ref"); do
-  # A commit without the manifest (before it existed) has no version; any other failure stops the script.
-  manifest="$(git show "$commit:.claude-plugin/plugin.json" 2>/dev/null)" || continue
-  version="$(jq -r '.version // empty' <<<"$manifest")"
+# A bad ref must stop the script: inside a `for` list, rev-list's failure would read as "all tagged".
+commits="$(git rev-list --first-parent --reverse "$ref")"
+for commit in $commits; do
+  # A commit without the manifest (before it existed) has no version. ls-tree prints nothing then and
+  # exits 0; any other git failure stops the script.
+  [[ -n "$(git ls-tree --name-only "$commit" -- .claude-plugin/plugin.json)" ]] || continue
+  manifest="$(git show "$commit:.claude-plugin/plugin.json")"
+  # A manifest that does not parse has no version either, so one bad commit can't stop every later run (#175).
+  version="$(jq -r '.version // empty' <<<"$manifest" 2>/dev/null)" || continue
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
   grep -qxF "$version" <<<"$seen" && continue
   seen="$seen"$'\n'"$version"
