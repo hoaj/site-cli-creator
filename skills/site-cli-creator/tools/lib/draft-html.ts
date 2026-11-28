@@ -262,7 +262,9 @@ export function draftHtml(outline: HtmlNode[], from?: string): string[] {
   lines.push("  // Keep the fields the command reads and name them. A field it cannot do without is z.string().min(1),");
   lines.push("  // so an element that moved or emptied is Drift; one another page may lack stays .nullable(). A lines list");
   lines.push("  // is null when its element moved, as text is, and [] when it is empty: one the command cannot do without");
-  lines.push("  // is z.array(z.string()).min(1). An all: true list reads [] when its elements moved too: .min(1) there as well.");
+  lines.push("  // is z.array(z.string()).min(1), one some items leave empty a plain z.array(z.string()) (a moved element");
+  lines.push("  // is still Drift); keep .nullable() only for an element another page may lack. An all: true list reads []");
+  lines.push("  // when its elements moved too: .min(1) there as well.");
   lines.push("  html: {");
   if (from) lines.push(`    from: ${from},`);
   lines.push("    fields: {", fieldsSource, "    },", "  },");
