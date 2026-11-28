@@ -29,7 +29,7 @@ actionlint .github/workflows/*.yml skills/site-cli-creator/starter/plugin/.githu
 shellcheck skills/site-cli-creator/starter/skill/install.sh
 ```
 
-Every PR that touches the plugin (`skills/`, the manifests, `package.json`) bumps the version. [bump.md](./.claude/skills/improve-site-cli-creator/references/bump.md) lists the files to change.
+Every PR that touches the plugin (`skills/`, the manifests, `package.json`) bumps the version. After a PR with a new version merges, tag it, with a git credential that has the `workflow` scope (over HTTPS: `gh auth refresh -s workflow && gh auth setup-git`): `bash -o pipefail -c 'git fetch origin && git show origin/main:.github/scripts/version-tags.sh | bash -s -- origin/main | while read -r tag commit; do git push origin "${commit}:refs/tags/${tag}" || exit 1; echo "tagged ${tag}"; done'`. `upgrade` downloads a plugin's past Starter code from these tags; nothing else creates them. [bump.md](./.claude/skills/improve-site-cli-creator/references/bump.md) lists the files to change.
 
 ## Working with an agent
 

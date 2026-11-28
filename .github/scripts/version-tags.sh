@@ -7,7 +7,12 @@ set -euo pipefail
 command -v jq >/dev/null || { echo "version-tags.sh needs jq" >&2; exit 1; }
 
 ref="${1:-HEAD}"
-tags="$(git tag -l 'v*')"
+# The tags GitHub has, not a long-lived checkout's local ones; a repo with no origin (the test) uses its own.
+if git remote get-url origin >/dev/null 2>&1; then
+  tags="$(git ls-remote --tags --refs origin 'v*' | sed 's|.*refs/tags/||')"
+else
+  tags="$(git tag -l 'v*')"
+fi
 seen=""
 for commit in $(git rev-list --first-parent --reverse "$ref"); do
   # A commit without the manifest (before it existed) has no version; any other failure stops the script.
