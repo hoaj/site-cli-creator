@@ -504,7 +504,7 @@ await runTool(async () => {
   const refusedNote = refused ? ` ${refused}` : "";
   const why = scriptError ? `--script failed: ${firstLine(scriptError.message)}; ` : "";
   if (operations.length === 0) fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was.${suspectNote}${refusedNote}`);
-  if (kept) fail(`${why}the site refused this Capture, so the earlier Capture in ${dir} was kept as it was: a refused Capture never replaces one.${suspectNote}${refusedNote}`);
+  if (kept) fail(`${why}the earlier Capture in ${dir} was kept as it was: this Capture's page load was refused (below), and a refused Capture never replaces an earlier one.${suspectNote}${refusedNote}`);
   const files = shapeFileNames(operations, new URL(origin).hostname);
   mkdirSync(dir, { recursive: true });
   clearPreviousCapture(dir);
