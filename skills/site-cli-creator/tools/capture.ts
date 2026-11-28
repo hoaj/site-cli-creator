@@ -221,24 +221,30 @@ async function pageAnswer(req: Request): Promise<PageAnswer | undefined> {
   return { status, ...(blocked ? { blocked } : {}) };
 }
 
-/** What a Capture says when the tab's last page load was refused and no other call answered with data (#119). */
-function refusedPage({ status, blocked }: PageAnswer, headless: boolean): string {
+/**
+ * What a Capture says when the tab's last page load was refused and no other call answered with data (#119).
+ * `kept`: an earlier Capture of the Task was kept, so no shapes were written (#158).
+ */
+function refusedPage({ status, blocked }: PageAnswer, headless: boolean, kept: boolean): string {
   const what = blocked
     ? `The tab's last page load answered ${status}, the block page of a bot wall (${blocked}), and no other call answered with data (2xx or 304), sign-in steps aside: the site refused this Chrome`
     : `The tab's last page load answered ${status} and no other call answered with data (2xx or 304), sign-in steps aside: the site refused this Chrome (a bot wall, a blocked address) or is down`;
   return (
-    `${what}, so the Task's data never loaded and the shapes hold only the refusal. ` +
+    `${what}, so the Task's data never loaded${kept ? "" : " and the shapes hold only the refusal"}. ` +
     (headless ? "A wall may refuse only headless Chrome: capture again without --headless (--script still drives the page). " : "") +
     "A challenge solved in the window sends its answer as a write, which a read Task aborts (stderr names each aborted write): capture again with --allow-read <its path>. " +
     `${blocked ? "The CLI will likely meet the same wall" : "If it is a bot wall, the CLI will likely meet it too"}: reference/fix.md#2c-a-bot-block.`
   );
 }
 
+/** The files of an earlier Capture in `dir`: its shape files and index.json. */
+function captureFiles(dir: string): string[] {
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir).filter((f) => f.endsWith(".shape.json") || f === "index.json");
+}
+
 function clearPreviousCapture(dir: string): void {
-  if (!existsSync(dir)) return;
-  for (const f of readdirSync(dir)) {
-    if (f.endsWith(".shape.json") || f === "index.json") rmSync(join(dir, f));
-  }
+  for (const f of captureFiles(dir)) rmSync(join(dir, f));
 }
 
 await runTool(async () => {
@@ -491,12 +497,14 @@ await runTool(async () => {
   // loaded. A page that loaded with data (not a block page) counts like a fetch: the data may be in its HTML.
   const last = loads.at(-1);
   const pageData = loads.some((a) => !a.blocked && withData(a.status));
-  const refused = last && (REFUSALS.has(last.status) || last.blocked) && !fetchedData && !pageData ? refusedPage(last, values.headless) : undefined;
+  const refusal = last && (REFUSALS.has(last.status) || last.blocked) && !fetchedData && !pageData ? last : undefined;
+  // A refused Capture never replaces an earlier Capture of the Task (#158): it keeps it and fails.
+  const kept = refusal !== undefined && captureFiles(dir).length > 0;
+  const refused = refusal ? refusedPage(refusal, values.headless, kept) : undefined;
   const refusedNote = refused ? ` ${refused}` : "";
-  if (operations.length === 0) {
-    const why = scriptError ? `--script failed: ${firstLine(scriptError.message)}; ` : "";
-    fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was.${suspectNote}${refusedNote}`);
-  }
+  const why = scriptError ? `--script failed: ${firstLine(scriptError.message)}; ` : "";
+  if (operations.length === 0) fail(`${why}no calls to ${origin} were recorded, so ${dir} was left as it was.${suspectNote}${refusedNote}`);
+  if (kept) fail(`${why}the site refused this Capture, so the earlier Capture in ${dir} was kept as it was: a refused Capture never replaces one.${suspectNote}${refusedNote}`);
   const files = shapeFileNames(operations, new URL(origin).hostname);
   mkdirSync(dir, { recursive: true });
   clearPreviousCapture(dir);
