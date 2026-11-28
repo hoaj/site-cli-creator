@@ -70,9 +70,9 @@ Done when the new test fails for the reported reason, not for a typo in the test
 
 ### 6. Green gate
 
-The commands in [references/areas.md](references/areas.md#green-gate): full `bun test --parallel=3` (it includes the compiled end-to-end test), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Run `bun test --parallel=3` twice: browser tests that pass only sometimes are a bug to fix, not to rerun.
+The commands in [references/areas.md](references/areas.md#green-gate): the test files of the area you changed (the table above it), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Don't run the full `bun test --parallel=3` locally: CI runs it on every PR (it includes the compiled end-to-end test), and step 9 waits for it. A browser test that fails in CI and passes on a rerun is a bug to fix, not to rerun.
 
-Done when everything is green on both runs and the count line shows no new skips.
+Done when everything is green locally and the count line shows no new skips. The full suite's verdict is CI's, in step 9.
 
 ### 7. Cold read
 

@@ -20,11 +20,13 @@ File paths are under `skills/site-cli-creator/` unless they name the repo root o
 ## Green gate
 
 ```sh
-bun test --parallel=3                                        # everything, incl. the compiled e2e test; without Chrome the browser tests SKIP
+bun test skills/site-cli-creator/tests/capture.test.ts       # the area's test files from the table (example: Capture tool); without Chrome the browser tests SKIP
 bun x tsc --noEmit -p .                                      # tools, tests, fixtures
 bun x tsc --noEmit -p skills/site-cli-creator/starter/skill/cli
 actionlint .github/workflows/*.yml skills/site-cli-creator/starter/plugin/.github/workflows/*.yml
 shellcheck skills/site-cli-creator/starter/skill/install.sh
 ```
+
+The full `bun test --parallel=3` (everything, incl. the compiled e2e test) runs in CI on every PR; don't run it locally.
 
 Installing Bun, Chrome, `actionlint` and `shellcheck`: [setup.md](setup.md).
