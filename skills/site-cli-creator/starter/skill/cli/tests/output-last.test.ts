@@ -205,6 +205,59 @@ describe("with neverResend from main 0.20.0", () => {
   });
 });
 
+describe("a write not sent again keeps WRITE_NOT_RESENT whatever fails after it (#149)", () => {
+  const NOT_RESENT = "Tell the user the write may already have taken effect and was not sent again";
+  const toLoginHost = () => new Response(null, { status: 303, headers: { location: "https://login.example.test/authorize" } });
+  // renew's own request is one site.never forbids: renew throws the refusal while neverResend renews.
+  const refusingRenew = () =>
+    loginSite({
+      never: [{ path: "/oauth/revoke", why: "Revoking every sign-in" }],
+      login: { ...loginSite().login!, refresh: { renew: async (ctx) => (await ctx.fetch(`${ctx.origin}/oauth/revoke`, { method: "POST" }), { headers: {} }) } },
+    });
+  const rename = defineCommand({ name: "item rename", summary: "x", args: z.object({}), uses: [renameItem], output: z.object({ ok: z.boolean() }), run: async (_a, { call }) => (await call(renameItem, { id: "I1", name: "A" }), { ok: true }) });
+  const withRefresh = () => saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" }, refresh: { token: "r1" } });
+
+  test("CLI: a renew whose request site.never refuses, after a 303 to a login host, still says the write was not sent again", async () => {
+    withRefresh();
+    const { app, f } = appOf([rename], () => toLoginHost(), [renameItem], refusingRenew());
+    const r = await run(["--confirm", "item", "rename"], app);
+    expect(r.code).toBe(1);
+    expect(err(r.output).kind).toBe("bug");
+    expect(err(r.output).writeNotResent).toBe(true);
+    expect(err(r.output).writeSent).toBeUndefined();
+    expect(err(r.output).next).toStartWith(NOT_RESENT);
+    expect(err(r.output).next).toContain("never sends this request (Revoking every sign-in)");
+    expect(f.calls.map((c) => c.method)).toEqual(["PATCH"]);
+  });
+
+  test("MCP: the same, on the tool's error", async () => {
+    withRefresh();
+    const server = mcpServer(appOf([rename], () => toLoginHost(), [renameItem], refusingRenew()).app);
+    const m: any = ((await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "item_rename", arguments: { confirm: true } } })) as any).result;
+    const e = JSON.parse(m.content[0].text).error;
+    expect(e.writeNotResent).toBe(true);
+    expect(e.next).toStartWith(NOT_RESENT);
+  });
+
+  test("the session failure itself carries writeNotResent, and says it once", async () => {
+    const { app } = appOf([rename], () => toLoginHost(), [renameItem], loginSite());
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" } });
+    const r = await run(["--confirm", "item", "rename"], app);
+    expect(err(r.output).kind).toBe("session");
+    expect(err(r.output).writeNotResent).toBe(true);
+    expect(err(r.output).next).toStartWith(NOT_RESENT);
+    expect(err(r.output).next.split(NOT_RESENT)).toHaveLength(2);
+    expect(err(r.output).next).toContain("run `shop login`");
+  });
+
+  test("a write that was sent and answered with success carries no writeNotResent", async () => {
+    const { app } = appOf([rename], () => json({ ok: "not a boolean" }), [renameItem]);
+    const r = await run(["--confirm", "item", "rename"], app);
+    expect(err(r.output).writeSent).toBe(true);
+    expect(err(r.output).writeNotResent).toBeUndefined();
+  });
+});
+
 describe("small refusals", () => {
   test("z.success() is refused", () => {
     expect(() => assertOutputSchema({ name: "item show", output: z.object({ a: z.success(z.string()) }) })).toThrow(ContractError);

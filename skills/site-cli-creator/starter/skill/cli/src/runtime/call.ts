@@ -828,13 +828,16 @@ export class Client {
       const ran = op.graphql !== undefined && hasRootData(r.body) && unauthenticated(r.body);
       if (r.loginRedirect || ran) {
         const how = ran ? "a sign-in error (UNAUTHENTICATED) after the write ran" : signInAnswer(r);
+        // Before renewing: whatever fails from here on (renew's own request refused by site.never, a lock or save error)
+        // still says the write may have taken effect (main.ts marks the envelope writeNotResent).
+        this.writeNotResent = true;
         // The write is not sent again, but the sign-in is still renewed where reauthenticate() would (login.refresh, plain
         // fetch, no Chrome), so the next run is signed in. Nothing proves the renewal took, so `next` keeps the login step
         // for a run that ends this way again. A site.never refusal of renew's own request is the bug it is everywhere.
         const renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew());
         // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
         const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
-        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { next: notResentNext(renewed, login) });
+        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { writeNotResent: true, next: notResentNext(renewed, login) });
       }
       return r;
     };
@@ -870,6 +873,9 @@ export class Client {
 
   /** A write Operation was sent and the site answered with success (main.ts: any failure after it must say so). */
   writeSent = false;
+
+  /** A write Operation got a sign-in page and was not sent again (main.ts: any failure after it must say so). */
+  writeNotResent = false;
 
   /**
    * With a never list: the request this Operation sends with these variables (built once, the

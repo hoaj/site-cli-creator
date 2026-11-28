@@ -26,6 +26,11 @@ export type FailureDetails = {
    * after it (a later call, a mapping, a bug in run), so the write must not be run again.
    */
   writeSent?: boolean;
+  /**
+   * Any kind, from a command whose write got a sign-in page and was not sent again (call.ts): it may have
+   * taken effect, whatever failed after it (renewing the sign-in there included), so the user checks on the site first.
+   */
+  writeNotResent?: boolean;
   /** Replaces the kind's fixed `next`, when that sentence would be wrong here (the MCP login tool's own failures). */
   next?: string;
 };
@@ -77,15 +82,16 @@ export type EnvelopeSite = { plugin: string; skill: string; version: string; rep
 export type Surface = "cli" | "mcp";
 
 /**
- * How `next` starts for a write that got a sign-in page and was not sent again (call.ts), on every surface: remote.ts keeps
- * it in front of the Owner's step. SIGN_IN_RENEWED follows it when the run renewed the sign-in there.
+ * How `next` starts for a write that got a sign-in page and was not sent again (details.writeNotResent), on every surface
+ * and for every kind, after WRITE_SENT when an earlier write of the Task was answered with success. SIGN_IN_RENEWED
+ * follows it in the session failure call.ts throws there when the run renewed the sign-in.
  */
 export const WRITE_NOT_RESENT = "Tell the user the write may already have taken effect and was not sent again, and ask them to check on the site. Do not run it again until they confirm it did not take effect.";
 export const SIGN_IN_RENEWED = "If it did not, run it again: the sign-in has been renewed.";
 
-/** That `next`, with `signIn` the surface's step to sign in again (run login, call the login tool, ask the Owner). */
+/** The rest of that session failure's `next`, with `signIn` the surface's step to sign in again (run login, call the login tool, ask the Owner). */
 export function notResentNext(renewed: boolean, signIn: string): string {
-  return `${WRITE_NOT_RESENT} ${renewed ? `${SIGN_IN_RENEWED} If it ends this way again, ${signIn} before running it again.` : `If it did not, ${signIn}, then run it again.`}`;
+  return renewed ? `${SIGN_IN_RENEWED} If it ends this way again, ${signIn} before running it again.` : `If it did not, ${signIn}, then run it again.`;
 }
 
 /** First in `next` of any failure after a write the site answered with success (details.writeSent), on both surfaces. */
@@ -157,6 +163,10 @@ export function osName(platform: string = process.platform, arch: string = proce
 
 export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface = "cli") {
   const d = f.details;
+  // A plain session failure after a write not sent again: the generic "rerun the command" would contradict WRITE_NOT_RESENT.
+  const fixed = d.writeNotResent && f.kind === "session"
+    ? notResentNext(false, surface === "mcp" ? "call the login tool" : `run \`${site.skill} login\``)
+    : nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined);
   return {
     error: {
       kind: f.kind,
@@ -168,9 +178,10 @@ export function errorEnvelope(f: Failure, site: EnvelopeSite, surface: Surface =
       ...(d.accounts !== undefined && { accounts: d.accounts }),
       ...(d.blocked !== undefined && { blocked: d.blocked }),
       ...(d.writeSent && { writeSent: true }),
+      ...(d.writeNotResent && { writeNotResent: true }),
       version: site.version,
       os: osName(),
-      next: `${d.writeSent ? `${WRITE_SENT} ` : ""}${d.next ?? nextStep(f.kind, site, (d.accounts?.length ?? 0) > 0, surface, d.blocked !== undefined)}`,
+      next: `${d.writeSent ? `${WRITE_SENT} ` : ""}${d.writeNotResent ? `${WRITE_NOT_RESENT} ` : ""}${d.next ?? fixed}`,
     },
   };
 }

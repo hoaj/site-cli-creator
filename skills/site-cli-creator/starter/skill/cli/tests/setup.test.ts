@@ -6,6 +6,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { z } from "zod";
 import { checkSession, mcpTools, type App } from "../src/main";
 import { defineCommand } from "../src/runtime/command";
+import { Failure, SIGN_IN_RENEWED, WRITE_NOT_RESENT } from "../src/runtime/envelope";
 import { BUILTIN_FLAGS } from "../src/runtime/help";
 import { remoteConfig } from "../src/runtime/remote-config";
 import { serveHttp } from "../src/runtime/remote";
@@ -482,6 +483,7 @@ describe("remote tools", () => {
       state.handler = toLoginHost;
       const error = textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N", confirm: true })).error;
       expect(error.kind).toBe("session");
+      expect(error.writeNotResent).toBe(true);
       expect(error.next).toStartWith("Tell the user the write may already have taken effect and was not sent again");
       expect(error.next).toContain("check on the site");
       expect(error.next).toContain(`${base}/setup`);
@@ -529,6 +531,27 @@ describe("remote tools", () => {
       expect(error.next).not.toContain("Do not retry until they have");
       expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(2);
       expect(app.commands.map((c) => c.name)).toEqual(["order both"]);
+    });
+
+    test("the adapter reads the envelope's writeNotResent field, not the words of next (#151)", async () => {
+      // A session failure whose next only quotes those sentences is a plain one: the Session is marked expired.
+      const quoting = defineCommand({
+        name: "order quote",
+        summary: "Fail with a session error",
+        args: z.object({}),
+        uses: [],
+        run: async () => {
+          throw new Failure("session", "signed out", { next: `${WRITE_NOT_RESENT} ${SIGN_IN_RENEWED}` });
+        },
+      });
+      const { base } = await start({ extra: { commands: [quoting] } });
+      const token = await signIn(base);
+      await upload(base, { file: sessionJson() });
+      const error = textOf(await toolCall(base, token, "order_quote")).error;
+      expect(error.writeNotResent).toBeUndefined();
+      expect(error.next).toContain("Do not retry until they have");
+      expect(error.next).not.toContain(WRITE_NOT_RESENT);
+      expect(readStatus(home.dir).state).toBe("expired");
     });
   });
 
