@@ -6,18 +6,12 @@
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { parseFlags, requireKebab } from "./lib/args";
-import { addSkillToManifests, MANIFESTS, readJson } from "./lib/manifests";
+import { addSkillToManifests, MANIFESTS, readJson, writeJson } from "./lib/manifests";
 import { fail, runTool } from "./lib/output";
 import { generatorVersion, starterDir, toolCommand } from "./lib/paths";
-import {
-  parseOrigin,
-  repoFromManifest,
-  requireDir,
-  setPackageVersion,
-  setSiteVersion,
-  setSkillMdVersion,
-} from "./lib/scaffold";
-import { assertNoTokens, copyTemplate, type Layout, type Tokens } from "./lib/template";
+import { copySkillStarter } from "./lib/render";
+import { parseOrigin, repoFromManifest, requireDir } from "./lib/scaffold";
+import { assertNoTokens, type Layout, type Tokens } from "./lib/template";
 
 const USAGE = "bun tools/add-skill.ts --dir <plugin> --skill <name> --origin <url> --auth login|none --daily-check on|off";
 
@@ -83,29 +77,22 @@ await runTool(async () => {
     PREFIX: tagPrefix.slice(0, -1),
     PLUGIN_DIR: repoPath,
   };
-  const files = copyTemplate(skillStarter, skillDir, tokens, { layout });
-
-  const pins: [string, (path: string, version: string) => void][] = [
-    ["SKILL.md", setSkillMdVersion],
-    ["cli/package.json", setPackageVersion],
-    ["cli/src/site.ts", setSiteVersion],
-  ];
-  for (const [rel, set] of pins) {
-    const path = join(skillDir, rel);
-    if (!existsSync(path)) fail(`starter/skill has no ${rel}`);
-    set(path, version);
-  }
+  const files = copySkillStarter(skillStarter, skillDir, tokens, layout, version);
   // The maintainer's answer to the daily drift check question (SPEC §10): the Starter's line says true.
   const sitePath = join(skillDir, "cli", "src", "site.ts");
   const siteSource = readFileSync(sitePath, "utf8");
   if (!/^\s*dailyCheck: true,$/m.test(siteSource)) fail("starter/skill's site.ts has no `dailyCheck: true,` line");
   writeFileSync(sitePath, siteSource.replace(/^(\s*dailyCheck: )true,$/m, `$1${dailyCheck === "on"},`));
-  if (!existsSync(join(skillDir, ".gitignore"))) {
-    writeFileSync(join(skillDir, ".gitignore"), "bin/\n");
-    files.push(".gitignore");
-  }
   assertNoTokens(skillDir);
   const manifests = addSkillToManifests(pluginDir, skill);
+  // The Starter version this skill was copied from, when it is not the plugin's own: upgrade merges from it (SPEC §5).
+  const starterVersion = generatorVersion();
+  if (typeof generated.generatedWith === "string" && generated.generatedWith !== starterVersion) {
+    const genPath = join(pluginDir, "generated.json");
+    const current = readJson<Record<string, unknown>>(genPath);
+    const skills = current.skills && typeof current.skills === "object" ? (current.skills as Record<string, unknown>) : {};
+    writeJson(genPath, { ...current, skills: { ...skills, [skill]: starterVersion } });
+  }
 
   return {
     skillDir,

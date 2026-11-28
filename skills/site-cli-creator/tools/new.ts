@@ -24,19 +24,13 @@ import {
 } from "./lib/manifests";
 import { fail, progress, runTool } from "./lib/output";
 import { generatorVersion, starterDir, toolCommand } from "./lib/paths";
-import { assertWritableDir, requireDir, setSkillMdVersion } from "./lib/scaffold";
+import { copyPluginStarter, WORKFLOWS } from "./lib/render";
+import { assertWritableDir, requireDir } from "./lib/scaffold";
 import { systemProbe, unmetRequirements } from "./lib/requirements";
-import { assertNoTokens, copyTemplate, layoutTokens, type Layout, type Tokens } from "./lib/template";
+import { assertNoTokens, layoutTokens, type Layout, type Tokens } from "./lib/template";
 
 const USAGE =
   'bun tools/new.ts --dir <path> | --into <repo root> --plugin <name> --repo <owner/name> --description "<text>" --maintainer <login> [--no-labels] [--skip-checks]';
-
-const WORKFLOWS = ".github/workflows";
-/**
- * The daily drift check (SPEC §10), as Starter paths: only a plugin in its own repo gets it, since a shared repo
- * of plugins schedules its own (hoaj/plugins' drift-check.yml) and two would file every Drift twice.
- */
-const DRIFT_CHECK = { workflow: "__PREFIX__drift-check.yml", files: ["scripts/drift-check.ts", "tests/drift-check.test.ts"] };
 
 type Label = { name: string; color: string; description: string };
 
@@ -147,9 +141,7 @@ await runTool(async () => {
   const root = resolve((values.into ?? values.dir) as string);
   const dir = join(root, PLUGIN_DIR);
   const starter = starterDir();
-  const pluginStarter = requireDir(join(starter, "plugin"), "starter/plugin");
-  const feedbackStarter = requireDir(join(starter, "feedback"), "starter/feedback");
-  const deployStarter = requireDir(join(starter, "deploy"), "starter/deploy");
+  for (const part of ["plugin", "feedback", "deploy"]) requireDir(join(starter, part), `starter/${part}`);
   const shared = layout === "shared" ? checkSharedRoot(root, plugin) : null;
   if (!shared) assertWritableDir(dir);
   if (!values["skip-checks"]) {
@@ -175,19 +167,7 @@ await runTool(async () => {
   };
   // Every path below is relative to the repo root, which is the plugin's root when it has its own repo.
   const inPlugin = (rel: string) => relative(root, join(dir, rel));
-  const repoSchedulesItsOwn = layout === "shared"; // a shared repo runs its own daily check: no drift-check here
-  const files = copyTemplate(pluginStarter, dir, tokens, { layout, skip: (rel) => rel === WORKFLOWS || (repoSchedulesItsOwn && DRIFT_CHECK.files.includes(rel)) }).map(inPlugin);
-  const workflowStarter = join(pluginStarter, WORKFLOWS);
-  if (existsSync(workflowStarter)) {
-    const skip = (rel: string) => repoSchedulesItsOwn && rel === DRIFT_CHECK.workflow;
-    files.push(...copyTemplate(workflowStarter, join(root, WORKFLOWS), tokens, { layout, skip }).map((f) => join(WORKFLOWS, f)));
-  }
-  for (const [starterSkill, suffix] of [[feedbackStarter, "feedback"], [deployStarter, "deploy"]] as const) {
-    const rel = join("skills", `${plugin}-${suffix}`);
-    files.push(...copyTemplate(starterSkill, join(dir, rel), tokens, { layout }).map((f) => inPlugin(join(rel, f))));
-    const skillMd = join(dir, rel, "SKILL.md");
-    if (existsSync(skillMd)) setSkillMdVersion(skillMd, INITIAL_VERSION);
-  }
+  const files = copyPluginStarter(starter, root, dir, tokens, layout, INITIAL_VERSION);
 
   const info: PluginInfo = { plugin, repo: values.repo, description: values.description, maintainer: values.maintainer, pluginDir: PLUGIN_DIR };
   const manifests: Record<string, unknown> = buildManifests(info);

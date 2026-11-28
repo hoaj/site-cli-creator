@@ -1,11 +1,11 @@
 ---
 name: site-cli-creator
-description: Use when creating or maintaining a plugin whose CLI skills run Tasks on a website through the calls its frontend makes. Covers a new plugin for a site (new), another site or login in an existing plugin (add-skill), a new Task or a feature-request issue (add-task), and a Drift or bug issue filed by a plugin's Feedback skill (fix).
+description: Use when creating or maintaining a plugin whose CLI skills run Tasks on a website through the calls its frontend makes. Covers a new plugin for a site (new), another site or login in an existing plugin (add-skill), a new Task or a feature-request issue (add-task), a Drift or bug issue filed by a plugin's Feedback skill (fix), and bringing an existing plugin's Starter code up to this generator's version (upgrade).
 ---
 
 # site-cli-creator
 
-This skill builds and maintains a **plugin** for coding agents in a repo the user chooses. Each CLI skill in it wraps one site with one login or none, and runs **Tasks** as `<noun> <verb>` commands of a compiled Bun CLI. You Capture the calls the site's frontend makes while the user performs each Task in Chrome, keep only the Operations the Task needs, write a Contract (Zod schemas) per Operation and one command per Task. The CLI reports **Drift** when the site changes, and the plugin's Feedback skill files it on the plugin's repo, where `fix` picks it up. After `new` copies the Starter code, the plugin owns every file and shares no code with this generator.
+This skill builds and maintains a **plugin** for coding agents in a repo the user chooses. Each CLI skill in it wraps one site with one login or none, and runs **Tasks** as `<noun> <verb>` commands of a compiled Bun CLI. You Capture the calls the site's frontend makes while the user performs each Task in Chrome, keep only the Operations the Task needs, write a Contract (Zod schemas) per Operation and one command per Task. The CLI reports **Drift** when the site changes, and the plugin's Feedback skill files it on the plugin's repo, where `fix` picks it up. After `new` copies the Starter code, the plugin owns every file and shares no code with this generator; `upgrade` merges a later Starter code into it as a PR.
 
 Terms (Task, Capture, Operation, Contract, Effect, Drift, Fingerprint, Starter code) mean exactly what they mean in the product's `CONTEXT.md`. `<gen>` below is this skill's folder; `<plugin>` is the generated plugin's root; `<skill>` is `<plugin>/skills/<skill>`.
 
@@ -30,6 +30,7 @@ Run these before any mode. Stop at the first failure and tell the user the fix. 
 | `add-skill` | another site or another login in an existing plugin | [reference/add-skill.md](reference/add-skill.md) | minor | maintainer merges |
 | `add-task` | a `feature` issue, or the maintainer wants a new Task | [reference/add-task.md](reference/add-task.md) | minor | maintainer merges |
 | `fix` | an issue titled with a Fingerprint (Drift) or `bug: <key>` | [reference/fix.md](reference/fix.md) | patch | Drift: merge when checks are green; bug: maintainer merges |
+| `upgrade` | the plugin's `generated.json` `generatedWith` is older than this generator, or the maintainer wants a later Starter code fix or feature | [reference/upgrade.md](reference/upgrade.md) | minor | maintainer merges |
 
 `new` runs `add-skill` for the first CLI skill, and `add-skill` runs `add-task` for each Task, all inside the one mode's change and its one bump. Before writing any Operation, command or `site.ts`, read [reference/contracts.md](reference/contracts.md).
 
@@ -75,6 +76,7 @@ bun <gen>/tools/capture.ts --skill-dir <skill> --task <slug> | --explore --url <
 bun <gen>/tools/split-capture.ts --skill-dir <skill> --task <slug> --op <operation> [--op <operation>]... [--start-path <path>]
 bun <gen>/tools/draft-contract.ts <skill>/captures/<task>/<operation>.shape.json [--name <op>] [--out <file.ts>]
 bun <gen>/tools/regen.ts --skill-dir <skill>
+bun <gen>/tools/upgrade.ts --dir <plugin> [--starters <folder>]
 ```
 
 - `new.ts --skip-checks` skips the maintainer requirement checks; only tests and CI use it.
@@ -98,7 +100,7 @@ cd <plugin> && bun test                              # version-sync and runtime 
 
 ## Versioning
 
-Every mode that opens a PR bumps in that PR with `bun run bump`: `fix` patch, `add-task` and `add-skill` minor. A renamed or removed command is a major bump the maintainer asks for. Never edit a version by hand: the version-sync test fails on any copy that differs. When CI says the PR's version is not above `main`'s, rebase on `main` and bump again.
+Every mode that opens a PR bumps in that PR with `bun run bump`: `fix` patch, `add-task`, `add-skill` and `upgrade` minor. A renamed or removed command is a major bump the maintainer asks for. Never edit a version by hand: the version-sync test fails on any copy that differs. When CI says the PR's version is not above `main`'s, rebase on `main` and bump again.
 
 ## Fix mode
 
