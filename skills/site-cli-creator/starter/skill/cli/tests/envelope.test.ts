@@ -23,6 +23,17 @@ describe("envelope helpers", () => {
     expect(nextStep("network", site)).toContain("isn't responding");
   });
 
+  test("a later plain session failure after a write not sent again never says rerun the command (#149 review)", () => {
+    const f = new Failure("session", "getAccount: still signed out.", { writeNotResent: true });
+    const cli = errorEnvelope(f, site).error.next;
+    expect(cli).toStartWith("Tell the user the write may already have taken effect and was not sent again");
+    expect(cli).toEndWith("If it did not, run `shop login`, then run it again.");
+    expect(cli).not.toContain("rerun the command");
+    const mcp = errorEnvelope(f, site, "mcp").error.next;
+    expect(mcp).toEndWith("If it did not, call the login tool, then run it again.");
+    expect(mcp).not.toContain("call this tool again");
+  });
+
   test("a bot block is network with `blocked` and its own next: tell the user, stop, a bug report only if it keeps happening (#95, #111)", () => {
     const f = new Failure("network", "getAccount: the site refused the request as automated traffic (bot protection: cloudflare).", { blocked: "cloudflare" });
     const cli = errorEnvelope(f, site).error;

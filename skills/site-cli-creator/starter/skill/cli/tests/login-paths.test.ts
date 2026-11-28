@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { z } from "zod";
 import { Client } from "../src/runtime/call";
-import { Failure } from "../src/runtime/envelope";
+import { errorEnvelope, Failure } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
 import { saveSession } from "../src/runtime/session";
 import { isLoginPath, siteProblems } from "../src/runtime/site";
@@ -314,7 +314,8 @@ describe("review 3", () => {
       const d = makeDeps(fetch, home.dir, [{ authorization: "Bearer new" }]);
       const c = new Client(withLogin({ paths: ["/login"] }), d.deps, { surface, confirm: true });
       const f = await failure(c.call(renameOrder, { orderId: "7", name: "N" }));
-      const next = f.details.next!;
+      expect(f.details.writeNotResent).toBe(true);
+      const next = errorEnvelope(f, withLogin({ paths: ["/login"] }), surface).error.next;
       expect(next).toContain("check on the site");
       expect(next).toContain(surface === "mcp" ? "call the login tool" : "`shop login`");
       expect(next).toContain("Do not run it again until they confirm");
