@@ -257,7 +257,46 @@ describe("a write not sent again keeps WRITE_NOT_RESENT whatever fails after it 
     expect(err(r.output).writeNotResent).toBeUndefined();
   });
 
+  // A fallback: the command catches the session failure neverResend throws and returns success.
+  const swallowing = defineCommand({
+    name: "item rename",
+    summary: "x",
+    args: z.object({}),
+    uses: [renameItem],
+    output: z.object({ ok: z.boolean() }),
+    run: async (_a, { call }) => {
+      try {
+        await call(renameItem, { id: "I1", name: "A" });
+      } catch {}
+      return { ok: true };
+    },
+  });
   const renewing = () => loginSite({ login: { ...loginSite().login!, refresh: { renew: async (ctx) => ({ headers: { ...ctx.headers, authorization: "Bearer new" } }) } } });
+
+  test("CLI: a command that catches the not-resent session failure and returns success still ends with it (#194)", async () => {
+    withRefresh();
+    const { app, f } = appOf([swallowing], () => toLoginHost(), [renameItem], loginSite());
+    const r = await run(["--confirm", "item", "rename"], app);
+    expect(r.code).toBe(4);
+    expect(err(r.output).kind).toBe("session");
+    expect(err(r.output).writeNotResent).toBe(true);
+    expect(err(r.output).next).toStartWith(NOT_RESENT);
+    expect(err(r.output).next).toContain("run `shop login`");
+    expect(f.calls.map((c) => c.method)).toEqual(["PATCH"]);
+  });
+
+  test("MCP: the same, and a renewal there is kept in the failure it ends with (#194, #195)", async () => {
+    withRefresh();
+    const server = mcpServer(appOf([swallowing], () => toLoginHost(), [renameItem], renewing()).app);
+    const m: any = ((await server.handle({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "item_rename", arguments: { confirm: true } } })) as any).result;
+    expect(m.isError).toBe(true);
+    const e = JSON.parse(m.content[0].text).error;
+    expect(e.kind).toBe("session");
+    expect(e.writeNotResent).toBe(true);
+    expect(e.signInRenewed).toBe(true);
+    expect(e.next).toStartWith(NOT_RESENT);
+    expect(e.next).toContain("the sign-in has been renewed");
+  });
 
   test("signInRenewed is set only when the run renewed the sign-in there (#195)", async () => {
     withRefresh();

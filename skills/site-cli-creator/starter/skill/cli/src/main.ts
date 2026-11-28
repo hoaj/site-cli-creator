@@ -286,6 +286,9 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
       account: chosen,
       note: deps.note,
     }));
+    // So does a write not sent again (#194): the user checks on the site first. Without the failure (renewing the sign-in
+    // there threw, and the command caught that too), a plain session failure says it, through the writeNotResent mark.
+    if (client.writeNotResent) throw client.notResent ?? new Failure("session", `${command.name}: a write got a sign-in page and was not sent again.`);
     const value = result ?? null;
     // An undefined result the schema accepts is fine; otherwise what prints (null) is what is checked.
     const skip = result === undefined && command.output?.safeParse(undefined).success === true;

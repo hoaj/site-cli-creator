@@ -837,11 +837,13 @@ export class Client {
         const renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew());
         // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
         const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
-        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, {
+        // Kept for runTask: a command that catches it and returns still ends with it (#194).
+        this.notResent = new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, {
           writeNotResent: true,
           ...(renewed && { signInRenewed: true }),
           next: notResentNext(renewed, login),
         });
+        throw this.notResent;
       }
       return r;
     };
@@ -880,6 +882,9 @@ export class Client {
 
   /** A write Operation got a sign-in page and was not sent again (main.ts: any failure after it must say so). */
   writeNotResent = false;
+
+  /** The session failure neverResend threw for that write (the last one), once renewing the sign-in there returned. */
+  notResent: Failure | undefined;
 
   /**
    * With a never list: the request this Operation sends with these variables (built once, the
