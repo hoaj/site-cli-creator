@@ -113,7 +113,7 @@ two</a> and <a href="/b"><em>Name</em> three</a><br>Name four<br></p></div><div 
       value: {
         p: ["Heading", "Name one", "Name two and Name three", "Name four"],
         block: ["Group", "Heading", "Name one", "Name two and Name three", "Name four"],
-        missing: [],
+        missing: null,
         items: [{ lines: ["Group", "Heading", "Name one", "Name two and Name three", "Name four"] }, { lines: ["Other"] }],
       },
     });
@@ -122,6 +122,18 @@ two</a> and <a href="/b"><em>Name</em> three</a><br>Name four<br></p></div><div 
     extractHtml(page, { x: { css: "p", lines: true, all: true } });
     // @ts-expect-error
     extractHtml(page, { x: { css: "a", lines: true, attr: "href" } });
+  });
+
+  test("lines: true is null when nothing matches, as text is, and [] when the element is there with no lines (#165)", () => {
+    const page = `<p class="streets"></p><p class="breaks"><br> <br></p>`;
+    expect(
+      extractHtml(page, {
+        gone: { css: "p.moved", lines: true },
+        empty: { css: "p.streets", lines: true },
+        breaks: { css: "p.breaks", lines: true },
+        inItem: { each: "p", fields: { gone: { css: "span", lines: true } } },
+      }),
+    ).toEqual({ ok: true, value: { gone: null, empty: [], breaks: [], inItem: [{ gone: null }, { gone: null }] } });
   });
 
   test("an empty list in a container that is there is an empty list, not Drift", () => {

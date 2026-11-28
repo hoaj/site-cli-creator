@@ -806,6 +806,21 @@ for (const auth of ["none", "login"] as const) {
       else expect(x.ops.getAccount.needs).toBeUndefined();
     });
 
+    test("the notices Contract reads a streets element that is gone (null) and an empty one ([]) as Drift, each its own (#165)", () => {
+      const page = noticesPage(NOTICES, null, "list");
+      const issues = (html: string) => {
+        const picked = extractHtml(html, x.ops.listNotices.html.fields);
+        if (!picked.ok) throw new Error(`html ${picked.path} ${picked.code}`);
+        const parsed = (x.ops.listNotices.response as z.ZodType).safeParse(picked.value);
+        return parsed.success ? [] : parsed.error.issues.map((i) => `${i.path.join(".")}:${i.code}`);
+      };
+      expect(issues(page)).toEqual([]);
+      const gone = issues(page.replace(/<p class="streets">[^]*?(?=<p class="when">)/g, ""));
+      const empty = issues(page.replace(/(<p class="streets">)[^]*?(?=<p class="when">)/g, "$1"));
+      expect(gone).toEqual(NOTICES.map((_, i) => `notices.${i}.streets:invalid_type`));
+      expect(empty).toEqual(NOTICES.map((_, i) => `notices.${i}.streets:too_small`));
+    });
+
     test("commands produce their output from the live fixture", async () => {
       const shown = await x.commands.subscriptionShow.run({ all: false }, ctx());
       expect(shown.customer).toBe(ACCOUNT.name);

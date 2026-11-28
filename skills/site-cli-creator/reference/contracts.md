@@ -134,7 +134,7 @@ export default defineOperation({
 | Field | Picks |
 |---|---|
 | `"h3.title"` | the first match's text (whitespace collapsed, `<br>` a space), or null when nothing matches |
-| `{ css, lines: true }` | the first match's lines, as a list: its text split at `<br>` and block boundaries, each line collapsed and trimmed, empty ones left out; `[]` when nothing matches. For values only `<br>` separates (a block of names or prices) |
+| `{ css, lines: true }` | the first match's lines, as a list: its text split at `<br>` and block boundaries, each line collapsed and trimmed, empty ones left out; null when nothing matches, `[]` when the element has no lines. For values only `<br>` separates (a block of names or prices) |
 | `{ css, attr: "href" }` | the first match's attribute, or null |
 | `{ css, all: true }` | every match's text (or `attr`), as a list |
 | `{ css: 'script[type="application/ld+json"]', json: true }` | the first match's text parsed as JSON: inline state (`__NEXT_DATA__`, schema.org data) |
@@ -144,7 +144,7 @@ export default defineOperation({
 - **Selectors** come from the outline in the shape file: `responses[].body.outline` for a page or fragment, `responses[].htmlInJson[].outline` for HTML inside JSON. It lists tags, ids (`:id` when the id is data), classes and attribute names; `text: true` marks an element with text of its own, `many: true` a repeated element (a list item), and `json` the Shape of inline JSON. It never holds text, so check which element holds which value by running the command (`bun src/main.ts <noun> <verb>`) and comparing with what the user saw. Prefer classes and ids to positions (`:nth-child`), which move with every new item.
 - **A selector** is any CSS selector css-select supports, a list too: `"time, em"` picks the first match in the page's order (a date, or the word shown when there is none).
 - **Every list names its container** in `in`: an element the page has even when the list is empty. Without it, a new layout reads as an empty list instead of Drift; `regen.ts` warns about each list without one.
-- **Values are strings or null** (lists of strings for `all` and `lines`). A field the command cannot do without is `z.string().min(1)`, so an element that moved or emptied is Drift; one another page may lack is `.nullable()`. A list reads `[]` both when the page has no values and when its element moved: one the command cannot do without is `z.array(z.string()).min(1)`. Convert numbers and dates in the command (`Number(x)`, `new Date(x)`), and strip a label the page puts in the text (`"Område: Aarhus C"`) there too.
+- **Values are strings or null** (lists of strings for `all` and `lines`). A field the command cannot do without is `z.string().min(1)`, so an element that moved or emptied is Drift; one another page may lack is `.nullable()`. A `lines` list is null when its element moved, as text is, and `[]` when the element is there with no lines: one the command cannot do without is `z.array(z.string()).min(1)`, one another page may lack `.nullable()`. An `all` list reads `[]` both when the page has no values and when its elements moved, so a needed one is `.min(1)` too. Convert numbers and dates in the command (`Number(x)`, `new Date(x)`), and strip a label the page puts in the text (`"Område: Aarhus C"`) there too.
 - **HTML inside JSON:** `from(body)` gets the parsed JSON and returns the HTML string; parse with Zod. A `from` that throws or returns no string is Drift. `draft-contract` drafts it from the path in `htmlInJson`:
 
   ```ts

@@ -200,7 +200,7 @@ function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean, sk: Skel
     const brTodo = !brs.length || lines ? "" : node.many
       ? " /* TODO: a <br> inside: if it separates values, make this an { each, in, fields } list whose item field is { css: \":scope\", lines: true }, and its response z.array(z.object({ ...: z.array(z.string()) })) */"
       : " /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart, with z.array(z.string()) */";
-    if (node.text && lines) fields.push({ name: uniqueName(base, used), source: `{ css: ${css}, lines: true }`, zod: "z.array(z.string())" });
+    if (node.text && lines) fields.push({ name: uniqueName(base, used), source: `{ css: ${css}, lines: true }`, zod: "z.array(z.string()).nullable()" });
     else if (node.text) fields.push({ name: uniqueName(base, used), source: (node.many ? `{ css: ${css}${all} }` : css) + brTodo, zod: valueZod });
     for (const a of node.attrs ?? []) {
       if (!VALUE_ATTRS.includes(a) && !a.startsWith("data-")) continue;
@@ -260,8 +260,9 @@ export function draftHtml(outline: HtmlNode[], from?: string): string[] {
     lines.push("  // file). No repeated element was seen, so each element with text (or a link, a date) is a field.");
   }
   lines.push("  // Keep the fields the command reads and name them. A field it cannot do without is z.string().min(1),");
-  lines.push("  // so an element that moved or emptied is Drift; one another page may lack stays .nullable(). A list reads []");
-  lines.push("  // when its element moved too: one the command cannot do without is z.array(z.string()).min(1).");
+  lines.push("  // so an element that moved or emptied is Drift; one another page may lack stays .nullable(). A lines list");
+  lines.push("  // is null when its element moved, as text is, and [] when it is empty: one the command cannot do without");
+  lines.push("  // is z.array(z.string()).min(1). An all: true list reads [] when its elements moved too: .min(1) there as well.");
   lines.push("  html: {");
   if (from) lines.push(`    from: ${from},`);
   lines.push("    fields: {", fieldsSource, "    },", "  },");

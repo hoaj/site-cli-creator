@@ -290,6 +290,17 @@ describe("draftOperation", () => {
     expect(Object.values(picked.value)[0]![1]).toMatchObject({ s: ["a2", "b2", "c2"], a: "L: v2", addr: ["S2 C2", "S2 C2"] });
   });
 
+  test("a lines field drafts .nullable(), as a text field does, so an item without its element still validates (#165)", async () => {
+    const streets = (i: number) => (i === 2 ? "" : `<p class="s">a${i}<br>b${i}<br>c${i}</p>`);
+    const page = `<ul class="l">${[1, 2, 3].map((i) => `<li class="e"><h3 class="t">T${i}</h3>${streets(i)}</li>`).join("")}</ul>`;
+    const { source } = draftOperation(htmlCapture(`${ORIGIN}/gaps`, page, "text/html"));
+    expect(source).toContain("s: z.array(z.string()).nullable(),");
+    const op = await importDraft("listGaps.ts", source);
+    const picked = extractHtml(page, op.html!.fields) as { ok: true; value: Record<string, any[]> };
+    expect(Object.values(picked.value)[0]!.map((item) => item.s)).toEqual([["a1", "b1", "c1"], null, ["a3", "b3", "c3"]]);
+    expect(op.response.safeParse(picked.value).success).toBe(true);
+  });
+
   test("the <br> TODO never nests a selector's own TODO comment, so the draft still parses (#124, review 2)", async () => {
     // An earlier span.x (inside div.d) matches first, so the repeated span.x's selector carries a TODO of its own.
     const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><div class="d"><span class="x">q${i}</span></div><span class="x">a${i}<br>b${i}</span><span class="x">c${i}<br>d${i}</span></li>`).join("")}</ul>`;
