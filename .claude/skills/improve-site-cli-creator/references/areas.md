@@ -23,7 +23,7 @@ File paths are under `skills/site-cli-creator/` unless they name the repo root o
 ## Green gate
 
 ```sh
-bun test skills/site-cli-creator/tests/shape.test.ts skills/site-cli-creator/tests/draft.test.ts   # the test files of every area you touched, in one command; without Chrome the browser tests SKIP
+bun test skills/site-cli-creator/tests/shape.test.ts skills/site-cli-creator/tests/draft.test.ts   # the test files of every area you touched, in one command, except the CI-only files; without Chrome the browser tests SKIP
 bun test skills/site-cli-creator/tests/capture.test.ts -t "<test name>"                            # a CI-only file: only the tests you added or changed
 bun x tsc --noEmit -p .                                      # tools, tests, fixtures
 bun x tsc --noEmit -p skills/site-cli-creator/starter/skill/cli
@@ -31,7 +31,7 @@ actionlint .github/workflows/*.yml skills/site-cli-creator/starter/plugin/.githu
 shellcheck skills/site-cli-creator/starter/skill/install.sh
 ```
 
-Which tests: those of every area whose Files you touched. For a file in no row, or a `tools/lib` file shared by several areas, also run the test files that import it (`git grep -l <module> -- '*.test.ts'`).
+Which tests: those of every area whose Files you touched; of a [CI-only file](#ci-only-files), only the tests you added or changed (`-t`). For a file in no row, or a `tools/lib` file shared by several areas, also run the test files that import it (`git grep -l <module> -- '*.test.ts'`).
 
 The full `bun test --parallel=3` (everything, incl. the compiled e2e test) runs in CI on every PR; don't run it locally.
 
