@@ -308,7 +308,7 @@ describe("upgrade, a plugin in a shared repo", () => {
    }, 60_000);
 });
 
-// The generator's CI tags its versions for upgrade; the script lives at the repo root, not in the plugin's skills/.
+// The generator's merge procedure (CLAUDE.md) tags its versions for upgrade; the script lives at the repo root, not in the plugin's skills/.
 const VERSION_TAGS = join(SKILL_ROOT, "../../.github/scripts/version-tags.sh");
 
 describe.skipIf(!existsSync(VERSION_TAGS))("version-tags.sh (the generator's tags for upgrade)", () => {

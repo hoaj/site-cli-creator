@@ -153,7 +153,7 @@ await runTool(async () => {
     // The site's own site.ts is never merged, but the runtime may read fields the new Starter site.ts added.
     const siteDiff = run(["git", "diff", "--no-index", "--no-color", join(await source.get(oldest), "skill/cli/src/site.ts"), join(target, "skill/cli/src/site.ts")]);
     const touched = [...report.added, ...report.updated, ...report.merged, ...report.conflicts, ...report.binaryConflicts];
-    // The generator's commits between the versions; this version may not be tagged yet (version-tags.yml runs on main).
+    // The generator's commits between the versions; this version may not be tagged yet (the merge procedure tags it right after the merge).
     const head = source.versions.includes(to) ? `v${to}` : "main";
     return {
       dir,
