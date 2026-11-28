@@ -43,7 +43,7 @@ gh issue list --repo hoaj/site-cli-creator --label site-cli-creator --state open
 gh pr list --repo hoaj/site-cli-creator --state open --search "site-cli-creator in:title" --json number,title,headRefName,files
 ```
 
-Leave out issues an open PR already fixes (its body says `Fixes #n`). Group the rest by area ([references/areas.md](references/areas.md)) and root cause: issues that share a file or a cause go into one branch and one version.
+Leave out issues an open PR already fixes (its body says `Fixes #n`). Fix the rest in as few PRs as you can: one branch, one version and one CI run and review for several issues, even from different areas ([references/areas.md](references/areas.md)). Issues that share a file or a cause always go together. Split off an issue only when it is too large to review alongside the others, or when it needs the five-platform matrix (CLAUDE.md, step 3) and the rest don't.
 
 ### 3. Branch
 
