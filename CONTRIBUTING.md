@@ -19,7 +19,7 @@ Step-by-step installs: [setup.md](./.claude/skills/improve-site-cli-creator/refe
 
 ## Before you open a PR
 
-Run the green gate from the repo root. Test only the files you changed or the area they belong to; CI runs the full `bun test --parallel=3` on every PR.
+Run the green gate from the repo root. Run the tests of each area your change touches (the table in [areas.md](./.claude/skills/improve-site-cli-creator/references/areas.md)); CI runs the full `bun test --parallel=3` on every PR.
 
 ```sh
 bun test skills/site-cli-creator/tests/<file>.test.ts
