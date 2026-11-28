@@ -87,7 +87,7 @@ Every PR that changes the plugin bumps its version: patch for fixes, minor for f
 
 ### 9. Ship
 
-Commit one issue per commit (`site-cli-creator: <summary> (#n)`), push, open a PR titled `site-cli-creator <version>: <summary>`. The body lists each issue as `Fixes #n` with one line on what changed, the cold-read result, and **Starter code reach**: a Starter code change reaches only plugins created after the release, so list the generated plugins whose `generated.json` `generatedWith` is older (the maintainer knows their repos; `gh search code generatedWith --owner <owner> --filename generated.json` finds the ones on GitHub) and whether they should port the change by hand. No Starter change: write "Starter code reach: none".
+Commit one issue per commit (`site-cli-creator: <summary> (#n)`), push, open a PR titled `site-cli-creator <version>: <summary>`. The body lists each issue as `Fixes #n` with one line on what changed, the cold-read result, and **Starter code reach**: a Starter code change reaches plugins created after the release, and an existing plugin only when its maintainer runs `upgrade` (SPEC §5), so list the generated plugins whose `generated.json` `generatedWith` is older (the maintainer knows their repos; `gh search code generatedWith --owner <owner> --filename generated.json` finds the ones on GitHub) and whether they should run `upgrade` for it. No Starter change: write "Starter code reach: none".
 
 Watch CI: `gh run watch <id> --repo hoaj/site-cli-creator --exit-status`. All jobs must be green. A PR runs the smoke test on linux-x64 only; the five-platform matrix runs on main and on `workflow_dispatch`. Which changes need it on the branch, and when: CLAUDE.md, step 3 (once, on the PR's head commit).
 
