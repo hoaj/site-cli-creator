@@ -366,6 +366,18 @@ describe.skipIf(!existsSync(VERSION_TAGS))("version-tags.sh (the generator's tag
     expect(proc.stdout.toString()).toBe(`v0.2.0 ${later}\n`);
   });
 
+  test("with an origin, the remote's tags count and a local-only tag is ignored (#181)", () => {
+    const { repo, bump } = tagsRepo("tags-remote");
+    bump("0.1.0");
+    git(repo, "tag", "v0.1.0");
+    const second = bump("0.2.0");
+    const clone = join(work, "tags-clone");
+    git(work, "clone", "-q", repo, clone);
+    git(clone, "tag", "v0.2.0"); // only in the clone: GitHub (the origin) still lacks it
+    const proc = versionTags(clone);
+    expect(proc.stderr.toString()).toBe("");
+    expect(proc.stdout.toString()).toBe(`v0.2.0 ${second}\n`);
+  });
 });
 
 describe("upgrade, review round 2", () => {
