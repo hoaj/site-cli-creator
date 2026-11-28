@@ -1,0 +1,32 @@
+name: version-tags-check
+
+# Read-only: fails when a generator version on main has no vX.Y.Z tag (#179). The merger pushes the
+# tags (CLAUDE.md, Pull requests, step 3.6; Actions' token can't tag a commit with workflow files), so a
+# merge in the GitHub UI, by hand, or by a session that stopped after `gh pr merge` would otherwise leave
+# `upgrade` merging from an older tag unnoticed. Daily rather than on push, so the merger has time to tag.
+on:
+  schedule:
+    - cron: "17 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Every version on main has its tag
+        run: |
+          missing="$(bash .github/scripts/version-tags.sh origin/main)"
+          if [ -n "$missing" ]; then
+            while read -r tag commit; do
+              echo "::error title=Untagged version::${tag} (first on main at ${commit}) has no tag; push it as in CLAUDE.md step 3.6"
+            done <<<"$missing"
+            exit 1
+          fi
+          echo "every version on main has its tag"
