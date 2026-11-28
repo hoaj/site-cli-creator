@@ -682,6 +682,7 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
   test("a start page answering a bot wall's 403: a hint names the status and the wall and points to the bot-block ladder (#119)", async () => {
     const r = await capture(join(work, "walled-skill"), ["--script", join(work, "noop.ts")], "/walled");
     expect(r.code).toBe(0);
+    expect(r.files).toContain("index.json"); // no earlier Capture to keep (#158): the refused one is written
     expect(r.out.stoppedBy).toBe("script finished");
     const hint = (r.out.hints ?? []).find((h: string) => h.includes("fix.md#2c-a-bot-block"));
     expect(hint).toBeDefined();
@@ -719,6 +720,52 @@ describe.skipIf(!hasChrome)("capture.ts against a local site", () => {
     expect(r.out.error.message).toContain("--script failed: nope");
     expect(r.out.error.message).toContain("The tab's last page load answered 403");
     expect(r.out.error.message).toContain("fix.md#2c-a-bot-block");
+  }, 120_000);
+
+  test("a refused Capture with an earlier Capture of the Task: exit 1, the earlier Capture kept byte for byte, the bot-block hint in the error (#158)", async () => {
+    const skill = join(work, "walled-earlier-skill");
+    const dir = join(skill, "captures", "profile-show");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "GET-api-customers-id-profile.shape.json"), '{"earlier":true}\n');
+    writeFileSync(join(dir, "index.json"), '{"task":"profile-show","earlier":true}\n');
+    const r = await capture(skill, ["--script", join(work, "noop.ts")], "/walled");
+    expect(r.code).toBe(1);
+    expect(r.files).toEqual(["GET-api-customers-id-profile.shape.json", "index.json"]);
+    expect(readFileSync(join(dir, "GET-api-customers-id-profile.shape.json"), "utf8")).toBe('{"earlier":true}\n');
+    expect(readFileSync(join(dir, "index.json"), "utf8")).toBe('{"task":"profile-show","earlier":true}\n');
+    const message: string = r.out.error.message;
+    expect(message).toContain(`the earlier Capture in ${dir} was kept`);
+    expect(message).toContain("The tab's last page load answered 403, the block page of a bot wall (cloudflare)");
+    expect(message).not.toContain("the shapes hold only the refusal");
+    expect(message).toContain("without --headless");
+    expect(message).toContain("fix.md#2c-a-bot-block");
+    expect(r.everything).not.toContain(RAY_ID);
+  }, 120_000);
+
+  test("a failing --script on a refused start page with an earlier Capture: the earlier Capture is kept too (#158)", async () => {
+    const skill = join(work, "walled-broken-earlier-skill");
+    const dir = join(skill, "captures", "profile-show");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "index.json"), '{"task":"profile-show","earlier":true}\n');
+    const r = await capture(skill, ["--script", join(work, "broken.ts")], "/walled");
+    expect(r.code).toBe(1);
+    expect(r.files).toEqual(["index.json"]);
+    expect(readFileSync(join(dir, "index.json"), "utf8")).toBe('{"task":"profile-show","earlier":true}\n');
+    expect(r.out.error.message).toContain("--script failed: nope");
+    expect(r.out.error.message).toContain(`the earlier Capture in ${dir} was kept`);
+    expect(r.out.error.message).toContain("fix.md#2c-a-bot-block");
+  }, 120_000);
+
+  test("a refused --explore keeps the earlier explore Capture (#158)", async () => {
+    const skill = join(work, "walled-explore-skill");
+    const dir = join(skill, "captures", "explore");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "index.json"), '{"task":"explore","earlier":true}\n');
+    const r = await explore(skill, ["--script", join(work, "noop.ts")], "/walled");
+    expect(r.code).toBe(1);
+    expect(r.files).toEqual(["index.json"]);
+    expect(readFileSync(join(dir, "index.json"), "utf8")).toBe('{"task":"explore","earlier":true}\n');
+    expect(r.out.error.message).toContain(`the earlier Capture in ${dir} was kept`);
   }, 120_000);
 
   test("a 403 start page no wall rule recognises, and nothing else answered: the hint names the status only (#119)", async () => {
