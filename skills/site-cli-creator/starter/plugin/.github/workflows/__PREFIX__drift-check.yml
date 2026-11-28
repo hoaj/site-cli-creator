@@ -23,7 +23,8 @@ concurrency:
 jobs:
   check:
     runs-on: ubuntu-latest
-    # Each skill may take up to 10 minutes (a 5-minute install, a 5-minute check); rows are written as they finish.
+    # Each skill may take up to 10 minutes (a 5-minute install, a 5-minute check), plus 60 s per gh call that files
+    # its issues; rows are written as they finish.
     timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
