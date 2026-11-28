@@ -43,7 +43,10 @@ gh issue list --repo hoaj/site-cli-creator --label site-cli-creator --state open
 gh pr list --repo hoaj/site-cli-creator --state open --search "site-cli-creator in:title" --json number,title,headRefName,files
 ```
 
-Leave out issues an open PR already fixes (its body says `Fixes #n`). Fix the rest in as few PRs as you can: one branch, one version and one CI run and review for several issues, even from different areas ([references/areas.md](references/areas.md)). Issues that share a file or a cause always go together. Split off an issue only when it is too large to review alongside the others, or when it needs the five-platform matrix (CLAUDE.md, step 3) and the rest don't.
+Leave out issues an open PR already fixes (its body says `Fixes #n`). When the maintainer named the issues, take only those, plus any that share a file or a cause with them. Otherwise fix the rest in as few PRs as you can: one branch, one version, one CI run and one review for several issues, even from different areas ([references/areas.md](references/areas.md)). Issues that share a file or a cause always go together. Two kinds of issue get a PR of their own, with those that share a file or cause with them:
+
+- **One whose files an open generator PR touches:** stack it on that PR (step 3), so the rest of the batch doesn't wait for that PR.
+- **One that stalls:** no red test, a fix that outgrows the others, or a change that alone fails the green gate, the cold read, CI or the five-platform matrix. Drop its commit (one commit per issue, step 9) and give it its own PR instead of holding the rest.
 
 ### 3. Branch
 
