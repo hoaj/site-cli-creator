@@ -340,6 +340,54 @@ describe.skipIf(!existsSync(VERSION_TAGS))("version-tags.sh (the generator's tag
     expect(proc.stderr.toString()).toBe("");
     expect(proc.stdout.toString()).toBe(`v0.2.0 ${merge}\n`);
   });
+
+  const tagsRepo = (name: string) => {
+    const repo = join(work, name);
+    mkdirSync(join(repo, ".claude-plugin"), { recursive: true });
+    git(repo, "init", "-q", "-b", "main");
+    const commit = (manifest: string, message: string) => {
+      writeFileSync(join(repo, ".claude-plugin/plugin.json"), manifest);
+      git(repo, "add", "-A");
+      git(repo, "commit", "-qm", message);
+      return git(repo, "rev-parse", "HEAD").trim();
+    };
+    return { repo, commit, bump: (version: string) => commit(JSON.stringify({ name: "g", version }), version) };
+  };
+  const versionTags = (cwd: string) => Bun.spawnSync(["bash", VERSION_TAGS, "main"], { cwd, stdout: "pipe", stderr: "pipe" });
+
+  test("a commit whose manifest does not parse is skipped, and later versions are still listed (#175)", () => {
+    const { repo, commit, bump } = tagsRepo("tags-malformed");
+    bump("0.1.0");
+    git(repo, "tag", "v0.1.0");
+    commit('{ "name": "g", "version": ', "a broken manifest");
+    const later = bump("0.2.0");
+    const proc = versionTags(repo);
+    expect(proc.exitCode).toBe(0);
+    expect(proc.stdout.toString()).toBe(`v0.2.0 ${later}\n`);
+  });
+
+  test("with an origin, the remote's tags count and a local-only tag is ignored (#181)", () => {
+    const { repo, bump } = tagsRepo("tags-remote");
+    bump("0.1.0");
+    git(repo, "tag", "v0.1.0");
+    const second = bump("0.2.0");
+    const third = bump("0.3.0");
+    const clone = join(work, "tags-clone");
+    git(work, "clone", "-q", repo, clone);
+    git(clone, "tag", "v0.2.0"); // only in the clone: GitHub (the origin) still lacks it
+    git(repo, "tag", "v0.3.0", third); // only on the origin: pushed after this clone was made
+    const proc = versionTags(clone);
+    expect(proc.stderr.toString()).toBe("");
+    expect(proc.stdout.toString()).toBe(`v0.2.0 ${second}\n`);
+  });
+
+  test("a ref that does not exist stops the script instead of reading as every version tagged", () => {
+    const { repo, bump } = tagsRepo("tags-bad-ref");
+    bump("0.1.0");
+    const proc = Bun.spawnSync(["bash", VERSION_TAGS, "no-such-ref"], { cwd: repo, stdout: "pipe", stderr: "pipe" });
+    expect(proc.exitCode).not.toBe(0);
+    expect(proc.stdout.toString()).toBe("");
+  });
 });
 
 describe("upgrade, review round 2", () => {
