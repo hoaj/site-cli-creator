@@ -2,7 +2,7 @@ import { afterAll, describe, expect, spyOn, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { checkSkill, classify, discover, fileIssues, fixedIn, isolatedEnv, KILLED, main, planIssues, secretName, sessionText, type Exec, type Result, type Skill } from "../scripts/drift-check";
+import { checkSkill, classify, discover, fileIssues, fixedIn, isolatedEnv, KILLED, main, planIssues, secretName, sessionText, TIMED_OUT, type Exec, type Result, type Skill } from "../scripts/drift-check";
 
 const tmp = mkdtempSync(join(tmpdir(), "drift-check-"));
 afterAll(() => rmSync(tmp, { recursive: true, force: true }));
@@ -293,6 +293,30 @@ test("main: a login skill without its secret is a notice and the run stays green
     expect(readFileSync(summary2, "utf8")).toContain("| shop | 1.2.3 | drift | 1 Operation(s) drifted: listOrders | #9 |");
   } finally {
     log.mockRestore();
+    err.mockRestore();
+  }
+});
+
+test("main: every gh call has a time limit, and a gh call its limit killed turns the run red (#186)", () => {
+  const root = pluginRoot("main-gh-timeout", "none");
+  const err = spyOn(console, "error").mockImplementation(() => {});
+  try {
+    const gh: { cmd: string[]; timeoutMs?: number }[] = [];
+    const exec: Exec = (cmd, opts = {}) => {
+      if (cmd[0] === "bash") return { code: 0, stdout: "", stderr: "" };
+      if (cmd[0] === "gh") {
+        gh.push({ cmd, timeoutMs: opts.timeoutMs });
+        return cmd[2] === "list" ? { code: 0, stdout: "[]", stderr: "" } : { code: TIMED_OUT, stdout: "", stderr: "" };
+      }
+      return { code: 3, stdout: JSON.stringify({ error: { kind: "drift", drifts: [{ operation: "listOrders", fingerprint: FP, diff: [] }] } }), stderr: "" };
+    };
+    const summary = join(tmp, "summary-gh-timeout.md");
+    expect(main(["--root", root, "--repo", "acme/shop-plugin"], exec, { GITHUB_STEP_SUMMARY: summary })).toBe(1);
+    expect(gh.map((g) => g.cmd[2])).toEqual(["list", "create"]);
+    for (const g of gh) expect(g.timeoutMs).toBe(60_000);
+    expect(readFileSync(summary, "utf8")).toContain("(issue not filed: see the run log)");
+    expect(err.mock.calls.flat().join("\n")).toContain("gh issue create timed out");
+  } finally {
     err.mockRestore();
   }
 });

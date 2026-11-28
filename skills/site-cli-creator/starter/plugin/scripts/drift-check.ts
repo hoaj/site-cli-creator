@@ -299,9 +299,16 @@ export function checkSkill(s: Skill, secrets: Record<string, string>, exec: Exec
   }
 }
 
+/** A hanging GitHub API must not eat the job's time limit, which is set from each skill's check cap. */
+const GH_TIMEOUT_MS = 60_000;
+
+function ghFailed(what: string, r: { code: number; stderr: string }): Error {
+  return new Error(r.code === TIMED_OUT ? `${what} timed out after ${GH_TIMEOUT_MS / 1000} s` : `${what} failed: ${lastLine(r.stderr)}`);
+}
+
 function ghIssues(exec: Exec, repo: string, title: string): Issue[] {
-  const r = exec(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "50", "--search", `"${title}" in:title`, "--json", "number,title,state,closedAt,labels"]);
-  if (r.code !== 0) throw new Error(`gh issue list failed: ${lastLine(r.stderr)}`);
+  const r = exec(["gh", "issue", "list", "--repo", repo, "--state", "all", "--limit", "50", "--search", `"${title}" in:title`, "--json", "number,title,state,closedAt,labels"], { timeoutMs: GH_TIMEOUT_MS });
+  if (r.code !== 0) throw ghFailed("gh issue list", r);
   return (JSON.parse(r.stdout) as Issue[]).filter((i) => i.title === title);
 }
 
@@ -320,8 +327,8 @@ export function fileIssues(plans: IssuePlan[], repo: string, exec: Exec, dryRun:
     }
     const args = ["gh", "issue", "create", "--repo", repo, "--title", p.title, "--body-file", "-"];
     for (const l of p.labels) args.push("--label", l);
-    const r = exec(args, { stdin: p.body });
-    if (r.code !== 0) throw new Error(`gh issue create failed: ${lastLine(r.stderr)}`);
+    const r = exec(args, { stdin: p.body, timeoutMs: GH_TIMEOUT_MS });
+    if (r.code !== 0) throw ghFailed("gh issue create", r);
     const n = Number(/\/issues\/(\d+)/.exec(r.stdout)?.[1]);
     if (n) numbers.push(n);
     log(`  opened: ${r.stdout.trim()}`);
