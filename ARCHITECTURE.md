@@ -39,7 +39,7 @@ Glossary terms (Task, CLI skill, Feedback skill, Starter code, Capture, Operatio
       SKILL.md                 files generator problems on hoaj/site-cli-creator, label site-cli-creator (SPEC §1)
 ```
 
-The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator's CI, SPEC §5 and §9) and `.github/scripts/version-tags.sh`: it lists each version on main's first-parent history with no tag `vX.Y.Z` and its first commit there, and the merge procedure in the repo's CLAUDE.md pushes those tags after each merge (never moving one), so `upgrade` can download past Starter code. It is not a workflow: GitHub refuses a tag on a commit with workflow files from Actions' token (by `git push` and by the REST API), so the merger's own login pushes them.
+The repo root also gets `.github/workflows/site-cli-creator.yml` (the generator's CI, SPEC §5 and §9) and `.github/scripts/version-tags.sh`: it lists each version on main's first-parent history with no tag `vX.Y.Z` and its first commit there, and the merge procedure in the repo's CLAUDE.md pushes those tags after each merge (never moving one), so `upgrade` can download past Starter code. It is not a workflow: GitHub refused Actions' token a tag on a commit with workflow files, both by `git push` and by creating the ref through the git refs API (#164's first run), so the merger's own credential pushes them. Publishing a release, which is how a generated plugin's release.yml gets its tags, was not tried.
 
 ## 2. Placeholders in starter/
 
