@@ -199,7 +199,7 @@ function fieldsOf(root: HtmlNode, used: Set<string>, ownAttrs: boolean, sk: Skel
     // The TODO never quotes the selector, which can end in a comment of its own (block comments do not nest).
     const brTodo = !brs.length || lines ? "" : node.many
       ? " /* TODO: a <br> inside: if it separates values, make this an { each, in, fields } list whose item field is { css: \":scope\", lines: true }, and its response z.array(z.object({ ...: z.array(z.string()) })) */"
-      : " /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart, with z.array(z.string()) */";
+      : " /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart, with z.array(z.string()).nullable() */";
     if (node.text && lines) fields.push({ name: uniqueName(base, used), source: `{ css: ${css}, lines: true }`, zod: "z.array(z.string()).nullable()" });
     else if (node.text) fields.push({ name: uniqueName(base, used), source: (node.many ? `{ css: ${css}${all} }` : css) + brTodo, zod: valueZod });
     for (const a of node.attrs ?? []) {

@@ -281,7 +281,7 @@ describe("draftOperation", () => {
     const page = `<ul class="l">${[1, 2].map((i) => `<li class="e"><h3 class="t">T${i}</h3><p class="s">a${i}<br>b${i}<br>c${i}</p><p class="a">L:<br>v${i}</p>${addr(i)}</li>`).join("")}</ul>`;
     const { source } = draftOperation(htmlCapture(`${ORIGIN}/lines`, page, "text/html"));
     expect(source).toContain('{ css: "p.s", lines: true },');
-    expect(source).toContain('"p.a" /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart, with z.array(z.string()) */,');
+    expect(source).toContain('"p.a" /* TODO: a <br> inside: if it separates values (not a label), { css, lines: true } keeps them apart, with z.array(z.string()).nullable() */,');
     // A repeated element cannot combine all with lines: the TODO names the list that keeps each one's lines.
     expect(source).toContain('{ css: "span.addr", all: true } /* TODO: a <br> inside: if it separates values, make this an { each, in, fields } list whose item field is { css: ":scope", lines: true }, and its response z.array(z.object({ ...: z.array(z.string()) })) */,');
     const op = await importDraft("listLines.ts", source);
