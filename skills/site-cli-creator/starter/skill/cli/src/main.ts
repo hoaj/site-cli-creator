@@ -8,7 +8,7 @@ import { Client, type Deps } from "./runtime/call";
 import { check, findOperation, type WriteChecker } from "./runtime/check";
 import type { Command } from "./runtime/command";
 import { doctor, type Exec } from "./runtime/doctor";
-import { ContractError, DryRun, EXIT, Failure, emit, errorEnvelope, note, type Surface } from "./runtime/envelope";
+import { ContractError, DryRun, EXIT, Failure, emit, errorEnvelope, note, type FailureDetails, type Surface } from "./runtime/envelope";
 import { bugFrame, bugKey, errorName, redactStack } from "./runtime/fingerprint";
 import { BUILTIN_FLAGS, commandHelp, flagDescription, flagSpecs, GLOBAL_FLAGS, help, isWriteCommand, type FlagSpec } from "./runtime/help";
 import { defaultSources, withBrowserHeaders } from "./runtime/browser-headers";
@@ -254,9 +254,12 @@ function assertOutputSchemas(app: App): void {
   for (const command of app.commands) assertOutputSchema(command);
 }
 
-/** Whatever was thrown after a write the site answered with success (any value); `failed()` unwraps it and marks the envelope `writeSent`. */
+/**
+ * Whatever was thrown after a write the site answered with success, or one that got a sign-in page and was not sent
+ * again (any value); `failed()` unwraps it and marks the envelope `writeSent`, `writeNotResent` or both.
+ */
 class AfterWrite {
-  constructor(readonly cause: unknown) {}
+  constructor(readonly cause: unknown, readonly marks: Pick<FailureDetails, "writeSent" | "writeNotResent">) {}
 }
 
 /** A result that passed the command's `output` schema: the MCP surface may send it as structuredContent. */
@@ -289,8 +292,11 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
     if (!skip) checkOutput(app.site, command, value);
     return new Checked(value, command.output !== undefined && !skip);
   } catch (e) {
-    // Whatever fails after a write the site answered with success (a later call, the mapping, a bug) must not read as a failed write.
-    if (client.writeSent && !(e instanceof DryRun)) throw new AfterWrite(e);
+    // Whatever fails after a write the site answered with success (a later call, the mapping, a bug) must not read as a failed
+    // write, nor anything after a write that was not sent again (renewing the sign-in there included) as one that never ran.
+    if ((client.writeSent || client.writeNotResent) && !(e instanceof DryRun)) {
+      throw new AfterWrite(e, { ...(client.writeSent && { writeSent: true }), ...(client.writeNotResent && { writeNotResent: true }) });
+    }
     throw e;
   }
 }
@@ -298,15 +304,15 @@ async function runTask(app: App, client: Client, deps: Deps, command: Command, a
 /** What a run that threw prints: the dry run, the classified Failure's envelope, or a bug. */
 function failed(e: unknown, site: Site, commandName: string, surface: Surface = "cli"): RunResult {
   if (e instanceof DryRun) return ok({ dryRun: true, would: { operation: e.operation, variables: e.variables } });
-  const writeSent = e instanceof AfterWrite;
+  const marks = e instanceof AfterWrite ? e.marks : {};
   if (e instanceof AfterWrite) e = e.cause;
-  if (e instanceof Failure) return { output: errorEnvelope(writeSent ? new Failure(e.kind, e.message, { ...e.details, writeSent }) : e, site, surface), code: EXIT[e.kind] };
+  if (e instanceof Failure) return { output: errorEnvelope(new Failure(e.kind, e.message, { ...e.details, ...marks }), site, surface), code: EXIT[e.kind] };
   const stack = e instanceof Error ? e.stack : undefined;
   const what = e instanceof ContractError ? e.message : `${errorName(e)} in ${bugFrame(stack)}`;
   const bug = new Failure("bug", what, {
     fingerprint: bugKey(site, commandName, e),
     stack: redactStack(e),
-    ...(writeSent && { writeSent }),
+    ...marks,
     // A Task that tried it: the user does it on the site. check's own refusal is a plain bug in the plugin.
     ...(e instanceof NeverSent && commandName !== "check" && { next: neverNext(e.rule, site, surface) }),
   });

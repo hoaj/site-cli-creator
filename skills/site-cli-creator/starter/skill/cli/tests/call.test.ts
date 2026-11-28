@@ -4,7 +4,7 @@ import { existsSync, readFileSync, utimesSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import { blockSignal, buildRequest, Client } from "../src/runtime/call";
-import { DryRun, Failure } from "../src/runtime/envelope";
+import { DryRun, errorEnvelope, Failure } from "../src/runtime/envelope";
 import { defineOperation } from "../src/runtime/operation";
 import { loadSession, saveSession } from "../src/runtime/session";
 import { client, fakeFetch, getCustomer, getOrder, json, listProducts, loginSite, makeDeps, makeSite, ORIGIN, renameOrder, tempHome } from "./helpers";
@@ -12,6 +12,9 @@ import { client, fakeFetch, getCustomer, getOrder, json, listProducts, loginSite
 let home: ReturnType<typeof tempHome>;
 beforeEach(() => (home = tempHome()));
 afterEach(() => home.cleanup());
+
+/** The `next` the envelope of this Failure prints on the CLI. */
+const envNext = (f: Failure) => errorEnvelope(f, loginSite()).error.next;
 
 async function failure(p: Promise<unknown>): Promise<Failure> {
   try {
@@ -365,8 +368,9 @@ describe("auth login", () => {
         const f = await failure(client(loginSite(), deps, true).call(renameOrder, { orderId: "7", name: "N" }));
         expect(f.kind).toBe("session");
         expect(f.message).toContain("not sent again");
-        expect(f.details.next).toContain("check on the site");
-        expect(f.details.next).toContain("Do not run it again until they confirm");
+        expect(f.details.writeNotResent).toBe(true);
+        expect(envNext(f)).toContain("check on the site");
+        expect(envNext(f)).toContain("Do not run it again until they confirm");
         expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
         expect(loginCalls).toEqual([]);
       });
@@ -402,7 +406,7 @@ describe("auth login", () => {
       const s = withRefresh(async (ctx) => (ctx.refresh.token === "r1" ? { headers: { ...ctx.headers, authorization: "Bearer new" }, refresh: { token: "r2" } } : null));
       const f = await failure(client(s, deps, true).call(renameOrder, { orderId: "7", name: "N" }));
       expect(f.kind).toBe("session");
-      expect(f.details.next).toContain("check on the site");
+      expect(envNext(f)).toContain("check on the site");
       expect(f.details.next).toContain("the sign-in has been renewed");
       expect(f.details.next).toContain("If it ends this way again, run `shop login` before running it again.");
       expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
@@ -447,7 +451,7 @@ describe("auth login", () => {
       const f = await failure(client(loginSite(), deps, true).call(renameCustomer, { id: "C-1" }));
       expect(f.kind).toBe("session");
       expect(f.message).toContain("not sent again");
-      expect(f.details.next).toStartWith("Tell the user the write may already have taken effect and was not sent again");
+      expect(envNext(f)).toStartWith("Tell the user the write may already have taken effect and was not sent again");
       expect(f.details.next).toContain("`shop login`");
       expect(calls).toHaveLength(1);
       expect(loginCalls).toEqual([]);

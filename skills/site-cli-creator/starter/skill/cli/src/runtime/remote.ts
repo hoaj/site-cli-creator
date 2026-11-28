@@ -96,7 +96,7 @@ function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknow
   }
   const owner = `the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json)`;
   const sent = (error as { writeSent?: boolean }).writeSent ? `${WRITE_SENT} ` : "";
-  const next = `${sent}${notResent ? notResentNext(renewed, `ask ${owner}`) : `Ask ${owner}. Do not retry until they have.`}`;
+  const next = `${sent}${notResent ? `${WRITE_NOT_RESENT} ${notResentNext(renewed, `ask ${owner}`)}` : `Ask ${owner}. Do not retry until they have.`}`;
   return { error: { ...error, next } };
 }
 

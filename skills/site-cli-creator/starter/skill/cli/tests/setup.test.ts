@@ -482,6 +482,7 @@ describe("remote tools", () => {
       state.handler = toLoginHost;
       const error = textOf(await toolCall(base, token, "order_rename", { orderId: "7", name: "N", confirm: true })).error;
       expect(error.kind).toBe("session");
+      expect(error.writeNotResent).toBe(true);
       expect(error.next).toStartWith("Tell the user the write may already have taken effect and was not sent again");
       expect(error.next).toContain("check on the site");
       expect(error.next).toContain(`${base}/setup`);
