@@ -53,7 +53,7 @@ Leave out issues an open PR already fixes (its body says `Fixes #n`). When the m
 Sweep merged leftovers first: `git fetch --prune && git branch -vv | grep ': gone]'`, then `git worktree remove ../skills-<slug>` and `git branch -D <branch>` for each, but only when its tip equals its merged PR's head (`gh pr list --state merged --head <branch> --json headRefOid`). `-D` is needed because a squash-merged branch never counts as merged. Skip any other branch and anything that errors.
 
 - No open generator PR touches your files: `git worktree add ../skills-<slug> -b fix/site-cli-creator-<slug> origin/main`.
-- An open generator PR touches the same files: branch from its branch instead (`origin/<its branch>`). Still open your PR against `main` (only merges into `main` close `Fixes #n` issues); it shows the other PR's commits until that one merges and you rebase onto `main` (CLAUDE.md, step 3 **Check main first**). Say "stacked on #<n>, merge after it" in the body.
+- An open generator PR touches the same files: branch from its branch instead (`origin/<its branch>`). Still open your PR against `main` (only merges into `main` close `Fixes #n` issues); it shows the other PR's commits until that one merges and you rebase onto `main` (CLAUDE.md, step 3 **Check main first**). Say "stacked on #<pr>, merge after it" in the body.
 
 Then run the setup in the new worktree: `node_modules` is per worktree.
 
@@ -87,7 +87,7 @@ Every PR that changes the plugin bumps its version: patch for fixes, minor for f
 
 ### 9. Ship
 
-Commit one issue per commit (`site-cli-creator: <summary> (#n)`), push, open a PR titled `site-cli-creator <version>: <summary>`. The body lists each issue as `Fixes #n` with one line on what changed, the cold-read result, and **Starter code reach**: a Starter code change reaches plugins created after the release, and an existing plugin only when its maintainer runs `upgrade` (SPEC §5), so list the generated plugins whose `generated.json` `generatedWith` is older (the maintainer knows their repos; `gh search code generatedWith --owner <owner> --filename generated.json` finds the ones on GitHub) and whether they should run `upgrade` for it. No Starter change: write "Starter code reach: none".
+Commit one issue per commit (`site-cli-creator: <summary> (#n)`), push, open a PR titled `site-cli-creator <version>: <summary>`. The body lists each issue as `Fixes #n` with one line on what changed, the cold-read result, and **Starter code reach**: a Starter code change reaches plugins created after the release, and an existing plugin only when its maintainer runs `upgrade` (SPEC §5), so list the generated plugins whose `generated.json` `generatedWith` is older (the maintainer knows their repos; `gh search code generatedWith --owner <owner> --filename generated.json` finds the ones on GitHub) and whether they should run `upgrade` for it (after updating the generator). No Starter change: write "Starter code reach: none".
 
 Watch CI: `gh run watch <id> --repo hoaj/site-cli-creator --exit-status`. All jobs must be green. A PR runs the smoke test on linux-x64 only; the five-platform matrix runs on main and on `workflow_dispatch`. Which changes need it on the branch, and when: CLAUDE.md, step 3 (once, on the PR's head commit).
 
