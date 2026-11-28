@@ -8,7 +8,7 @@ Use the glossary's words exactly: **Task, Capture, Operation, Contract, Effect, 
 
 | Path | What |
 |---|---|
-| `skills/site-cli-creator/` | The generator: `SKILL.md` (a table of contents) and `reference/*.md` (one per mode), `tools/` (Capture, draft-contract, new, add-skill, regen), `starter/` (the Starter code copied into every new plugin), `fixtures/` (a fake site and the expected generated code), `tests/` |
+| `skills/site-cli-creator/` | The generator: `SKILL.md` (a table of contents) and `reference/*.md` (one per mode), `tools/` (Capture, split-capture, draft-contract, new, add-skill, regen, upgrade), `starter/` (the Starter code copied into every new plugin), `fixtures/` (a fake site and the expected generated code), `tests/` |
 | `skills/site-cli-creator-feedback/` | Files generator problems as issues here |
 | `.claude/skills/improve-site-cli-creator/` | The maintainer skill for changing the generator; never ships (Claude Code loads `.claude/` only from the project you work in) |
 | `SPEC.md`, `ARCHITECTURE.md` | What the generator does and why (SPEC wins on any conflict); the implementation contract (interfaces, flags, file layout) |
@@ -24,7 +24,7 @@ Use the glossary's words exactly: **Task, Capture, Operation, Contract, Effect, 
 
 ## Rules the code does not show
 
-- **Starter code is copied, never shared.** A fix in `skills/site-cli-creator/starter/` reaches only plugins created after the release; every PR says which existing plugins should port it ("Starter code reach").
+- **Starter code is copied, never shared.** A fix in `skills/site-cli-creator/starter/` reaches a plugin created after the release, or an existing one once its maintainer runs `upgrade` (SPEC §5); every PR says which existing plugins should take it ("Starter code reach").
 - **Starter files are templates.** They hold tokens (`__PLUGIN__`, `__REPO__`, `__PREFIX__` …) and layout lines (`#@shared` / `#@standalone`) that `new` and `add-skill` fill; one Starter serves a plugin in its own repo and one in a shared repo (`new --dir` / `new --into`).
 - **Every PR that changes the plugin bumps its version** in the three manifests (users' agents cache plugins by version); `references/bump.md` in the maintainer skill lists the pins.
 - **Shapes, never values.** No real site data in the repo, tests, issues or PRs: no names, ids, amounts, tokens, cookies or raw traffic. Tests use the fixture site or values they plant themselves.
