@@ -4,7 +4,7 @@ File paths are under `skills/site-cli-creator/` unless they name the repo root o
 
 | Area | Files | Tests | Typical reports |
 |---|---|---|---|
-| Capture tool | `tools/capture.ts`, `tools/lib/recorder.ts`, `tools/lib/shape.ts`, `tools/lib/graphql.ts` | `tests/capture.test.ts` (has its own inline page: put red tests there), `tests/shape.test.ts` | a value in a shape file; a call mislabelled (REST vs GraphQL, read vs write); a Capture that never stops; a page broken by an aborted read |
+| Capture tool | `tools/capture.ts`, `tools/lib/recorder.ts`, `tools/lib/shape.ts`, `tools/lib/graphql.ts` | `tests/capture.test.ts` (has its own inline page: put red tests there, proven red in CI as SKILL.md step 4 says), `tests/shape.test.ts` | a value in a shape file; a call mislabelled (REST vs GraphQL, read vs write); a Capture that never stops; a page broken by an aborted read |
 | Drafting | `tools/draft-contract.ts`, `tools/lib/draft.ts`, `tools/lib/zod-source.ts` | `tests/draft.test.ts` | a variable dropped; wrong nullability; a draft that doesn't compile or drifts on `check` |
 | Scaffolding | `tools/new.ts`, `tools/add-skill.ts`, `tools/lib/scaffold.ts`, `tools/lib/template.ts`, `tools/lib/manifests.ts`, `tools/lib/requirements.ts` | `tests/scaffold.test.ts` | a missing file, label or manifest field; a requirement not checked |
 | Registry and SKILL.md table | `tools/regen.ts`, `tools/lib/regen.ts` | `tests/regen.test.ts` | a non-command file registered; a table row wrong |
@@ -44,6 +44,6 @@ These drive Chrome and take most of the suite's time (CI, Nov 2026: about 105, 6
 - `tests/capture.test.ts`
 - `starter/skill/cli/tests/transport.test.ts`
 
-The full suite runs on Linux only in CI; macOS and Windows get the smoke test, on `main` and on `workflow_dispatch`.
+The full suite runs on Linux only in CI; macOS and Windows get the smoke test, on `main` and on `workflow_dispatch`. So nothing runs the Chrome tests on macOS or Windows: Chrome behaviour there is covered only by Captures, the cold read and the smoke test.
 
 Installing Bun, Chrome, `actionlint` and `shellcheck`: [setup.md](setup.md).

@@ -16,7 +16,7 @@ This skill lives in `.claude/skills/`, not in the plugin's `skills/`, because pl
 Run once per checkout or worktree; details and commands in [references/setup.md](references/setup.md):
 
 - Bun 1.4.3 (`bun --version`), then `bun install --frozen-lockfile` at the repo root.
-- Google Chrome. Without it the browser-driven tests (e2e, the Starter's `browser.test.ts`, and on macOS the Capture tests) **skip and the suite still passes**, so a red test written there never goes red. Check the count line for skips.
+- Google Chrome, for Captures and the cold read. The tests that drive Chrome run only in CI ([CI-only files](references/areas.md#ci-only-files)).
 - `actionlint` and `shellcheck`.
 
 ## Workflow
@@ -58,7 +58,7 @@ Then run the setup in the new worktree: `node_modules` is per worktree.
 
 Write a test that fails on your branch's base for exactly the reported behaviour, in the area's test file ([references/areas.md](references/areas.md)). Prefer the test file's own inline page or server (`tests/capture.test.ts` has one); add a pattern to `fixtures/site` only when the e2e test or the cold read must exercise it too. A leak (a site value in a capture, envelope or issue) gets a test that plants the value and scans every output file for it.
 
-Done when the new test fails for the reported reason, not for a typo in the test and not by being skipped (check the count line: a skip is not red).
+Done when the new test fails for the reported reason, not for a typo in the test and not by being skipped (check the count line: a skip is not red). A red test in a [CI-only file](references/areas.md#ci-only-files) can't be run locally. Open the PR with the red test alone in its first commit, and wait for that CI run to fail on it for the reported reason (and not skip it). Only then push the fix.
 
 ### 5. Fix
 
@@ -72,7 +72,7 @@ Done when the new test fails for the reported reason, not for a typo in the test
 
 The commands in [references/areas.md](references/areas.md#green-gate): the test files of every area whose Files you touched (the table above it), `tsc` for the generator and the Starter CLI, `actionlint`, `shellcheck`. Never run a [CI-only file](references/areas.md#ci-only-files) locally, not even one test: they drive Chrome and run only in CI. Don't run the full `bun test --parallel=3` locally: CI runs it on every PR (it includes the compiled end-to-end test), and step 9 waits for it. A browser test that fails in CI and passes on a rerun is a bug to fix, not to rerun.
 
-Done when everything is green locally and none of the tests you ran skipped. The full suite's verdict is CI's, in step 9.
+Done when everything is green locally and none of the tests you ran skipped. The full suite's verdict is CI's, in step 9. An area whose only tests are CI-only files (the fixture site, Starter browser and transport code) has no local test gate: CI in step 9 is its only check, so run the cold read only after that CI run is green.
 
 ### 7. Cold read
 
