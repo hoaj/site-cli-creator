@@ -19,6 +19,9 @@ on:
       - bun.lock
       - tsconfig.json
       - .claude-plugin/**
+      - .cursor-plugin/**
+      - .github/plugin/**
+      - README.md
       - .github/workflows/site-cli-creator.yml
       - .github/scripts/**
   workflow_dispatch:
@@ -29,6 +32,9 @@ on:
       - bun.lock
       - tsconfig.json
       - .claude-plugin/**
+      - .cursor-plugin/**
+      - .github/plugin/**
+      - README.md
       - .github/workflows/site-cli-creator.yml
       - .github/scripts/**
 
@@ -62,6 +68,18 @@ jobs:
             rm chrome.deb
           fi
           /opt/google/chrome/chrome --version
+      # The scaffold test lints the generated workflows with actionlint and skips without it.
+      - name: Install actionlint
+        env:
+          ACTIONLINT_VERSION: 1.7.12
+          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
+        run: |
+          tarball="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$tarball" "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/$tarball"
+          echo "$ACTIONLINT_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" actionlint
+          echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/actionlint" --version
       - run: bun install --frozen-lockfile
         working-directory: ${{ env.GENERATOR }}
       - name: Type-check the generator (tools, tests, fixture site, Starter plugin scripts)
