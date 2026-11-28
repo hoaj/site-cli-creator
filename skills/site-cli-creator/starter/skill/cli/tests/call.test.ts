@@ -409,6 +409,7 @@ describe("auth login", () => {
       expect(envNext(f)).toContain("check on the site");
       expect(f.details.next).toContain("the sign-in has been renewed");
       expect(f.details.next).toContain("If it ends this way again, run `shop login` before running it again.");
+      expect(f.details.signInRenewed).toBe(true);
       expect(calls.map((c) => c.method)).toEqual(["PATCH"]);
       expect(loginCalls).toEqual([]);
       expect(loadSession(home.dir)!.headers.authorization).toBe("Bearer new");
@@ -426,6 +427,7 @@ describe("auth login", () => {
         expect(f.kind).toBe("session");
         expect(f.message).toContain("not sent again");
         expect(f.details.next).toContain("`shop login`");
+        expect(f.details.signInRenewed).toBeUndefined();
         expect(calls.filter((c) => c.method === "PATCH")).toHaveLength(1);
         expect(loginCalls).toEqual([]);
       }

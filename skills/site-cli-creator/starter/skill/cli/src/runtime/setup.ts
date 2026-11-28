@@ -78,6 +78,8 @@ function statusLine(s: SessionStatus): string {
     case "expired":
       return `<p class="error"><b>Session: expired</b></p><p class="muted">${s.reason ? `${esc(s.reason)} ` : ""}Last checked ${when(s.checkedAt)}. Upload a new one below.</p>`;
     case "unchecked":
+      // checkedAt: the server renewed the Session then, after the site answered a write with a sign-in page (remote.ts).
+      if (s.checkedAt) return `<p><b>Session: unchecked</b></p><p class="muted">The server renewed it at ${when(s.checkedAt)}, after the site asked for a sign-in${s.uploadedAt ? ` (uploaded ${when(s.uploadedAt)})` : ""}, and no call has tried it since. It is used when a tool runs.</p>`;
       return `<p><b>Session: unchecked</b></p><p class="muted">A Session is stored, but it has not been checked against the site${s.uploadedAt ? ` (uploaded ${when(s.uploadedAt)})` : ""}. It is used when a tool runs.</p>`;
     case "missing":
       return `<p><b>Session: missing</b></p><p class="muted">No Session is stored, so the tools cannot reach the site as you. Upload one below.</p>`;

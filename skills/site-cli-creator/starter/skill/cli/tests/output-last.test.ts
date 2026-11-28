@@ -256,6 +256,21 @@ describe("a write not sent again keeps WRITE_NOT_RESENT whatever fails after it 
     expect(err(r.output).writeSent).toBe(true);
     expect(err(r.output).writeNotResent).toBeUndefined();
   });
+
+  const renewing = () => loginSite({ login: { ...loginSite().login!, refresh: { renew: async (ctx) => ({ headers: { ...ctx.headers, authorization: "Bearer new" } }) } } });
+
+  test("signInRenewed is set only when the run renewed the sign-in there (#195)", async () => {
+    withRefresh();
+    const renewed = await run(["--confirm", "item", "rename"], appOf([rename], () => toLoginHost(), [renameItem], renewing()).app);
+    expect(err(renewed.output).writeNotResent).toBe(true);
+    expect(err(renewed.output).signInRenewed).toBe(true);
+    home.cleanup();
+    home = tempHome();
+    saveSession(home.dir, { headers: { authorization: "Bearer old" }, ids: { customerId: "C-1" } });
+    const plain = await run(["--confirm", "item", "rename"], appOf([rename], () => toLoginHost(), [renameItem], loginSite()).app);
+    expect(err(plain.output).writeNotResent).toBe(true);
+    expect(err(plain.output).signInRenewed).toBeUndefined();
+  });
 });
 
 describe("small refusals", () => {

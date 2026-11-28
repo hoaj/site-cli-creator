@@ -837,7 +837,11 @@ export class Client {
         const renewed = !this.fresh && (this.reauthAllowed || this.renewOnly) && (await this.renew());
         // Its own `next`: the generic session one ("run login, then rerun the command") could duplicate the write.
         const login = this.surface === "mcp" ? "call the login tool" : `run \`${this.site.skill} login\``;
-        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, { writeNotResent: true, next: notResentNext(renewed, login) });
+        throw new Failure("session", `${op.name}: the site answered with ${how}. The write may have taken effect, and it was not sent again: check on the site before running it again.`, {
+          writeNotResent: true,
+          ...(renewed && { signInRenewed: true }),
+          next: notResentNext(renewed, login),
+        });
       }
       return r;
     };

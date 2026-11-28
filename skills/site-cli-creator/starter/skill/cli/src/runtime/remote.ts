@@ -9,7 +9,7 @@ import { getOAuthProtectedResourceMetadataUrl, mcpAuthRouter } from "@modelconte
 import { requireBearerAuth } from "@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js";
 import { CallToolRequestSchema, ErrorCode, ListToolsRequestSchema, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { Failure } from "./envelope";
-import { notResentNext, SIGN_IN_RENEWED, WRITE_NOT_RESENT, WRITE_SENT } from "./envelope";
+import { notResentNext, WRITE_NOT_RESENT, WRITE_SENT } from "./envelope";
 import { listedTools, toolResult, type McpTool, type ServerInfo } from "./mcp";
 import { OAuthStore, OwnerProvider, failedPage, returningPage, signedInPage } from "./owner-auth";
 import { redirectAllowed, type RemoteConfig } from "./remote-config";
@@ -73,26 +73,32 @@ function checkedStatus(dir: string, at: string, state: "valid" | "expired", uplo
 /**
  * A `session` failure in remote mode is the Owner's to fix, not the client's: the Setup page then
  * shows the Session as expired (when one was stored), and `next` names that page, not the login tool.
- * A call that succeeds while the page says expired proves the Session works again (one refused
- * request does not end a Session for good), so it is marked valid.
+ * A call that succeeds while the page says expired, or renewed and unchecked since, proves the Session
+ * works (one refused request does not end a Session for good), so it is marked valid.
  */
 function sessionFailure(output: unknown, code: number, setup: SetupInfo): unknown {
-  const error = (output as { error?: { kind?: string; message?: string; next?: string; writeSent?: boolean; writeNotResent?: boolean } } | null)?.error;
+  const error = (output as { error?: { kind?: string; message?: string; next?: string; writeSent?: boolean; writeNotResent?: boolean; signInRenewed?: boolean } } | null)?.error;
   if (!error || error.kind !== "session") {
     if (code === 0) {
       const status = readStatus(setup.dir);
-      if (status.state === "expired") checkedStatus(setup.dir, new Date(setup.now()).toISOString(), "valid", status.uploadedAt);
+      // An "unchecked" with checkedAt is a renewal's (below); an upload or a login on this host writes none.
+      if (status.state === "expired" || (status.state === "unchecked" && status.checkedAt)) {
+        checkedStatus(setup.dir, new Date(setup.now()).toISOString(), "valid", status.uploadedAt);
+      }
     }
     return output;
   }
-  // A write that got a sign-in page and was not sent again (the envelope's field, never next's words): the user checks
-  // on the site first, whatever the Owner does.
+  // A write that got a sign-in page and was not sent again, and whether the server renewed the Session right after it:
+  // the envelope's fields, never next's words. The user checks on the site first, whatever the Owner does.
   const notResent = error.writeNotResent === true;
-  // Renewed here: the Session may work again, so it is not marked expired; the Owner is asked only if it ends this way again.
-  const renewed = notResent && typeof error.next === "string" && error.next.includes(SIGN_IN_RENEWED);
+  // Renewed here: the Session may work again, so it is not marked expired but unchecked (a renewed Session no call has
+  // tried yet, replacing an earlier call's "expired"); the Owner is asked only if it ends this way again.
+  const renewed = notResent && error.signInRenewed === true;
   const before = readStatus(setup.dir);
-  if (before.state !== "missing" && !renewed) {
-    checkedStatus(setup.dir, new Date(setup.now()).toISOString(), "expired", before.uploadedAt, String(error.message ?? ""));
+  if (before.state !== "missing") {
+    const at = new Date(setup.now()).toISOString();
+    if (renewed) writeStatus(setup.dir, { state: "unchecked", ...(before.uploadedAt && { uploadedAt: before.uploadedAt }), checkedAt: at });
+    else checkedStatus(setup.dir, at, "expired", before.uploadedAt, String(error.message ?? ""));
   }
   const owner = `the Owner to give this server a new Session at ${setup.url} (they run ${setup.skill} login on their computer and upload the session.json)`;
   const sent = error.writeSent ? `${WRITE_SENT} ` : "";
