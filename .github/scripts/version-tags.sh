@@ -15,9 +15,11 @@ else
 fi
 seen=""
 for commit in $(git rev-list --first-parent --reverse "$ref"); do
-  # A commit without the manifest (before it existed) has no version; any other failure stops the script.
-  manifest="$(git show "$commit:.claude-plugin/plugin.json" 2>/dev/null)" || continue
-  version="$(jq -r '.version // empty' <<<"$manifest")"
+  # A commit without the manifest (before it existed) has no version; any other git failure stops the script.
+  git cat-file -e "$commit:.claude-plugin/plugin.json" 2>/dev/null || continue
+  manifest="$(git show "$commit:.claude-plugin/plugin.json")"
+  # A manifest that does not parse has no version either, so one bad commit can't stop every later run (#175).
+  version="$(jq -r '.version // empty' <<<"$manifest" 2>/dev/null)" || continue
   [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || continue
   grep -qxF "$version" <<<"$seen" && continue
   seen="$seen"$'\n'"$version"

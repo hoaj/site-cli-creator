@@ -340,6 +340,32 @@ describe.skipIf(!existsSync(VERSION_TAGS))("version-tags.sh (the generator's tag
     expect(proc.stderr.toString()).toBe("");
     expect(proc.stdout.toString()).toBe(`v0.2.0 ${merge}\n`);
   });
+
+  const tagsRepo = (name: string) => {
+    const repo = join(work, name);
+    mkdirSync(join(repo, ".claude-plugin"), { recursive: true });
+    git(repo, "init", "-q", "-b", "main");
+    const commit = (manifest: string, message: string) => {
+      writeFileSync(join(repo, ".claude-plugin/plugin.json"), manifest);
+      git(repo, "add", "-A");
+      git(repo, "commit", "-qm", message);
+      return git(repo, "rev-parse", "HEAD").trim();
+    };
+    return { repo, commit, bump: (version: string) => commit(JSON.stringify({ name: "g", version }), version) };
+  };
+  const versionTags = (cwd: string) => Bun.spawnSync(["bash", VERSION_TAGS, "main"], { cwd, stdout: "pipe", stderr: "pipe" });
+
+  test("a commit whose manifest does not parse is skipped, and later versions are still listed (#175)", () => {
+    const { repo, commit, bump } = tagsRepo("tags-malformed");
+    bump("0.1.0");
+    git(repo, "tag", "v0.1.0");
+    commit('{ "name": "g", "version": ', "a broken manifest");
+    const later = bump("0.2.0");
+    const proc = versionTags(repo);
+    expect(proc.exitCode).toBe(0);
+    expect(proc.stdout.toString()).toBe(`v0.2.0 ${later}\n`);
+  });
+
 });
 
 describe("upgrade, review round 2", () => {
